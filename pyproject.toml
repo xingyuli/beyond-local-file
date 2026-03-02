@@ -1,0 +1,83 @@
+[project]
+name = "beyond-local-file"
+version = "0.1.0"
+description = "A CLI tool for managing local development files across multiple projects using symlinks"
+readme = "README.md"
+requires-python = ">=3.13"
+license = {text = "MIT"}
+authors = [
+    {name = "beyond-local-file contributors"}
+]
+keywords = ["symlink", "development", "cli", "git", "project-management"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "click>=8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/xingyuli/beyond-local-file"
+Repository = "https://github.com/xingyuli/beyond-local-file"
+Issues = "https://github.com/xingyuli/beyond-local-file/issues"
+
+[project.scripts]
+beyond-local-file = "beyond_local_file.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/beyond_local_file"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.0",
+    "pytest>=8.0",
+    "hypothesis>=6.0",
+    "pre-commit>=4.5.1",
+]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py313"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "ANN",  # flake8-annotations (type annotations)
+    "PL",   # Pylint style
+    "RUF",  # Ruff-specific rules
+]
+
+ignore = [
+    "ANN201", # missing-return-type-undocumented-public-function
+    "ANN204", # missing-return-type-special-method
+    "SIM108", # if-else-block-instead-of-if-exp
+]
+
+# Auto-fix rules (unused imports, import sorting, etc. will be auto-fixed)
+fixable = ["ALL"]   # Or specify ["F401", "I", "UP", "SIM"], etc.
+
+[tool.ruff.lint.per-file-ignores]
+"cli.py" = ["ANN001"] # missing-type-function-argument
+"tests/**/*.py" = ["ANN001"] # missing-type-function-argument
