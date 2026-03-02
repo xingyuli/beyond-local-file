@@ -11,6 +11,12 @@ In real-world development, you often need to share local development files (such
 - Automatically add symbolic links to Git ignore lists
 - Check synchronization status
 
+## 🎬 Quick Demo
+
+![Demo](demo/demo.gif)
+
+*Watch beyond-local-file in action: install from GitHub, sync files, create symlinks, and manage Git excludes automatically.*
+
 ## Architecture: Tool and Data Separation
 
 `beyond-local-file` follows a clean separation between the **tool** (code) and **managed projects** (data):
@@ -324,6 +330,20 @@ uvx beyond-local-file symlink sync -c /Users/username/my-managed-projects/config
 - If you move the source file location, you need to re-run the `sync` command
 - The tool is designed to run from your managed projects directory, not from its installation location
 
+### Windows Support
+
+The tool works on Windows with the following requirements:
+
+**Windows 10/11 (Build 1703 or later):**
+- Enable Developer Mode: Settings → Update & Security → For developers → Developer Mode
+- No administrator privileges required once Developer Mode is enabled
+
+**Older Windows versions:**
+- Requires running the command prompt or terminal as Administrator
+- Right-click Command Prompt/PowerShell → "Run as administrator"
+
+**Note:** If you encounter permission errors on Windows, ensure Developer Mode is enabled or run as Administrator.
+
 ## Command Reference
 
 ### Sync Command
@@ -368,12 +388,21 @@ uvx beyond-local-file symlink check [PROJECT_NAME] [OPTIONS]
 
 **Permission errors:**
 - Ensure you have write permissions in the target directories
-- On Windows, you may need administrator privileges to create symlinks
-- Check that target directories exist and are accessible
+- On Windows:
+  - **Windows 10/11 (Build 1703+)**: Enable Developer Mode in Settings → Update & Security → For developers
+  - **Older Windows**: Run terminal as Administrator (Right-click → "Run as administrator")
+  - See [Windows symlink documentation](https://docs.microsoft.com/en-us/windows/win32/fileio/symbolic-links) for details
+- On macOS/Linux: Check that target directories exist and are accessible
 
 ## Contributing
 
 Contributions are welcome! Please see [docs/development.md](docs/development.md) for development setup and guidelines.
+
+## Platform Support
+
+beyond-local-file works on macOS, Linux, and Windows. See [docs/platform-support.md](docs/platform-support.md) for details.
+
+For Windows-specific setup instructions, see [docs/windows-support.md](docs/windows-support.md).
 
 ## License
 

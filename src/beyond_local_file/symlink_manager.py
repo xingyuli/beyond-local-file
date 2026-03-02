@@ -212,9 +212,16 @@ class SymlinkManager:
 
         Returns:
             True if the symlink was created successfully, False otherwise.
+
+        Note:
+            On Windows, this requires either:
+            - Developer Mode enabled (Windows 10 1703+), or
+            - Administrator privileges (older Windows versions)
         """
         try:
-            link.symlink_to(source)
+            # On Windows, symlink_to needs to know if target is a directory
+            # The target_is_directory parameter is ignored on Unix
+            link.symlink_to(source, target_is_directory=source.is_dir())
             return True
         except (OSError, PermissionError):
             return False
