@@ -110,11 +110,12 @@ class ProjectProcessor:
 class SyncOperation:
     """Encapsulates the sync operation logic."""
 
-    def __init__(self, ask_callback: Callable[[str], Action] | None = None):
+    def __init__(self, ask_callback: Callable[[str, str], Action] | None = None):
         """Initialize the sync operation.
 
         Args:
             ask_callback: Optional callback for handling existing paths.
+                         Takes target path and expected source path as arguments.
         """
         self.ask_callback = ask_callback
 

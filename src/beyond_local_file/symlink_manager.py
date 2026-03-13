@@ -83,7 +83,7 @@ class SymlinkManager:
         self.target_path = Path(target_path)
         self.git_manager = GitExcludeManager(self.target_path)
 
-    def sync(self, ask_callback: Callable[[str], Action] | None = None) -> SyncResult:
+    def sync(self, ask_callback: Callable[[str, str], Action] | None = None) -> SyncResult:
         """Synchronize symlinks from project to target directory.
 
         Creates symlinks for all project items in the target directory.
@@ -93,8 +93,8 @@ class SymlinkManager:
 
         Args:
             ask_callback: Optional callback function that takes a path string
-                        and returns an Action. If not provided, existing
-                        paths are skipped by default.
+                        and expected source path, and returns an Action.
+                        If not provided, existing paths are skipped by default.
 
         Returns:
             SyncResult containing details of the operation.
@@ -109,7 +109,7 @@ class SymlinkManager:
                 continue
 
             if link_path.exists() or link_path.is_symlink():
-                action = self._handle_existing_path(link_path, ask_callback)
+                action = self._handle_existing_path(link_path, item.source_path, ask_callback)
                 if action == Action.SKIP:
                     result.skipped.add(item.name)
                     continue
@@ -176,18 +176,21 @@ class SymlinkManager:
             return False
         return link_path.resolve() == source_path.resolve()
 
-    def _handle_existing_path(self, link_path: Path, ask_callback: Callable[[str], Action] | None = None) -> Action:
+    def _handle_existing_path(
+        self, link_path: Path, source_path: Path, ask_callback: Callable[[str, str], Action] | None = None
+    ) -> Action:
         """Handle an existing path at the symlink location.
 
         Args:
             link_path: Path that already exists.
+            source_path: Expected source path for the symlink.
             ask_callback: Callback to prompt user for action.
 
         Returns:
             The action to take: SKIP, OVERWRITE, or ABORT.
         """
         if ask_callback:
-            return ask_callback(str(link_path))
+            return ask_callback(str(link_path), str(source_path))
         return Action.SKIP
 
     def _remove_path(self, path: Path) -> None:

@@ -4,17 +4,20 @@ This tool provides commands to synchronize symlinks and check their status,
 with automatic Git exclude file management.
 """
 
+from pathlib import Path
+
 import click
 
 from .project_processor import CheckOperation, ProjectProcessor, SyncOperation, load_config
 from .symlink_manager import Action
 
 
-def ask_user_for_action(target_path: str) -> Action:
+def ask_user_for_action(target_path: str, expected_source: str | None = None) -> Action:
     """Prompt user for action when a path already exists.
 
     Args:
         target_path: The path that already exists.
+        expected_source: The expected source path that the symlink should point to.
 
     Returns:
         The user's chosen action: SKIP, OVERWRITE, or ABORT.
@@ -23,9 +26,28 @@ def ask_user_for_action(target_path: str) -> Action:
     choices = [str(a.value) for a in Action]
     default = str(Action.SKIP.value)
 
-    click.echo(f"Path already exists: {target_path}")
+    click.echo(f"\nThe link of {target_path} already exists.")
+
+    # Show what it should be
+    if expected_source:
+        click.echo("\nShould be:")
+        click.echo(f"  {expected_source}")
+
+    # Show what the current path is
+    target = Path(target_path)
+    if target.is_symlink():
+        current_target = target.readlink()
+        click.echo("\nBut was:")
+        click.echo(f"  {current_target}")
+    elif target.is_dir():
+        click.echo("\nBut was:")
+        click.echo("  (a directory)")
+    elif target.is_file():
+        click.echo("\nBut was:")
+        click.echo("  (a regular file)")
+
     choice = click.prompt(
-        f"What do you want to do? ({options})",
+        f"\nWhat do you want to do? ({options})",
         type=click.Choice(choices),
         show_choices=True,
         default=default,
