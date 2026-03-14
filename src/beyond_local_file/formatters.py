@@ -1,9 +1,12 @@
 """Result formatters for CLI output."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 import click
+from rich.console import Console
+from rich.table import Table
 
 from .models import Project
 from .symlink_manager import CheckResult, SyncResult
@@ -133,3 +136,104 @@ class CheckResultFormatter:
             click.echo(f"  Extra entries: {len(self.result.exclude_extra)}")
             for item in sorted(self.result.exclude_extra):
                 click.echo(f"    ! {item}")
+
+
+@dataclass
+class CheckRow:
+    """A single row of check results for table rendering.
+
+    Attributes:
+        project_name: Name of the project.
+        target_path: Target path that was checked.
+        result: The check operation result.
+    """
+
+    project_name: str
+    target_path: Path
+    result: CheckResult
+
+
+class CheckTableFormatter:
+    """Formats multiple check results as a compact table.
+
+    Renders a Rich table with one row per (project, target) pair, followed
+    by a section listing extra exclude entries when ``show_extra`` is True.
+    """
+
+    def __init__(self, rows: list[CheckRow], show_extra: bool = False):
+        """Initialize the table formatter.
+
+        Args:
+            rows: Collected check results to render.
+            show_extra: Whether to show extra exclude entries below the table.
+        """
+        self.rows = rows
+        self.show_extra = show_extra
+
+    def render(self) -> None:
+        """Render the table and optional extra-exclude section to stdout."""
+        console = Console()
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Project")
+        table.add_column("Symlink", justify="center")
+        table.add_column("Exclude", justify="center")
+        table.add_column("Target Path")
+
+        for row in self.rows:
+            symlink_cell = self._symlink_cell(row.result)
+            exclude_cell = self._exclude_cell(row.result)
+            table.add_row(row.project_name, symlink_cell, exclude_cell, str(row.target_path))
+
+        console.print(table)
+
+        if self.show_extra:
+            self._render_extra_entries(console)
+
+    def _symlink_cell(self, result: CheckResult) -> str:
+        """Build the symlink status cell text.
+
+        Args:
+            result: The check result for this row.
+
+        Returns:
+            A short status string: ✓ when all symlinks exist, or ✗ (N missing) otherwise.
+        """
+        if result.symlink_missing:
+            return f"[red]✗ ({len(result.symlink_missing)} missing)[/red]"
+        return "[green]✓[/green]"
+
+    def _exclude_cell(self, result: CheckResult) -> str:
+        """Build the git exclude status cell text.
+
+        Args:
+            result: The check result for this row.
+
+        Returns:
+            A short status string indicating exclude health and extra entry count.
+        """
+        has_exclude_data = result.exclude_present or result.exclude_missing or (self.show_extra and result.exclude_extra)
+        if not has_exclude_data:
+            return "[dim]n/a[/dim]"
+
+        if result.exclude_missing:
+            return f"[red]✗ ({len(result.exclude_missing)} missing)[/red]"
+
+        extra_count = len(result.exclude_extra) if self.show_extra and result.exclude_extra else 0
+        if extra_count:
+            return f"[green]✓[/green] [dim](+{extra_count})[/dim]"
+        return "[green]✓[/green]"
+
+    def _render_extra_entries(self, console: Console) -> None:
+        """Render the extra exclude entries section below the table.
+
+        Args:
+            console: Rich console to write output to.
+        """
+        extras = [(row.project_name, sorted(row.result.exclude_extra)) for row in self.rows if row.result.exclude_extra]
+        if not extras:
+            return
+
+        console.print("\nExtra exclude entries:")
+        for project_name, entries in extras:
+            console.print(f"  {project_name}: {', '.join(entries)}")

@@ -1,13 +1,15 @@
 """Project processing utilities for CLI commands."""
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 
 import click
 
 from .config import Config
-from .formatters import CheckResultFormatter, SyncResultFormatter
+from .formatters import CheckResultFormatter, CheckRow, CheckTableFormatter, SyncResultFormatter
 from .models import Project, ProjectConfiguration
+from .options import OutputFormat
 from .symlink_manager import Action, SymlinkManager
 
 
@@ -50,6 +52,38 @@ def load_config(config: str, project_name: str | None = None) -> dict[str, Proje
         return None
 
 
+class CmdOperation(ABC):
+    """Base class for CLI operations executed per project/target pair.
+
+    Subclasses implement :meth:`execute` to perform the actual work, and may
+    override :attr:`verbose_progress` to suppress the per-target progress line
+    printed by :class:`ProjectProcessor` (useful when output is deferred, e.g.
+    a table rendered after all projects are processed).
+    """
+
+    @property
+    def verbose_progress(self) -> bool:
+        """Whether to print per-target progress lines during processing.
+
+        Returns:
+            True by default; subclasses may override to return False when
+            progress output should be suppressed (e.g. deferred table rendering).
+        """
+        return True
+
+    @abstractmethod
+    def execute(self, project: Project, target_path: Path) -> bool:
+        """Execute the operation for a single project/target pair.
+
+        Args:
+            project: The project to process.
+            target_path: The target directory to operate on.
+
+        Returns:
+            True to continue processing, False to abort.
+        """
+
+
 class ProjectProcessor:
     """Processes projects for sync and check operations.
 
@@ -65,12 +99,11 @@ class ProjectProcessor:
         """
         self.projects_data = projects_data
 
-    def process_all(self, operation: Callable[[Project, Path], bool], skip_invalid: bool = True) -> bool:
+    def process_all(self, operation: CmdOperation, skip_invalid: bool = True) -> bool:
         """Process all projects with the given operation.
 
         Args:
-            operation: Function that takes (project, target_path)
-                      and returns True to continue, False to abort.
+            operation: The operation to execute for each (project, target) pair.
             skip_invalid: Whether to skip invalid projects or stop processing.
 
         Returns:
@@ -99,15 +132,16 @@ class ProjectProcessor:
                     click.echo(f"Target directory does not exist: {target_path}")
                     continue
 
-                click.echo(f"\nProcessing {proj_name} -> {target_path}")
+                if operation.verbose_progress:
+                    click.echo(f"\nProcessing {proj_name} -> {target_path}")
 
-                if not operation(project, target_path):
+                if not operation.execute(project, target_path):
                     return False
 
         return True
 
 
-class SyncOperation:
+class SyncOperation(CmdOperation):
     """Encapsulates the sync operation logic."""
 
     def __init__(self, ask_callback: Callable[[str, str], Action] | None = None):
@@ -142,19 +176,36 @@ class SyncOperation:
         return True
 
 
-class CheckOperation:
-    """Encapsulates the check operation logic."""
+class CheckOperation(CmdOperation):
+    """Encapsulates the check operation logic.
 
-    def __init__(self, show_extra: bool = False):
+    Supports two output formats:
+    - ``"table"`` (default): collects all results and renders a compact Rich table
+      after all projects are processed via :meth:`render`.
+    - ``"verbose"``: prints detailed per-project output immediately during processing.
+    """
+
+    def __init__(self, show_extra: bool = False, output_format: OutputFormat = OutputFormat.TABLE):
         """Initialize the check operation.
 
         Args:
             show_extra: Whether to show extra exclude entries.
+            output_format: Output format — ``OutputFormat.TABLE`` (default) or ``OutputFormat.VERBOSE``.
         """
         self.show_extra = show_extra
+        self.output_format = output_format
+        self._rows: list[CheckRow] = []
+
+    @property
+    def verbose_progress(self) -> bool:
+        """Whether to print per-target progress lines during processing."""
+        return self.output_format == OutputFormat.VERBOSE
 
     def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute the check operation.
+        """Execute the check operation for a single project/target pair.
+
+        In table mode, results are collected for deferred rendering via :meth:`render`.
+        In verbose mode, results are printed immediately.
 
         Args:
             project: The project to check.
@@ -166,7 +217,18 @@ class CheckOperation:
         manager = SymlinkManager(project, target_path)
         result = manager.check()
 
-        formatter = CheckResultFormatter(result, self.show_extra)
-        formatter.format(project.name, target_path)
+        if self.output_format == OutputFormat.VERBOSE:
+            formatter = CheckResultFormatter(result, self.show_extra)
+            formatter.format(project.name, target_path)
+        else:
+            self._rows.append(CheckRow(project.name, target_path, result))
 
         return True
+
+    def render(self) -> None:
+        """Render collected results as a table.
+
+        No-op when ``output_format`` is ``"verbose"`` since output is already printed.
+        """
+        if self.output_format != OutputFormat.VERBOSE and self._rows:
+            CheckTableFormatter(self._rows, self.show_extra).render()

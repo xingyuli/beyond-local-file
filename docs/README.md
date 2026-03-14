@@ -5,6 +5,7 @@ Welcome to the beyond-local-file documentation!
 ## User Documentation
 
 - **[Main README](../README.md)** - Getting started, installation, and usage examples
+- **[Command Reference](commands.md)** - Full command, argument, and option reference
 - **[Platform Support](platform-support.md)** - Cross-platform compatibility guide
 - **[Windows Support](windows-support.md)** - Detailed Windows setup and troubleshooting
 
@@ -17,9 +18,9 @@ Welcome to the beyond-local-file documentation!
 ### For Users
 
 - [Installation](../README.md#installation)
-- [Usage Examples](../README.md#usage-examples)
-- [Command Reference](../README.md#command-reference)
-- [Troubleshooting](../README.md#troubleshooting)
+- [Quick Start](../README.md#quick-start)
+- [Command Reference](commands.md)
+- [Troubleshooting](docs/platform-support.md)
 
 ### For Windows Users
 
