@@ -212,7 +212,9 @@ class CheckTableFormatter:
         Returns:
             A short status string indicating exclude health and extra entry count.
         """
-        has_exclude_data = result.exclude_present or result.exclude_missing or (self.show_extra and result.exclude_extra)
+        has_exclude_data = (
+            result.exclude_present or result.exclude_missing or (self.show_extra and result.exclude_extra)
+        )
         if not has_exclude_data:
             return "[dim]n/a[/dim]"
 

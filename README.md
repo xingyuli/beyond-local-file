@@ -96,6 +96,57 @@ beyond-local-file symlink sync
 beyond-local-file symlink check
 ```
 
+## Configuration
+
+The `config.yml` file maps project names to target paths. Three formats are supported:
+
+### Simplified (string) — single target
+
+```yaml
+project-b: /Users/username/workspace/project-b
+```
+
+### Simplified (list) — multiple targets
+
+```yaml
+project-a:
+  - /Users/username/workspace/project-a
+  - /Users/username/workspace/project-a-fork
+```
+
+### Full format — selective subpaths
+
+When you only want to sync specific files or subdirectories instead of everything in
+the project directory, use the full dict format with `target` and `subpath`:
+
+```yaml
+project-c:
+  target: /Users/username/workspace/project-c
+  subpath:
+    - .kiro/hooks
+    - .vscode/settings.json
+```
+
+This creates symlinks only for the listed subpaths (e.g. `project-c/.kiro/hooks`)
+rather than every top-level item in the project directory. Intermediate directories
+are created automatically in the target.
+
+The `target` key accepts a single path or a list, just like the simplified formats:
+
+```yaml
+project-c:
+  target:
+    - /Users/username/workspace/project-c
+    - /Users/username/workspace/project-c-fork
+  subpath:
+    - .kiro/hooks
+```
+
+Use `beyond-local-file symlink sync` and `beyond-local-file symlink check` as usual —
+the subpath feature works transparently with both commands.
+
+For more configuration examples, see [docs/advanced-usage.md](docs/advanced-usage.md).
+
 ## Available Commands
 
 | Command | Description |

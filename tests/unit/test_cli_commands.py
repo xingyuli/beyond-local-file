@@ -119,8 +119,8 @@ def test_default_config_file_discovery(temp_dir: Path) -> None:
 
         # Verify the tool found and used config.yml
         assert result.exit_code == 0
-        # The tool should process the project, indicating it found the config
-        assert "Processing test-project" in result.output
+        # Default output is table mode — project name appears as a table cell
+        assert "test-project" in result.output
 
 
 def test_error_message_when_config_not_found() -> None:

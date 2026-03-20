@@ -93,8 +93,8 @@ def test_same_output_format():
         config_path = td_path / "config.yml"
         config_path.write_text(f"test-project: {target_dir}\n")
 
-        # Run check command and verify output format
-        result = runner.invoke(cli, ["symlink", "check"])
+        # Run check command in verbose mode and verify output format
+        result = runner.invoke(cli, ["symlink", "check", "--format", "verbose"])
 
         # Verify expected output elements
         assert result.exit_code == 0

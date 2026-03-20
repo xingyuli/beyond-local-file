@@ -24,6 +24,10 @@ Synchronizes symlinks from a managed project directory to one or more target loc
 For each target that is a Git repository, symlink names are automatically added to
 `.git/info/exclude`.
 
+When a project uses the `subpath` config format, only the specified subpaths are
+synced instead of every top-level item. Intermediate parent directories are created
+automatically in the target.
+
 ```bash
 beyond-local-file symlink sync [PROJECT_NAME] [OPTIONS]
 ```
@@ -91,3 +95,7 @@ beyond-local-file symlink check --extra-exclude --format verbose
 Extra exclude entries:
   project-b: docs/
 ```
+
+---
+
+For configuration format details and advanced use cases, see [advanced-usage.md](advanced-usage.md).

@@ -41,11 +41,13 @@ class ProjectConfiguration:
         name: The project name.
         project_path: Absolute path to the project's source directory.
         targets: List of absolute paths where symlinks should be created.
+        subpaths: Optional list of relative subpaths to link instead of top-level items.
     """
 
     name: str
     project_path: Path
     targets: list[Path]
+    subpaths: list[str] | None = None
 
 
 @dataclass
@@ -80,6 +82,28 @@ class Project:
         if directory.exists() and directory.is_dir():
             for item in directory.iterdir():
                 items.append(ProjectItem(name=item.name, is_directory=item.is_dir(), source_path=item))
+        return cls(name=name, directory=directory, items=items)
+
+    @classmethod
+    def from_subpaths(cls, name: str, directory: Path, subpaths: list[str]) -> "Project":
+        """Create a Project instance from explicit subpaths.
+
+        Instead of scanning the top-level directory, creates ProjectItem
+        entries only for the specified subpaths.
+
+        Args:
+            name: The project name.
+            directory: Path to the project directory.
+            subpaths: List of relative paths within the project to link.
+
+        Returns:
+            A new Project instance with items for each valid subpath.
+        """
+        items = []
+        for sp in subpaths:
+            source = directory / sp
+            if source.exists():
+                items.append(ProjectItem(name=sp, is_directory=source.is_dir(), source_path=source))
         return cls(name=name, directory=directory, items=items)
 
     def get_item_names(self) -> set[str]:

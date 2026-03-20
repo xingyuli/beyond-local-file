@@ -91,6 +91,9 @@ class SymlinkManager:
         left unchanged. If an incorrect symlink or regular file/directory
         exists, the callback is invoked to determine the action to take.
 
+        For subpath items (names containing path separators), intermediate
+        parent directories are created automatically in the target.
+
         Args:
             ask_callback: Optional callback function that takes a path string
                         and expected source path, and returns an Action.
@@ -118,6 +121,9 @@ class SymlinkManager:
                     return result
                 elif action == Action.OVERWRITE:
                     self._remove_path(link_path)
+
+            # Ensure parent directories exist for subpath items
+            link_path.parent.mkdir(parents=True, exist_ok=True)
 
             if not self._create_symlink(item.source_path, link_path):
                 result.failed.add(item.name)

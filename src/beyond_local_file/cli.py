@@ -27,19 +27,19 @@ def ask_user_for_action(target_path: str, expected_source: str | None = None) ->
     choices = [str(a.value) for a in Action]
     default = str(Action.SKIP.value)
 
-    click.echo(f"\nThe link of {target_path} already exists.")
+    click.echo(f"\nThe path of {target_path} already exists.")
 
     # Show what it should be
     if expected_source:
         click.echo("\nShould be:")
-        click.echo(f"  {expected_source}")
+        click.echo(f"  (a link to) {expected_source}")
 
     # Show what the current path is
     target = Path(target_path)
     if target.is_symlink():
         current_target = target.readlink()
         click.echo("\nBut was:")
-        click.echo(f"  {current_target}")
+        click.echo(f"  (a link to) {current_target}")
     elif target.is_dir():
         click.echo("\nBut was:")
         click.echo("  (a directory)")

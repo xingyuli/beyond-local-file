@@ -119,7 +119,10 @@ class ProjectProcessor:
                     return False
                 continue
 
-            project = Project.from_directory(proj_name, project_dir)
+            if proj_config.subpaths:
+                project = Project.from_subpaths(proj_name, project_dir, proj_config.subpaths)
+            else:
+                project = Project.from_directory(proj_name, project_dir)
 
             if not project.items:
                 click.echo(f"No items found in {project.name}")
