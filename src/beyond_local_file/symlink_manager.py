@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .git_manager import GitExcludeManager
 from .models import Project
+from .options import LinkStrategy
 
 
 class Action(Enum):
@@ -82,6 +83,8 @@ class SymlinkManager:
         self.project = project
         self.target_path = Path(target_path)
         self.git_manager = GitExcludeManager(self.target_path)
+        # Only manage items that use the symlink strategy
+        self._symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
 
     def sync(self, ask_callback: Callable[[str, str], Action] | None = None) -> SyncResult:
         """Synchronize symlinks from project to target directory.
@@ -104,7 +107,7 @@ class SymlinkManager:
         """
         result = SyncResult()
 
-        for item in self.project.items:
+        for item in self._symlink_items:
             link_path = self.target_path / item.name
 
             if self._is_link_correct(link_path, item.source_path):
@@ -139,18 +142,23 @@ class SymlinkManager:
 
         return result
 
-    def check(self) -> CheckResult:
+    def check(self, all_item_names: set[str] | None = None) -> CheckResult:
         """Check the status of symlinks and Git exclude configuration.
 
         Inspects the target directory to determine which symlinks exist,
         which are missing, and the state of the Git exclude file.
+
+        Args:
+            all_item_names: Optional set of all project item names (symlink + copy).
+                          Used to properly identify extra exclude entries.
+                          If None, only symlink items are considered.
 
         Returns:
             CheckResult containing the status of symlinks and exclude entries.
         """
         result = CheckResult()
 
-        for item in self.project.items:
+        for item in self._symlink_items:
             link_path = self.target_path / item.name
 
             if link_path.exists() or link_path.is_symlink():
@@ -160,7 +168,9 @@ class SymlinkManager:
 
         if self.git_manager.is_git_repo():
             exclude_entries = self.git_manager.read_entries()
-            item_names = self.project.get_item_names()
+            # Use all_item_names if provided (includes both symlink and copy items)
+            # Otherwise fall back to just symlink items
+            item_names = all_item_names if all_item_names is not None else {i.name for i in self._symlink_items}
 
             result.exclude_present = item_names & exclude_entries
             result.exclude_missing = item_names - exclude_entries

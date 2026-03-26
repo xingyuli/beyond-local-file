@@ -1,4 +1,4 @@
-"""Configuration management for the symlink CLI tool."""
+"""Configuration management for the link CLI tool."""
 
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ class Config:
     """Manages configuration loaded from a YAML file.
 
     The configuration file maps project names to their target paths.
-    Three formats are supported:
+    Four formats are supported:
 
     1. Simplified (string)::
 
@@ -30,6 +30,15 @@ class Config:
           target: /path/to/target
           subpath:
             - .kiro/hooks
+
+    4. Full with per-file copy::
+
+        project-d:
+          target: /path/to/target
+          subpath:
+            - .kiro/hooks
+            - path: .qoder/rules.md
+              copy: true
 
     Attributes:
         config_path: Path to the configuration file.
@@ -123,14 +132,14 @@ class Config:
         """
         if self._is_full_format(value):
             targets = self._normalize_targets(value["target"])
-            subpaths = value.get("subpath")
-            if isinstance(subpaths, str):
-                subpaths = [subpaths]
+            raw_subpaths = value.get("subpath")
+            subpaths, copy_paths = self._parse_subpaths(raw_subpaths)
             return ProjectConfiguration(
                 name=name,
                 project_path=self._resolve_project_path(name),
                 targets=targets,
                 subpaths=subpaths,
+                copy_paths=copy_paths or None,
             )
 
         return ProjectConfiguration(
@@ -167,3 +176,36 @@ class Config:
         if isinstance(targets, str):
             targets = [targets]
         return [Path(t).resolve() for t in targets]
+
+    def _parse_subpaths(self, raw: str | list | None) -> tuple[list[str] | None, set[str] | None]:
+        """Parse subpath entries, extracting copy flags.
+
+        Each entry can be a plain string or a dict with ``path`` and
+        optional ``copy: true``.
+
+        Args:
+            raw: Raw subpath value from YAML — string, list, or None.
+
+        Returns:
+            Tuple of (subpath list, set of paths marked for copy).
+            Either element may be None when there are no entries.
+        """
+        if raw is None:
+            return None, None
+
+        if isinstance(raw, str):
+            return [raw], None
+
+        subpaths: list[str] = []
+        copy_paths: set[str] = set()
+
+        for entry in raw:
+            if isinstance(entry, str):
+                subpaths.append(entry)
+            elif isinstance(entry, dict) and "path" in entry:
+                path = entry["path"]
+                subpaths.append(path)
+                if entry.get("copy", False):
+                    copy_paths.add(path)
+
+        return subpaths or None, copy_paths or None

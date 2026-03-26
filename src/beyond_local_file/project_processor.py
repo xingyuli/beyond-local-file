@@ -7,9 +7,17 @@ from pathlib import Path
 import click
 
 from .config import Config
-from .formatters import CheckResultFormatter, CheckRow, CheckTableFormatter, SyncResultFormatter
+from .copy_manager import CopyCheckResult, CopyManager
+from .formatters import (
+    CheckResultFormatter,
+    CheckRow,
+    CheckTableFormatter,
+    CopyCheckResultFormatter,
+    CopyResultFormatter,
+    SyncResultFormatter,
+)
 from .models import Project, ProjectConfiguration
-from .options import OutputFormat
+from .options import LinkStrategy, OutputFormat
 from .symlink_manager import Action, SymlinkManager
 
 
@@ -25,8 +33,8 @@ def get_absolute_path(path: str) -> str:
     return str(Path(path).resolve())
 
 
-def load_config(config: str, project_name: str | None = None) -> dict[str, ProjectConfiguration] | None:
-    """Load configuration and return project data.
+def load_config(config: str, project_name: str | None = None) -> tuple[dict[str, ProjectConfiguration], Path] | None:
+    """Load configuration and return project data with config directory.
 
     Args:
         config: Path to the YAML configuration file.
@@ -34,7 +42,7 @@ def load_config(config: str, project_name: str | None = None) -> dict[str, Proje
                     returns configuration for that project.
 
     Returns:
-        Dictionary mapping project names to ProjectConfiguration objects.
+        Tuple of (project configurations dict, config directory path).
         Returns None if loading failed.
     """
     config_path = get_absolute_path(config)
@@ -46,7 +54,9 @@ def load_config(config: str, project_name: str | None = None) -> dict[str, Proje
     try:
         cfg = Config(config_path)
         cfg.load()
-        return cfg.get_projects(project_name)
+        projects = cfg.get_projects(project_name)
+        config_dir = Path(config_path).parent
+        return projects, config_dir
     except Exception as e:
         click.echo(str(e))
         return None
@@ -91,13 +101,15 @@ class ProjectProcessor:
     projects, reducing duplication between CLI commands.
     """
 
-    def __init__(self, projects_data: dict[str, ProjectConfiguration]):
+    def __init__(self, projects_data: dict[str, ProjectConfiguration], config_dir: Path):
         """Initialize the processor with project data.
 
         Args:
             projects_data: Dictionary mapping project names to ProjectConfiguration objects.
+            config_dir: Directory where the config file lives.
         """
         self.projects_data = projects_data
+        self.config_dir = config_dir
 
     def process_all(self, operation: CmdOperation, skip_invalid: bool = True) -> bool:
         """Process all projects with the given operation.
@@ -120,7 +132,7 @@ class ProjectProcessor:
                 continue
 
             if proj_config.subpaths:
-                project = Project.from_subpaths(proj_name, project_dir, proj_config.subpaths)
+                project = Project.from_subpaths(proj_name, project_dir, proj_config.subpaths, proj_config.copy_paths)
             else:
                 project = Project.from_directory(proj_name, project_dir)
 
@@ -145,27 +157,36 @@ class ProjectProcessor:
 
 
 class SyncOperation(CmdOperation):
-    """Encapsulates the sync operation logic."""
+    """Encapsulates the sync operation logic for both symlinks and copies."""
 
-    def __init__(self, ask_callback: Callable[[str, str], Action] | None = None):
+    def __init__(
+        self,
+        config_dir: Path,
+        ask_callback: Callable[[str, str], Action] | None = None,
+        conflict_callback: Callable[[Path, Path], str] | None = None,
+    ):
         """Initialize the sync operation.
 
         Args:
-            ask_callback: Optional callback for handling existing paths.
-                         Takes target path and expected source path as arguments.
+            config_dir: Directory where the config file lives.
+            ask_callback: Optional callback for handling existing symlink paths.
+            conflict_callback: Optional callback for resolving copy conflicts.
         """
+        self.config_dir = config_dir
         self.ask_callback = ask_callback
+        self.conflict_callback = conflict_callback
 
     def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute the sync operation.
+        """Execute the sync operation for symlinks and copies.
 
         Args:
             project: The project to sync.
-            target_path: The target directory for symlinks.
+            target_path: The target directory.
 
         Returns:
             True to continue, False if aborted.
         """
+        # Symlink items
         manager = SymlinkManager(project, target_path)
         result = manager.sync(self.ask_callback)
 
@@ -176,11 +197,18 @@ class SyncOperation(CmdOperation):
             click.echo("Aborted by user")
             return False
 
+        # Copy items
+        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
+        if copy_items:
+            copy_mgr = CopyManager(copy_items, target_path, self.config_dir)
+            copy_result = copy_mgr.sync(self.conflict_callback)
+            CopyResultFormatter(copy_result).format(project.name, target_path)
+
         return True
 
 
 class CheckOperation(CmdOperation):
-    """Encapsulates the check operation logic.
+    """Encapsulates the check operation logic for symlinks and copies.
 
     Supports two output formats:
     - ``"table"`` (default): collects all results and renders a compact Rich table
@@ -188,13 +216,15 @@ class CheckOperation(CmdOperation):
     - ``"verbose"``: prints detailed per-project output immediately during processing.
     """
 
-    def __init__(self, show_extra: bool = False, output_format: OutputFormat = OutputFormat.TABLE):
+    def __init__(self, config_dir: Path, show_extra: bool = False, output_format: OutputFormat = OutputFormat.TABLE):
         """Initialize the check operation.
 
         Args:
+            config_dir: Directory where the config file lives.
             show_extra: Whether to show extra exclude entries.
             output_format: Output format — ``OutputFormat.TABLE`` (default) or ``OutputFormat.VERBOSE``.
         """
+        self.config_dir = config_dir
         self.show_extra = show_extra
         self.output_format = output_format
         self._rows: list[CheckRow] = []
@@ -207,9 +237,6 @@ class CheckOperation(CmdOperation):
     def execute(self, project: Project, target_path: Path) -> bool:
         """Execute the check operation for a single project/target pair.
 
-        In table mode, results are collected for deferred rendering via :meth:`render`.
-        In verbose mode, results are printed immediately.
-
         Args:
             project: The project to check.
             target_path: The target directory to check.
@@ -217,14 +244,26 @@ class CheckOperation(CmdOperation):
         Returns:
             Always True to continue processing.
         """
+        # Get all item names (both symlink and copy) for proper git exclude checking
+        all_item_names = {item.name for item in project.items}
+
         manager = SymlinkManager(project, target_path)
-        result = manager.check()
+        symlink_result = manager.check(all_item_names)
+
+        # Check copy items
+        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
+        copy_result: CopyCheckResult | None = None
+        if copy_items:
+            copy_mgr = CopyManager(copy_items, target_path, self.config_dir)
+            copy_result = copy_mgr.check()
 
         if self.output_format == OutputFormat.VERBOSE:
-            formatter = CheckResultFormatter(result, self.show_extra)
+            formatter = CheckResultFormatter(symlink_result, self.show_extra)
             formatter.format(project.name, target_path)
+            if copy_result:
+                CopyCheckResultFormatter(copy_result).format(project.name, target_path)
         else:
-            self._rows.append(CheckRow(project.name, target_path, result))
+            self._rows.append(CheckRow(project.name, target_path, symlink_result, copy_result))
 
         return True
 
