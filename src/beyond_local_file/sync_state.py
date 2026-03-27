@@ -14,7 +14,7 @@ import yaml
 
 from .options import SyncStatus
 
-STATE_DIR = ".beyond-local-file"
+STATE_DIR = ".blf"
 STATE_FILE = "sync-state.yml"
 
 
@@ -74,7 +74,7 @@ class SyncRecord:
 class SyncState:
     """Manages sync state for all copied files.
 
-    The state file lives at ``<config_dir>/.beyond-local-file/sync-state.yml``
+    The state file lives at ``<config_dir>/.blf/sync-state.yml``
     where config_dir is the directory containing the config file.
 
     Attributes:
@@ -97,7 +97,8 @@ class SyncState:
             return
         with open(self._state_file) as f:
             data: dict[str, Any] = yaml.safe_load(f) or {}
-        for entry in data.get("synced_files", []):
+        synced_files = data.get("synced_files") or []
+        for entry in synced_files:
             record = SyncRecord.from_dict(entry)
             self.records[record.target_path] = record
 
@@ -124,15 +125,17 @@ class SyncState:
         Returns:
             A SyncStatus value describing the relationship.
         """
-        record = self.get_record(str(target_file))
-        if record is None:
-            return SyncStatus.UNKNOWN
-
         managed_hash = compute_file_hash(managed_file)
         target_hash = compute_file_hash(target_file)
 
+        # If files are identical, they're in sync regardless of record
         if managed_hash == target_hash:
             return SyncStatus.IN_SYNC
+
+        record = self.get_record(str(target_file))
+        if record is None:
+            # No sync record exists - treat as managed changed (needs initial sync)
+            return SyncStatus.MANAGED_CHANGED
 
         last = record.last_sync_hash
         if managed_hash == last:

@@ -169,7 +169,6 @@ class CopyManager:
                 SyncStatus.MANAGED_CHANGED: result.managed_changed,
                 SyncStatus.TARGET_CHANGED: result.target_changed,
                 SyncStatus.BOTH_CHANGED: result.both_changed,
-                SyncStatus.UNKNOWN: result.managed_changed,  # treat unknown as needing sync
             }
             status_map[status].append(item.name)
 
@@ -204,8 +203,13 @@ class CopyManager:
     ) -> None:
         """Apply the appropriate sync action based on detected status."""
         if status == SyncStatus.IN_SYNC:
+            # Create missing record when target file was just added to managed project.
+            # This happens when a pre-existing target file is brought under management
+            # and its content already matches the managed file.
+            if self.sync_state.get_record(str(target_file)) is None:
+                self.sync_state.update_record(managed_file, target_file)
             result.in_sync.add(item_name)
-        elif status in (SyncStatus.MANAGED_CHANGED, SyncStatus.UNKNOWN):
+        elif status == SyncStatus.MANAGED_CHANGED:
             target_set = (
                 result.copied
                 if self._copy_and_record(
