@@ -270,6 +270,8 @@ class CheckTableFormatter:
             + len(copy_result.both_changed)
             + len(copy_result.missing)
         )
+        manually_synced_count = len(copy_result.manually_synced)
+
         if problems:
             parts: list[str] = []
             if copy_result.missing:
@@ -280,6 +282,9 @@ class CheckTableFormatter:
             if out_of_sync:
                 parts.append(f"{out_of_sync} out of sync")
             return f"[red]✗ ({', '.join(parts)})[/red]"
+
+        if manually_synced_count:
+            return f"[green]✓[/green] [dim](+{manually_synced_count} manual)[/dim]"
         return "[green]✓[/green]"
 
 
@@ -339,6 +344,7 @@ class CopyCheckResultFormatter:
         """
         has_items = (
             self.result.in_sync
+            or self.result.manually_synced
             or self.result.managed_changed
             or self.result.target_changed
             or self.result.both_changed
@@ -350,6 +356,8 @@ class CopyCheckResultFormatter:
         click.echo("\nCopy Status:")
         for item in self.result.in_sync:
             click.echo(f"  ✓ {item} (copied, in sync)")
+        for item in self.result.manually_synced:
+            click.echo(f"  ✓ {item} (copied, manually synced)")
         for item in self.result.managed_changed:
             click.echo(f"  ⚠ {item} (copied, managed changed)")
         for item in self.result.target_changed:

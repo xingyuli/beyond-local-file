@@ -128,11 +128,17 @@ class SyncState:
         managed_hash = compute_file_hash(managed_file)
         target_hash = compute_file_hash(target_file)
 
-        # If files are identical, they're in sync regardless of record
+        record = self.get_record(str(target_file))
+
+        # If files are identical
         if managed_hash == target_hash:
+            # Check if they match the recorded state
+            if record is None or managed_hash != record.last_sync_hash:
+                # Files match but differ from sync-state: manual sync detected
+                return SyncStatus.MANUALLY_SYNCED
+            # Files match and match the recorded state
             return SyncStatus.IN_SYNC
 
-        record = self.get_record(str(target_file))
         if record is None:
             # No sync record exists - treat as managed changed (needs initial sync)
             return SyncStatus.MANAGED_CHANGED

@@ -35,7 +35,8 @@ class SyncStatus(StrEnum):
     """Sync status for a copied file.
 
     Attributes:
-        IN_SYNC: Managed and target files are identical.
+        IN_SYNC: Managed and target files are identical and match recorded state.
+        MANUALLY_SYNCED: Managed and target files are identical but differ from recorded state.
         MANAGED_CHANGED: Only the managed (source) file changed since last sync.
         TARGET_CHANGED: Only the target file changed since last sync.
         BOTH_CHANGED: Both files changed — conflict.
@@ -43,6 +44,7 @@ class SyncStatus(StrEnum):
     """
 
     IN_SYNC = "in_sync"
+    MANUALLY_SYNCED = "manually_synced"
     MANAGED_CHANGED = "managed_changed"
     TARGET_CHANGED = "target_changed"
     BOTH_CHANGED = "both_changed"

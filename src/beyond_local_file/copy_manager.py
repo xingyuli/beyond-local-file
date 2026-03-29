@@ -51,7 +51,8 @@ class CopyCheckResult:
     """Result of checking copy-sync status for a single project/target pair.
 
     Attributes:
-        in_sync: Items where managed and target are identical.
+        in_sync: Items where managed and target are identical and match recorded state.
+        manually_synced: Items where managed and target are identical but differ from recorded state.
         managed_changed: Items where only the managed file changed.
         target_changed: Items where only the target file changed.
         both_changed: Items where both sides changed (conflict).
@@ -59,6 +60,7 @@ class CopyCheckResult:
     """
 
     in_sync: list[str] = field(default_factory=list)
+    manually_synced: list[str] = field(default_factory=list)
     managed_changed: list[str] = field(default_factory=list)
     target_changed: list[str] = field(default_factory=list)
     both_changed: list[str] = field(default_factory=list)
@@ -133,6 +135,10 @@ class CopyManager:
             status = self.sync_state.detect_status(managed_file, target_file)
             if status == SyncStatus.BOTH_CHANGED:
                 self._resolve_conflict(item.name, managed_file, target_file, result, conflict_callback)
+            elif status == SyncStatus.MANUALLY_SYNCED:
+                # Files match but sync-state is outdated: update record without copying
+                self.sync_state.update_record(managed_file, target_file)
+                result.in_sync.add(item.name)
             else:
                 self._apply_sync_action(item.name, status, managed_file, target_file, result)
 
@@ -166,6 +172,7 @@ class CopyManager:
             status = self.sync_state.detect_status(item.source_path, target_file)
             status_map = {
                 SyncStatus.IN_SYNC: result.in_sync,
+                SyncStatus.MANUALLY_SYNCED: result.manually_synced,
                 SyncStatus.MANAGED_CHANGED: result.managed_changed,
                 SyncStatus.TARGET_CHANGED: result.target_changed,
                 SyncStatus.BOTH_CHANGED: result.both_changed,
