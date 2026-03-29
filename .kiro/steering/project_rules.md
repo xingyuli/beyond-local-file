@@ -30,7 +30,7 @@ All code must pass Ruff with zero violations. Configuration lives in `pyproject.
 
 ## 4. Language
 
-All documentation — docstrings, inline comments, README files, steering documents, commit messages, and changelogs — must be written in English.
+All files — code, documentation, configuration, scripts, and any generated content — must be written in English unless the user explicitly requests Chinese.
 
 ## 5. Fixed Option Values
 

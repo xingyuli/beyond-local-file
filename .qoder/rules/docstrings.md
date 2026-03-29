@@ -1,6 +1,6 @@
 ---
-inclusion: fileMatch
-fileMatchPattern: "src/beyond_local_file/**"
+trigger: glob
+glob: src/beyond_local_file/**
 ---
 
 # Docstring Conventions
