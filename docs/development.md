@@ -1,5 +1,23 @@
 # Development Guide
 
+## Table of Contents
+
+- [Development Installation](#development-installation)
+  - [Method 1: Using uv run (Recommended)](#method-1-using-uv-run-recommended)
+  - [Method 2: Using uvx with local path](#method-2-using-uvx-with-local-path)
+  - [Method 3: Traditional virtual environment](#method-3-traditional-virtual-environment)
+- [Running Tests](#running-tests)
+- [Code Quality](#code-quality)
+  - [Pre-commit Hooks](#pre-commit-hooks)
+- [Building the Package](#building-the-package)
+- [Project Structure](#project-structure)
+- [Coding Standards](#coding-standards)
+- [Testing Guidelines](#testing-guidelines)
+- [Release Process](#release-process)
+- [Contributing](#contributing)
+- [Troubleshooting Development Issues](#troubleshooting-development-issues)
+- [Getting Help](#getting-help)
+
 This guide is for developers who want to contribute to or modify the `beyond-local-file` tool itself.
 
 ## Development Installation
@@ -17,7 +35,7 @@ uv run beyond-local-file --help
 
 # Run from your managed projects directory
 cd /path/to/your/managed-projects
-uv run --directory /path/to/beyond-local-file beyond-local-file symlink check
+uv run --directory /path/to/beyond-local-file beyond-local-file link check
 ```
 
 ### Method 2: Using `uvx` with local path
@@ -30,7 +48,7 @@ uvx --from /path/to/beyond-local-file beyond-local-file --help
 
 # Run from managed projects directory
 cd /path/to/your/managed-projects
-uvx --from /path/to/beyond-local-file beyond-local-file symlink sync
+uvx --from /path/to/beyond-local-file beyond-local-file link sync
 ```
 
 ### Method 3: Traditional virtual environment
@@ -52,7 +70,7 @@ beyond-local-file --help
 
 # Run from managed projects directory
 cd /path/to/your/managed-projects
-beyond-local-file symlink check
+beyond-local-file link check
 ```
 
 **Note**: `uvx` creates its own isolated environments and won't see packages installed with `uv pip install -e .`. Use `uv run` or activate the virtual environment if you need the command available directly.

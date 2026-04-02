@@ -45,7 +45,7 @@ def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
     mock_callback = Mock(return_value=Action.SKIP)
 
     # Run sync
-    manager = SymlinkManager(project, temp_target_dir)
+    manager = SymlinkManager(project.items, temp_target_dir)
     result = manager.sync(ask_callback=mock_callback)
 
     # Verify callback was called with both arguments
@@ -74,7 +74,7 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     mock_callback = Mock(return_value=Action.OVERWRITE)
 
     # Run sync
-    manager = SymlinkManager(project, temp_target_dir)
+    manager = SymlinkManager(project.items, temp_target_dir)
     result = manager.sync(ask_callback=mock_callback)
 
     # Verify the symlink was created
@@ -84,14 +84,14 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     assert (temp_target_dir / "file1.txt").resolve() == (temp_project_dir / "file1.txt").resolve()
 
 
-# Test Suite: Multi-Strategy Integration (Current Architecture)
+# Test Suite: Multi-Strategy Integration
 
 
-def test_sync_with_mixed_strategies_current(tmp_path: Path) -> None:
-    """Test sync operation with both symlink and copy items using current architecture.
+def test_sync_with_mixed_strategies(tmp_path: Path) -> None:
+    """Test sync operation with both symlink and copy items.
 
-    This test documents the current behavior before refactoring where both
-    SymlinkManager and CopyManager are used separately.
+    This test verifies that the refactored architecture correctly handles
+    projects with mixed strategies using the divide-and-conquer approach.
 
     Args:
         tmp_path: Pytest temporary directory fixture.
@@ -163,12 +163,13 @@ def test_sync_with_mixed_strategies_current(tmp_path: Path) -> None:
     assert (target_dir / "copy2.txt").read_text() == "copy content 2"
 
 
-def test_check_git_exclude_with_mixed_strategies_current(tmp_path: Path) -> None:
-    """Test git exclude entries with mixed strategies using current architecture.
+def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
+    """Test git exclude entries with mixed strategies.
 
-    This test documents the current behavior where all_item_names is passed
-    to SymlinkManager.check() to prevent copy items from being reported as
-    "extra" git exclude entries.
+    This test verifies that the refactored architecture correctly handles
+    git exclude entries for projects with mixed strategies. The protocol-based
+    approach collects all_valid_entries from all managers to prevent false
+    positives when checking for extra entries.
 
     Args:
         tmp_path: Pytest temporary directory fixture.
@@ -226,6 +227,6 @@ def test_check_git_exclude_with_mixed_strategies_current(tmp_path: Path) -> None
     # Verify operation succeeded
     assert success
 
-    # The key behavior: CheckOperation passes all_item_names to SymlinkManager.check()
-    # so copy_file.txt is not reported as "extra" even though SymlinkManager
-    # doesn't manage it. This is the hack that will be removed during refactoring.
+    # The refactored behavior: CheckOperation collects all_valid_entries from all managers
+    # and passes it to check_git_excludes(), preventing copy_file.txt from being
+    # reported as "extra" by SymlinkManager (and vice versa)

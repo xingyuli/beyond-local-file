@@ -1,5 +1,17 @@
 # Platform Support
 
+## Table of Contents
+
+- [Supported Platforms](#supported-platforms)
+- [Quick Start by Platform](#quick-start-by-platform)
+- [Platform-Specific Details](#platform-specific-details)
+- [Known Limitations](#known-limitations)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Reporting Issues](#reporting-issues)
+- [Future Improvements](#future-improvements)
+- [Contributing](#contributing)
+
 beyond-local-file is designed to work across all major operating systems.
 
 ## Supported Platforms
@@ -22,7 +34,7 @@ uv tool install git+https://github.com/xingyuli/beyond-local-file.git
 
 # Use immediately
 cd ~/my-dev-files
-beyond-local-file symlink sync
+beyond-local-file link sync
 ```
 
 ### Windows 10/11
@@ -36,7 +48,7 @@ uv tool install git+https://github.com/xingyuli/beyond-local-file.git
 
 # 3. Use
 cd C:\Users\YourName\my-dev-files
-beyond-local-file symlink sync
+beyond-local-file link sync
 ```
 
 ### WSL (Windows Subsystem for Linux)
@@ -44,7 +56,7 @@ beyond-local-file symlink sync
 ```bash
 # Works exactly like Linux
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
-beyond-local-file symlink sync
+beyond-local-file link sync
 ```
 
 ## Platform-Specific Details

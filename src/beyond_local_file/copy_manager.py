@@ -10,6 +10,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .git_manager import GitExcludeManager
+from .link_strategy_protocol import (
+    CopyCheckDetails,
+    CopyCreateDetails,
+    GitExcludeAddResult,
+    GitExcludeCheckResult,
+    LinkCheckResult,
+    LinkCreateResult,
+)
 from .models import ProjectItem
 from .options import LinkStrategy, SyncStatus
 from .sync_state import SyncState
@@ -71,6 +79,8 @@ class CopyManager:
     """Manages physical file copies from a project to a target directory.
 
     Only operates on items whose strategy is ``LinkStrategy.COPY``.
+
+    Implements the LinkStrategyManager protocol.
 
     Attributes:
         copy_items: Project items that use the copy strategy.
@@ -178,6 +188,111 @@ class CopyManager:
                 SyncStatus.BOTH_CHANGED: result.both_changed,
             }
             status_map[status].append(item.name)
+
+        return result
+
+    # Protocol methods (LinkStrategyManager interface)
+
+    def get_managed_items(self) -> list[ProjectItem]:
+        """Return the list of items this manager handles.
+
+        Returns:
+            List of ProjectItem instances managed by this manager.
+        """
+        return self.copy_items
+
+    def create_links(self, conflict_callback: Callable[[Path, Path], str] | None = None) -> LinkCreateResult:
+        """Create links for all managed items (protocol method).
+
+        Args:
+            conflict_callback: Optional callback for resolving copy conflicts.
+
+        Returns:
+            LinkCreateResult containing details of the operation.
+        """
+        # Use existing sync logic but map to unified result type
+        copy_result = self.sync(conflict_callback)
+
+        # Create strategy-specific details
+        details = CopyCreateDetails(reverse_copied=copy_result.reverse_copied)
+
+        return LinkCreateResult(
+            created=copy_result.copied,
+            already_correct=copy_result.in_sync,
+            skipped=copy_result.skipped,
+            failed=copy_result.failed,
+            details=details,
+        )
+
+    def check_links(self) -> LinkCheckResult:
+        """Check the status of links for all managed items (protocol method).
+
+        Returns:
+            LinkCheckResult containing the status of copies.
+        """
+        # Use existing check logic
+        copy_check = self.check()
+
+        # Create strategy-specific details
+        details = CopyCheckDetails(
+            in_sync=copy_check.in_sync,
+            manually_synced=copy_check.manually_synced,
+            managed_changed=copy_check.managed_changed,
+            target_changed=copy_check.target_changed,
+            both_changed=copy_check.both_changed,
+        )
+
+        # Map to unified result
+        result = LinkCheckResult()
+        result.exists = copy_check.in_sync + copy_check.manually_synced
+        result.missing = copy_check.missing
+        result.details = details
+
+        return result
+
+    def add_git_excludes(self) -> GitExcludeAddResult:
+        """Add git exclude entries for all managed items (protocol method).
+
+        Returns:
+            GitExcludeAddResult with added count and existing entries.
+        """
+        result = GitExcludeAddResult()
+
+        if not self.git_manager.is_git_repo():
+            return result
+
+        item_names = {i.name for i in self.copy_items}
+        if item_names:
+            added, existing = self.git_manager.write_entries(item_names)
+            result.added = added
+            result.existing = existing
+
+        return result
+
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
+        """Check git exclude status for managed items (protocol method).
+
+        Args:
+            all_valid_entries: Set of ALL valid entry names from all managers.
+                             Used to identify extra/stale entries.
+
+        Returns:
+            GitExcludeCheckResult with present, missing, extra entries.
+        """
+        result = GitExcludeCheckResult()
+
+        if not self.git_manager.is_git_repo():
+            item_names = {i.name for i in self.copy_items}
+            result.missing = item_names
+            return result
+
+        exclude_entries = self.git_manager.read_entries()
+        item_names = {i.name for i in self.copy_items}
+
+        result.present = item_names & exclude_entries
+        result.missing = item_names - exclude_entries
+        # Use all_valid_entries to identify extra entries
+        result.extra = exclude_entries - all_valid_entries
 
         return result
 

@@ -91,7 +91,7 @@ def test_sync_creates_symlinks_for_all_items(sample_project: Project, temp_targe
         sample_project: Sample project fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project, temp_target_dir)
+    manager = SymlinkManager(sample_project.items, temp_target_dir)
     result = manager.sync()
 
     # All items should be created
@@ -123,7 +123,7 @@ def test_sync_skips_existing_correct_symlinks(sample_project: Project, temp_targ
         sample_project: Sample project fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project, temp_target_dir)
+    manager = SymlinkManager(sample_project.items, temp_target_dir)
 
     # First sync creates symlinks
     result1 = manager.sync()
@@ -157,7 +157,7 @@ def test_sync_detects_incorrect_symlinks(sample_project: Project, temp_target_di
     def skip_callback(target_path: str, expected_source: str) -> Action:
         return Action.SKIP
 
-    manager = SymlinkManager(sample_project, temp_target_dir)
+    manager = SymlinkManager(sample_project.items, temp_target_dir)
     result = manager.sync(ask_callback=skip_callback)
 
     # file1.txt should be skipped (incorrect symlink)
@@ -186,7 +186,7 @@ def test_sync_overwrites_with_callback_approval(sample_project: Project, temp_ta
     def overwrite_callback(target_path: str, expected_source: str) -> Action:
         return Action.OVERWRITE
 
-    manager = SymlinkManager(sample_project, temp_target_dir)
+    manager = SymlinkManager(sample_project.items, temp_target_dir)
     result = manager.sync(ask_callback=overwrite_callback)
 
     # All items should be created (file1.txt overwritten)
@@ -210,7 +210,7 @@ def test_check_reports_existing_symlinks(sample_project: Project, temp_target_di
         temp_target_dir: Temporary target directory fixture.
     """
     # Create symlinks
-    manager = SymlinkManager(sample_project, temp_target_dir)
+    manager = SymlinkManager(sample_project.items, temp_target_dir)
     manager.sync()
 
     # Check should report all symlinks as existing
@@ -230,7 +230,7 @@ def test_check_reports_missing_symlinks(sample_project: Project, temp_target_dir
         sample_project: Sample project fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project, temp_target_dir)
+    manager = SymlinkManager(sample_project.items, temp_target_dir)
 
     # Check without creating symlinks
     result = manager.check()
@@ -264,7 +264,7 @@ def test_check_reports_git_exclude_status(sample_project: Project, tmp_path: Pat
     exclude_file = info_dir / "exclude"
     exclude_file.write_text("file1.txt\n")
 
-    manager = SymlinkManager(sample_project, target_dir)
+    manager = SymlinkManager(sample_project.items, target_dir)
     result = manager.check()
 
     # file1.txt should be in exclude_present
@@ -275,14 +275,12 @@ def test_check_reports_git_exclude_status(sample_project: Project, tmp_path: Pat
     assert "subdir" in result.exclude_missing
 
 
-def test_check_with_all_item_names_excludes_copy_items(sample_project: Project, tmp_path: Path) -> None:
-    """Test that check with all_item_names parameter excludes copy items from extra entries.
+def test_check_git_excludes_with_protocol(sample_project: Project, tmp_path: Path) -> None:
+    """Test that check_git_excludes protocol method correctly identifies extra entries.
 
-    This tests the current hack where all_item_names (symlink + copy) is passed
-    to SymlinkManager.check() to prevent copy items from being reported as
-    "extra" git exclude entries.
-
-    NOTE: This test documents the hack that will be removed during refactoring.
+    After refactoring, managers use check_git_excludes(all_valid_entries) to
+    identify extra git exclude entries. The all_valid_entries parameter contains
+    names from ALL managers, preventing cross-manager false positives.
 
     Args:
         sample_project: Sample project fixture.
@@ -296,24 +294,23 @@ def test_check_with_all_item_names_excludes_copy_items(sample_project: Project, 
     info_dir = git_dir / "info"
     info_dir.mkdir()
 
-    # Create exclude file with symlink items + a copy item
+    # Create exclude file with symlink items + a copy item + a truly extra item
     exclude_file = info_dir / "exclude"
-    exclude_file.write_text("file1.txt\nfile2.txt\nsubdir\ncopy_file.txt\n")
+    exclude_file.write_text("file1.txt\nfile2.txt\nsubdir\ncopy_file.txt\nold_file.txt\n")
 
-    # Simulate all_item_names including both symlink and copy items
-    all_item_names = {"file1.txt", "file2.txt", "subdir", "copy_file.txt"}
+    # Simulate all_valid_entries from all managers (symlink + copy)
+    all_valid_entries = {"file1.txt", "file2.txt", "subdir", "copy_file.txt"}
 
-    manager = SymlinkManager(sample_project, target_dir)
-    result = manager.check(all_item_names=all_item_names)
+    manager = SymlinkManager(sample_project.items, target_dir)
+    result = manager.check_git_excludes(all_valid_entries)
 
-    # All symlink items should be in exclude_present
-    assert "file1.txt" in result.exclude_present
-    assert "file2.txt" in result.exclude_present
-    assert "subdir" in result.exclude_present
+    # All symlink items should be in present
+    assert "file1.txt" in result.present
+    assert "file2.txt" in result.present
+    assert "subdir" in result.present
 
-    # copy_file.txt should NOT be in exclude_extra (because it's in all_item_names)
-    assert "copy_file.txt" not in result.exclude_extra
+    # copy_file.txt should NOT be in extra (it's in all_valid_entries from CopyManager)
+    assert "copy_file.txt" not in result.extra
 
-    # If we check without all_item_names, copy_file.txt would be in exclude_extra
-    result_without = manager.check()
-    assert "copy_file.txt" in result_without.exclude_extra
+    # old_file.txt should be in extra (not in any manager)
+    assert "old_file.txt" in result.extra

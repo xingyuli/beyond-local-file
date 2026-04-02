@@ -18,7 +18,7 @@ from .formatters import (
 )
 from .models import Project, ProjectConfiguration
 from .options import LinkStrategy, OutputFormat
-from .symlink_manager import Action, SymlinkManager
+from .symlink_manager import Action, CheckResult, SymlinkManager
 
 
 def get_absolute_path(path: str) -> str:
@@ -179,6 +179,9 @@ class SyncOperation(CmdOperation):
     def execute(self, project: Project, target_path: Path) -> bool:
         """Execute the sync operation for symlinks and copies.
 
+        Uses divide-and-conquer strategy: partition items by strategy,
+        then delegate to appropriate managers.
+
         Args:
             project: The project to sync.
             target_path: The target directory.
@@ -186,19 +189,25 @@ class SyncOperation(CmdOperation):
         Returns:
             True to continue, False if aborted.
         """
-        # Symlink items
-        manager = SymlinkManager(project, target_path)
-        result = manager.sync(self.ask_callback)
-
-        formatter = SyncResultFormatter(project, result)
-        formatter.format(project.name, target_path)
-
-        if result.aborted:
-            click.echo("Aborted by user")
-            return False
-
-        # Copy items
+        # PARTITION: Divide items by strategy
+        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
         copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
+
+        # CONQUER: Delegate to appropriate managers
+
+        # Handle symlink items
+        if symlink_items:
+            manager = SymlinkManager(symlink_items, target_path)
+            result = manager.sync(self.ask_callback)
+
+            formatter = SyncResultFormatter(project, result)
+            formatter.format(project.name, target_path)
+
+            if result.aborted:
+                click.echo("Aborted by user")
+                return False
+
+        # Handle copy items
         if copy_items:
             copy_mgr = CopyManager(copy_items, target_path, self.config_dir)
             copy_result = copy_mgr.sync(self.conflict_callback)
@@ -237,6 +246,9 @@ class CheckOperation(CmdOperation):
     def execute(self, project: Project, target_path: Path) -> bool:
         """Execute the check operation for a single project/target pair.
 
+        Uses divide-and-conquer strategy: partition items by strategy,
+        then delegate to appropriate managers.
+
         Args:
             project: The project to check.
             target_path: The target directory to check.
@@ -244,25 +256,49 @@ class CheckOperation(CmdOperation):
         Returns:
             Always True to continue processing.
         """
-        # Get all item names (both symlink and copy) for proper git exclude checking
-        all_item_names = {item.name for item in project.items}
+        # PARTITION: Divide items by strategy
+        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
+        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
 
-        manager = SymlinkManager(project, target_path)
-        symlink_result = manager.check(all_item_names)
+        # CONQUER: Create managers with partitioned items
+        symlink_mgr = SymlinkManager(symlink_items, target_path) if symlink_items else None
+        copy_mgr = CopyManager(copy_items, target_path, self.config_dir) if copy_items else None
+
+        # Collect all valid entry names from ALL managers for git exclude checking
+        all_valid_entries: set[str] = set()
+        if symlink_mgr:
+            all_valid_entries.update(i.name for i in symlink_mgr.get_managed_items())
+        if copy_mgr:
+            all_valid_entries.update(i.name for i in copy_mgr.get_managed_items())
+
+        # Check symlink items using protocol
+        symlink_result = None
+        if symlink_mgr:
+            symlink_result = symlink_mgr.check()
+
+            # Check git excludes using protocol with all_valid_entries
+            if symlink_mgr.git_manager.is_git_repo():
+                git_result = symlink_mgr.check_git_excludes(all_valid_entries)
+                # Map protocol result back to CheckResult for backward compatibility
+                symlink_result.exclude_present = git_result.present
+                symlink_result.exclude_missing = git_result.missing
+                symlink_result.exclude_extra = git_result.extra
 
         # Check copy items
-        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
         copy_result: CopyCheckResult | None = None
-        if copy_items:
-            copy_mgr = CopyManager(copy_items, target_path, self.config_dir)
+        if copy_mgr:
             copy_result = copy_mgr.check()
 
         if self.output_format == OutputFormat.VERBOSE:
-            formatter = CheckResultFormatter(symlink_result, self.show_extra)
-            formatter.format(project.name, target_path)
+            if symlink_result:
+                formatter = CheckResultFormatter(symlink_result, self.show_extra)
+                formatter.format(project.name, target_path)
             if copy_result:
                 CopyCheckResultFormatter(copy_result).format(project.name, target_path)
         else:
+            # For table format, we need a symlink_result even if empty
+            if not symlink_result:
+                symlink_result = CheckResult()
             self._rows.append(CheckRow(project.name, target_path, symlink_result, copy_result))
 
         return True

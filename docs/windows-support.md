@@ -1,5 +1,19 @@
 # Windows Support
 
+## Table of Contents
+
+- [Symbolic Link Support on Windows](#symbolic-link-support-on-windows)
+- [Requirements](#requirements)
+- [Installation on Windows](#installation-on-windows)
+- [Usage on Windows](#usage-on-windows)
+- [Path Considerations](#path-considerations)
+- [Troubleshooting](#troubleshooting)
+- [Testing on Windows](#testing-on-windows)
+- [Known Limitations on Windows](#known-limitations-on-windows)
+- [WSL (Windows Subsystem for Linux)](#wsl-windows-subsystem-for-linux)
+- [Recommendations for Windows Users](#recommendations-for-windows-users)
+- [Further Reading](#further-reading)
+
 This document explains how to use beyond-local-file on Windows systems.
 
 ## Symbolic Link Support on Windows
@@ -67,10 +81,10 @@ The usage is identical to macOS/Linux:
 cd C:\Users\YourName\my-dev-files
 
 # Sync all projects
-beyond-local-file symlink sync
+beyond-local-file link sync
 
 # Check status
-beyond-local-file symlink check
+beyond-local-file link check
 ```
 
 ## Path Considerations
@@ -124,7 +138,7 @@ The target directory doesn't exist.
 mkdir C:\Users\YourName\workspace\project-a
 
 # Then run sync
-beyond-local-file symlink sync
+beyond-local-file link sync
 ```
 
 ### Symlinks Not Working in Git
@@ -178,7 +192,7 @@ mkdir target
 
 # 5. Run sync
 cd my-files
-beyond-local-file symlink sync
+beyond-local-file link sync
 
 # 6. Verify symlink
 dir ..\target
@@ -199,7 +213,7 @@ If you're using WSL, the tool works exactly like on Linux:
 ```bash
 # In WSL, no special permissions needed
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
-beyond-local-file symlink sync
+beyond-local-file link sync
 ```
 
 **Note:** Symlinks created in WSL may not be accessible from Windows Explorer, and vice versa.

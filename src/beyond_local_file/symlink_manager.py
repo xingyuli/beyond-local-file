@@ -7,8 +7,8 @@ from enum import Enum
 from pathlib import Path
 
 from .git_manager import GitExcludeManager
-from .models import Project
-from .options import LinkStrategy
+from .link_strategy_protocol import GitExcludeAddResult, GitExcludeCheckResult, LinkCheckResult, LinkCreateResult
+from .models import ProjectItem
 
 
 class Action(Enum):
@@ -67,24 +67,25 @@ class SymlinkManager:
     This class handles synchronizing symlinks from a project's source directory
     to a target directory, with support for Git exclude file management.
 
+    Implements the LinkStrategyManager protocol.
+
     Attributes:
-        project: The project to manage symlinks for.
+        symlink_items: List of items to manage (pre-filtered by strategy).
         target_path: The target directory where symlinks should be created.
         git_manager: Manager for Git exclude file operations.
     """
 
-    def __init__(self, project: Project, target_path: Path):
+    def __init__(self, symlink_items: list[ProjectItem], target_path: Path):
         """Initialize the SymlinkManager.
 
         Args:
-            project: The project containing items to create symlinks for.
+            symlink_items: List of ProjectItem instances with SYMLINK strategy.
+                          Should be pre-filtered by the caller.
             target_path: The target directory for symlinks.
         """
-        self.project = project
+        self.symlink_items = symlink_items
         self.target_path = Path(target_path)
         self.git_manager = GitExcludeManager(self.target_path)
-        # Only manage items that use the symlink strategy
-        self._symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
 
     def sync(self, ask_callback: Callable[[str, str], Action] | None = None) -> SyncResult:
         """Synchronize symlinks from project to target directory.
@@ -107,7 +108,7 @@ class SymlinkManager:
         """
         result = SyncResult()
 
-        for item in self._symlink_items:
+        for item in self.symlink_items:
             link_path = self.target_path / item.name
 
             if self._is_link_correct(link_path, item.source_path):
@@ -158,7 +159,7 @@ class SymlinkManager:
         """
         result = CheckResult()
 
-        for item in self._symlink_items:
+        for item in self.symlink_items:
             link_path = self.target_path / item.name
 
             if link_path.exists() or link_path.is_symlink():
@@ -170,11 +171,109 @@ class SymlinkManager:
             exclude_entries = self.git_manager.read_entries()
             # Use all_item_names if provided (includes both symlink and copy items)
             # Otherwise fall back to just symlink items
-            item_names = all_item_names if all_item_names is not None else {i.name for i in self._symlink_items}
+            item_names = all_item_names if all_item_names is not None else {i.name for i in self.symlink_items}
 
             result.exclude_present = item_names & exclude_entries
             result.exclude_missing = item_names - exclude_entries
             result.exclude_extra = exclude_entries - item_names
+
+        return result
+
+    # Protocol methods (LinkStrategyManager interface)
+
+    def get_managed_items(self) -> list[ProjectItem]:
+        """Return the list of items this manager handles.
+
+        Returns:
+            List of ProjectItem instances managed by this manager.
+        """
+        return self.symlink_items
+
+    def create_links(self, ask_callback: Callable[[str, str], Action] | None = None) -> LinkCreateResult:
+        """Create links for all managed items (protocol method).
+
+        Args:
+            ask_callback: Optional callback function that takes a path string
+                        and expected source path, and returns an Action.
+
+        Returns:
+            LinkCreateResult containing details of the operation.
+        """
+        # Use existing sync logic but map to unified result type
+        sync_result = self.sync(ask_callback)
+
+        return LinkCreateResult(
+            created=sync_result.created,
+            already_correct=sync_result.already_correct,
+            skipped=sync_result.skipped,
+            failed=sync_result.failed,
+            details=None,  # Symlinks don't have strategy-specific details
+        )
+
+    def check_links(self) -> LinkCheckResult:
+        """Check the status of links for all managed items (protocol method).
+
+        Returns:
+            LinkCheckResult containing the status of symlinks.
+        """
+        result = LinkCheckResult()
+
+        for item in self.symlink_items:
+            link_path = self.target_path / item.name
+
+            if link_path.exists() or link_path.is_symlink():
+                result.exists.append(item.name)
+            else:
+                result.missing.append(item.name)
+
+        # Symlinks don't have strategy-specific details
+        result.details = None
+
+        return result
+
+    def add_git_excludes(self) -> GitExcludeAddResult:
+        """Add git exclude entries for all managed items (protocol method).
+
+        Returns:
+            GitExcludeAddResult with added count and existing entries.
+        """
+        result = GitExcludeAddResult()
+
+        if not self.git_manager.is_git_repo():
+            return result
+
+        item_names = {i.name for i in self.symlink_items}
+        if item_names:
+            added, existing = self.git_manager.write_entries(item_names)
+            result.added = added
+            result.existing = existing
+
+        return result
+
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
+        """Check git exclude status for managed items (protocol method).
+
+        Args:
+            all_valid_entries: Set of ALL valid entry names from all managers.
+                             Used to identify extra/stale entries.
+
+        Returns:
+            GitExcludeCheckResult with present, missing, extra entries.
+        """
+        result = GitExcludeCheckResult()
+
+        if not self.git_manager.is_git_repo():
+            item_names = {i.name for i in self.symlink_items}
+            result.missing = item_names
+            return result
+
+        exclude_entries = self.git_manager.read_entries()
+        item_names = {i.name for i in self.symlink_items}
+
+        result.present = item_names & exclude_entries
+        result.missing = item_names - exclude_entries
+        # Use all_valid_entries to identify extra entries
+        result.extra = exclude_entries - all_valid_entries
 
         return result
 

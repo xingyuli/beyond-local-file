@@ -2,63 +2,90 @@
 
 Welcome to the beyond-local-file documentation!
 
-## User Documentation
+## Getting Started
 
-- **[Main README](../README.md)** - Getting started, installation, and usage examples
-- **[Command Reference](commands.md)** - Full command, argument, and option reference
-- **[Platform Support](platform-support.md)** - Cross-platform compatibility guide
+New to beyond-local-file? Start here:
+
+1. **[Main README](../README.md)** - Overview, installation, and quick start
+2. **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
+3. **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
+
+## User Guides
+
+### Core Documentation
+
+- **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
+- **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
+- **[Config Format Clarification](config-format-clarification.md)** - Understanding configuration vs architecture
+- **[Architecture Design](architecture-design.md)** - Internal architecture and design principles
+
+### Platform-Specific Guides
+
+- **[Platform Support](platform-support.md)** - Cross-platform compatibility overview
 - **[Windows Support](windows-support.md)** - Detailed Windows setup and troubleshooting
 
 ## Developer Documentation
 
 - **[Development Guide](development.md)** - Contributing, testing, and development setup
+- **[Architecture Quick Reference](architecture-quick-reference.md)** - Quick architecture overview
 
-## Quick Links
+## Quick Navigation
 
-### For Users
+### I want to...
 
-- [Installation](../README.md#installation)
-- [Quick Start](../README.md#quick-start)
-- [Command Reference](commands.md)
-- [Troubleshooting](docs/platform-support.md)
+- **Get started quickly** → [Quick Start](../README.md#quick-start)
+- **Understand configuration** → [Configuration Reference](configuration-reference.md)
+- **Learn all commands** → [CLI Reference](cli-reference.md)
+- **Use on Windows** → [Windows Support](windows-support.md)
+- **Understand the architecture** → [Architecture Design](architecture-design.md)
+- **Contribute code** → [Development Guide](development.md)
 
-### For Windows Users
+### Common Tasks
 
-- [Windows Requirements](windows-support.md#requirements)
-- [Enable Developer Mode](windows-support.md#windows-1011-build-1703-or-later---recommended)
-- [Windows Troubleshooting](windows-support.md#troubleshooting)
-
-### For Contributors
-
-- [Development Setup](development.md#development-installation)
-- [Running Tests](development.md#running-tests)
-- [Code Quality](development.md#code-quality)
-- [Release Process](development.md#release-process)
+| Task | Documentation |
+|------|---------------|
+| Install the tool | [Installation](../README.md#installation) |
+| Create first config | [Quick Start](../README.md#quick-start) |
+| Sync specific files only | [Configuration Reference](configuration-reference.md#format-3-selective-subpaths) |
+| Check symlink status | [CLI Reference](cli-reference.md#symlink-check--verify-status) |
+| Enable Windows support | [Windows Support](windows-support.md#requirements) |
+| Run tests | [Development Guide](development.md#running-tests) |
 
 ## Documentation Structure
 
 ```
 docs/
-├── README.md              # This file - documentation index
-├── development.md         # For contributors and developers
-├── platform-support.md    # Cross-platform compatibility
-└── windows-support.md     # Windows-specific guide
+├── README.md                          # This file - documentation hub
+│
+├── User Guides
+│   ├── configuration-reference.md     # Complete configuration documentation
+│   ├── cli-reference.md               # Complete CLI documentation
+│   ├── config-format-clarification.md # Config vs architecture concepts
+│   ├── platform-support.md            # Cross-platform guide
+│   └── windows-support.md             # Windows-specific guide
+│
+├── Architecture
+│   ├── architecture-design.md         # Detailed architecture
+│   └── architecture-quick-reference.md # Quick overview
+│
+└── Development
+    └── development.md                 # Contributing guide
 ```
 
 ## Need Help?
 
-- Check the [Troubleshooting](../README.md#troubleshooting) section
-- Search [existing issues](https://github.com/xingyuli/beyond-local-file/issues)
-- Open a [new issue](https://github.com/xingyuli/beyond-local-file/issues/new)
+1. **Check the docs** - Most questions are answered here
+2. **Search issues** - [Existing issues](https://github.com/xingyuli/beyond-local-file/issues)
+3. **Ask questions** - [Open a new issue](https://github.com/xingyuli/beyond-local-file/issues/new)
 
 ## Contributing to Documentation
 
-Documentation improvements are always welcome! When contributing:
+Documentation improvements are welcome! When contributing:
 
-1. Keep language clear and concise
-2. Include code examples where helpful
-3. Test all commands and examples
-4. Follow the existing documentation style
-5. Update this index if adding new documents
+- Keep language clear and concise
+- Include practical code examples
+- Test all commands before documenting
+- Update this index when adding new docs
+- Follow the existing style and structure
 
-See [development.md](development.md) for more details on contributing.
+See [Development Guide](development.md) for contribution guidelines.

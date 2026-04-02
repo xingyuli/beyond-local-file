@@ -178,17 +178,15 @@ def test_check_operation_reports_status(
     # The actual status checking is verified in test_symlink_manager.py
 
 
-def test_check_operation_uses_all_item_names(
+def test_check_operation_with_mixed_strategies(
     tmp_path: Path,
     temp_config_dir: Path,
 ) -> None:
-    """Test that CheckOperation passes all_item_names to SymlinkManager.check().
+    """Test that CheckOperation correctly handles projects with mixed strategies.
 
-    This tests the current hack where CheckOperation gets all project item names
-    (both symlink and copy) and passes them to SymlinkManager.check() to prevent
-    copy items from being reported as "extra" git exclude entries.
-
-    NOTE: This test documents the hack that will be removed during refactoring.
+    After refactoring, CheckOperation uses the protocol to collect all_valid_entries
+    from all managers, preventing items from one strategy being reported as "extra"
+    git exclude entries by another manager.
 
     Args:
         tmp_path: Pytest temporary directory fixture.
@@ -235,7 +233,6 @@ def test_check_operation_uses_all_item_names(
     # Operation should succeed
     assert success
 
-    # The key behavior: CheckOperation gets all_item_names and passes to SymlinkManager.check()
-    # This prevents copy_file.txt from being reported as "extra"
-    # We verify this indirectly by checking that the operation completes without errors
-    # The actual behavior is tested in test_symlink_manager.py::test_check_with_all_item_names_excludes_copy_items
+    # The refactored behavior: CheckOperation collects all_valid_entries from all managers
+    # and passes it to check_git_excludes(), preventing copy_file.txt from being
+    # reported as "extra" by SymlinkManager (and vice versa)

@@ -101,8 +101,8 @@ def test_built_wheel_contains_only_package():
             assert len(root_py_files) == 0, f"Wheel should not contain root-level .py files: {root_py_files}"
 
             # Check that managed project directories are not included
-            # (academy-broom, local-file, quvanai-server-old)
-            excluded_dirs = ["academy-broom/", "local-file/", "quvanai-server-old/"]
+            # (example-project-a, local-file, example-project-b)
+            excluded_dirs = ["example-project-a/", "local-file/", "example-project-b/"]
             for excluded_dir in excluded_dirs:
                 excluded_files = [f for f in file_list if f.startswith(excluded_dir)]
                 assert len(excluded_files) == 0, f"Wheel should not contain managed project directory: {excluded_dir}"

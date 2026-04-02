@@ -2,6 +2,20 @@
 
 A command-line tool for synchronizing and managing local development files across multiple projects.
 
+## Table of Contents
+
+- [What is this?](#what-is-this)
+- [Architecture: Tool and Data Separation](#architecture-tool-and-data-separation)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Available Commands](#available-commands)
+- [Documentation](#documentation)
+- [Important Notes](#important-notes)
+- [Platform Support](#platform-support)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## What is this?
 
 In real-world development, you often need to share local development files (such as development
@@ -87,37 +101,34 @@ project-b: /Users/username/workspace/project-b
 
 ```bash
 cd ~/my-dev-files
-beyond-local-file symlink sync
+beyond-local-file link sync
 ```
 
 3. Check status:
 
 ```bash
-beyond-local-file symlink check
+beyond-local-file link check
 ```
 
 ## Configuration
 
-The `config.yml` file maps project names to target paths. Three formats are supported:
+The `config.yml` file maps project names to target paths. Four formats are supported:
 
-### Simplified (string) — single target
-
-```yaml
-project-b: /Users/username/workspace/project-b
-```
-
-### Simplified (list) — multiple targets
+### 1. Simple string — single target
 
 ```yaml
-project-a:
-  - /Users/username/workspace/project-a
-  - /Users/username/workspace/project-a-fork
+project-a: /Users/username/workspace/project-a
 ```
 
-### Full format — selective subpaths
+### 2. Simple list — multiple targets
 
-When you only want to sync specific files or subdirectories instead of everything in
-the project directory, use the full dict format with `target` and `subpath`:
+```yaml
+project-b:
+  - /Users/username/workspace/project-b
+  - /Users/username/workspace/project-b-fork
+```
+
+### 3. Selective subpaths — sync specific items only
 
 ```yaml
 project-c:
@@ -127,34 +138,48 @@ project-c:
     - .vscode/settings.json
 ```
 
-This creates symlinks only for the listed subpaths (e.g. `project-c/.kiro/hooks`)
-rather than every top-level item in the project directory. Intermediate directories
-are created automatically in the target.
+Only the listed subpaths are synced. Intermediate directories are created automatically.
 
-The `target` key accepts a single path or a list, just like the simplified formats:
+### 4. Copy strategy — physical files for tool compatibility
+
+Some tools don't recognize symlinks. Use `copy: true` for files that must be physical:
 
 ```yaml
-project-c:
-  target:
-    - /Users/username/workspace/project-c
-    - /Users/username/workspace/project-c-fork
+project-d:
+  target: /Users/username/workspace/project-d
   subpath:
-    - .kiro/hooks
+    - .kiro/hooks                    # symlink (default)
+    - path: .kiro/steering/rules.md  # physical copy
+      copy: true
 ```
 
-Use `beyond-local-file symlink sync` and `beyond-local-file symlink check` as usual —
-the subpath feature works transparently with both commands.
+**Copy behavior:** Bidirectional sync with conflict detection. Changes in either location are detected and can be synced.
 
-For more configuration examples, see [docs/advanced-usage.md](docs/advanced-usage.md).
+**Multiple targets:** The `target` key accepts a string or list in all formats.
+
+For detailed examples, see [docs/configuration-reference.md](docs/configuration-reference.md).
 
 ## Available Commands
 
 | Command | Description |
 |---------|-------------|
-| `symlink sync [PROJECT]` | Create symlinks in target directories |
-| `symlink check [PROJECT]` | Check symlink and Git exclude status |
+| `link sync [PROJECT]` | Create symlinks in target directories |
+| `link check [PROJECT]` | Check symlink and Git exclude status |
 
-For full option details and usage examples, see [docs/commands.md](docs/commands.md).
+For full option details and usage examples, see [docs/cli-reference.md](docs/cli-reference.md).
+
+## Documentation
+
+Comprehensive documentation is available in the [docs/](docs/) directory:
+
+- **[Documentation Hub](docs/README.md)** - Complete documentation index
+- **[Configuration Reference](docs/configuration-reference.md)** - Complete configuration documentation
+- **[CLI Reference](docs/cli-reference.md)** - Complete command-line interface documentation
+- **[Config Format Guide](docs/config-format-clarification.md)** - Understanding configuration
+- **[Architecture Design](docs/architecture-design.md)** - Internal architecture
+- **[Platform Support](docs/platform-support.md)** - Cross-platform compatibility
+- **[Windows Support](docs/windows-support.md)** - Windows-specific guide
+- **[Development Guide](docs/development.md)** - Contributing and development
 
 ## Important Notes
 
@@ -166,11 +191,11 @@ For full option details and usage examples, see [docs/commands.md](docs/commands
 ## Platform Support
 
 Works on macOS, Linux, and Windows. See [docs/platform-support.md](docs/platform-support.md) for details.
-Windows requires Developer Mode (Windows 10/11) or Administrator privileges.
+Windows requires Developer Mode (Windows 10/11) or Administrator privileges. See [docs/windows-support.md](docs/windows-support.md) for setup instructions.
 
 ## Contributing
 
-See [docs/development.md](docs/development.md) for development setup and guidelines.
+Contributions are welcome! See [docs/development.md](docs/development.md) for development setup and guidelines.
 
 ## License
 

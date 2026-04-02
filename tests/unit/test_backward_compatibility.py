@@ -130,7 +130,7 @@ def test_same_symlink_behavior():
         project = Project.from_directory("test-project", project_dir)
 
         # Create SymlinkManager and sync
-        manager = SymlinkManager(project, target_dir)
+        manager = SymlinkManager(project.items, target_dir)
         result = manager.sync()
 
         # Verify symlink creation behavior
