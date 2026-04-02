@@ -1,10 +1,13 @@
 """Integration tests for enhanced overwrite prompt."""
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from beyond_local_file.models import Project, ProjectItem
+from beyond_local_file.options import LinkStrategy
+from beyond_local_file.project_processor import CheckOperation, SyncOperation
 from beyond_local_file.symlink_manager import Action, SymlinkManager
 
 
@@ -79,3 +82,150 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     assert "file1.txt" in result.created
     assert (temp_target_dir / "file1.txt").is_symlink()
     assert (temp_target_dir / "file1.txt").resolve() == (temp_project_dir / "file1.txt").resolve()
+
+
+# Test Suite: Multi-Strategy Integration (Current Architecture)
+
+
+def test_sync_with_mixed_strategies_current(tmp_path: Path) -> None:
+    """Test sync operation with both symlink and copy items using current architecture.
+
+    This test documents the current behavior before refactoring where both
+    SymlinkManager and CopyManager are used separately.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture.
+    """
+    # Create project directory with files
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "symlink1.txt").write_text("symlink content 1")
+    (project_dir / "symlink2.txt").write_text("symlink content 2")
+    (project_dir / "copy1.txt").write_text("copy content 1")
+    (project_dir / "copy2.txt").write_text("copy content 2")
+
+    # Create target directory
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+
+    # Create config directory
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    # Create project with mixed strategies
+    items = [
+        ProjectItem(
+            name="symlink1.txt",
+            is_directory=False,
+            source_path=project_dir / "symlink1.txt",
+            strategy=LinkStrategy.SYMLINK,
+        ),
+        ProjectItem(
+            name="symlink2.txt",
+            is_directory=False,
+            source_path=project_dir / "symlink2.txt",
+            strategy=LinkStrategy.SYMLINK,
+        ),
+        ProjectItem(
+            name="copy1.txt",
+            is_directory=False,
+            source_path=project_dir / "copy1.txt",
+            strategy=LinkStrategy.COPY,
+        ),
+        ProjectItem(
+            name="copy2.txt",
+            is_directory=False,
+            source_path=project_dir / "copy2.txt",
+            strategy=LinkStrategy.COPY,
+        ),
+    ]
+    project = Project(name="mixed-project", directory=project_dir, items=items)
+
+    # Run sync operation (uses current architecture)
+    operation = SyncOperation(config_dir)
+    success = operation.execute(project, target_dir)
+
+    # Verify operation succeeded
+    assert success
+
+    # Verify symlinks were created
+    assert (target_dir / "symlink1.txt").is_symlink()
+    assert (target_dir / "symlink2.txt").is_symlink()
+    assert (target_dir / "symlink1.txt").resolve() == (project_dir / "symlink1.txt").resolve()
+    assert (target_dir / "symlink2.txt").resolve() == (project_dir / "symlink2.txt").resolve()
+
+    # Verify copies were created
+    assert (target_dir / "copy1.txt").exists()
+    assert (target_dir / "copy2.txt").exists()
+    assert not (target_dir / "copy1.txt").is_symlink()
+    assert not (target_dir / "copy2.txt").is_symlink()
+    assert (target_dir / "copy1.txt").read_text() == "copy content 1"
+    assert (target_dir / "copy2.txt").read_text() == "copy content 2"
+
+
+def test_check_git_exclude_with_mixed_strategies_current(tmp_path: Path) -> None:
+    """Test git exclude entries with mixed strategies using current architecture.
+
+    This test documents the current behavior where all_item_names is passed
+    to SymlinkManager.check() to prevent copy items from being reported as
+    "extra" git exclude entries.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture.
+    """
+    # Create a git repo in target directory
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    git_dir = target_dir / ".git"
+    git_dir.mkdir()
+    info_dir = git_dir / "info"
+    info_dir.mkdir()
+
+    # Create project directory with files
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "symlink_file.txt").write_text("symlink content")
+    (project_dir / "copy_file.txt").write_text("copy content")
+
+    # Create config directory
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    # Create project with mixed strategies
+    items = [
+        ProjectItem(
+            name="symlink_file.txt",
+            is_directory=False,
+            source_path=project_dir / "symlink_file.txt",
+            strategy=LinkStrategy.SYMLINK,
+        ),
+        ProjectItem(
+            name="copy_file.txt",
+            is_directory=False,
+            source_path=project_dir / "copy_file.txt",
+            strategy=LinkStrategy.COPY,
+        ),
+    ]
+    project = Project(name="mixed-project", directory=project_dir, items=items)
+
+    # Sync first to create items and git exclude entries
+    sync_op = SyncOperation(config_dir)
+    sync_op.execute(project, target_dir)
+
+    # Verify git exclude file has entries for both strategies
+    exclude_file = info_dir / "exclude"
+    assert exclude_file.exists()
+    exclude_content = exclude_file.read_text()
+    assert "symlink_file.txt" in exclude_content
+    assert "copy_file.txt" in exclude_content
+
+    # Run check operation (uses current architecture with all_item_names hack)
+    check_op = CheckOperation(config_dir)
+    success = check_op.execute(project, target_dir)
+
+    # Verify operation succeeded
+    assert success
+
+    # The key behavior: CheckOperation passes all_item_names to SymlinkManager.check()
+    # so copy_file.txt is not reported as "extra" even though SymlinkManager
+    # doesn't manage it. This is the hack that will be removed during refactoring.
