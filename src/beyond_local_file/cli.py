@@ -86,9 +86,17 @@ def ask_user_for_conflict(managed_file: Path, target_file: Path) -> str:
 
 
 @click.group()
-def cli():
+@click.option(
+    "-c",
+    "--config",
+    default="config.yml",
+    help="Path to config file",
+)
+@click.pass_context
+def cli(ctx, config):
     """Manage links between project directories and target locations."""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj["config"] = config
 
 
 @cli.group()
@@ -106,14 +114,15 @@ def symlink():
 
 @link.command()
 @click.argument("project_name", required=False)
-@click.option("-c", "--config", default="config.yml", help="Path to config file")
-def sync(project_name, config):
+@click.pass_context
+def sync(ctx, project_name):
     """Synchronize links from project directory to target locations.
 
     Creates symlinks (or physical copies for items marked with copy: true)
     for all items in the project directory to each target location specified
     in the config.
     """
+    config = ctx.obj["config"]
     result = load_config(config, project_name)
     if result is None:
         return
@@ -126,7 +135,6 @@ def sync(project_name, config):
 
 @link.command()
 @click.argument("project_name", required=False)
-@click.option("-c", "--config", default="config.yml", help="Path to config file")
 @click.option("--extra-exclude", is_flag=True, help="Show extra entries in git exclude file")
 @click.option(
     "--format",
@@ -136,12 +144,14 @@ def sync(project_name, config):
     show_default=True,
     help="Output format: table (compact) or verbose (detailed per-project).",
 )
-def check(project_name, config, extra_exclude, output_format):
+@click.pass_context
+def check(ctx, project_name, extra_exclude, output_format):
     """Check link status and Git exclude configuration.
 
     Displays the status of symlinks, file copies, and Git exclude entries
     for each project and target location.
     """
+    config = ctx.obj["config"]
     result = load_config(config, project_name)
     if result is None:
         return
