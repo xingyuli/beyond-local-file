@@ -166,6 +166,8 @@ project-d:
 
 **Copy behavior:** Bidirectional sync with conflict detection. Changes in either location are detected and can be synced.
 
+**Limitation:** Copy mode only supports single files, not directories. This is intentional — symlinks remain the primary workflow.
+
 **Multiple targets:** The `target` key accepts a string or list in all formats.
 
 For detailed examples, see [docs/configuration-reference.md](docs/configuration-reference.md).

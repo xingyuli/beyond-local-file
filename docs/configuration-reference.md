@@ -277,6 +277,27 @@ Use `copy: true` when:
 
 **Example:** Kiro IDE requires steering files to be physical. Symlinked steering files are silently ignored.
 
+### Scope Limitations
+
+**Copy mode only supports single files — no directory-level copy.**
+
+This is an intentional design constraint:
+- Copy is a boundary-case escape hatch, not a general-purpose file distribution mechanism
+- Keeping symlinks as the primary workflow ensures centralized management
+- Directory-level copies would encourage large-scale duplication, defeating the tool's purpose
+
+```yaml
+# ✅ Correct: single file with copy
+subpath:
+  - path: .kiro/steering/rules.md
+    copy: true
+
+# ❌ Not supported: directory with copy
+subpath:
+  - path: .kiro/steering    # directories cannot use copy: true
+    copy: true
+```
+
 ### Sync Behavior
 
 **Initial sync:**
