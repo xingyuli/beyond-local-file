@@ -81,10 +81,10 @@ The usage is identical to macOS/Linux:
 cd C:\Users\YourName\my-dev-files
 
 # Sync all projects
-beyond-local-file link sync
+blf link sync
 
 # Check status
-beyond-local-file link check
+blf link check
 ```
 
 ## Path Considerations
@@ -138,7 +138,7 @@ The target directory doesn't exist.
 mkdir C:\Users\YourName\workspace\project-a
 
 # Then run sync
-beyond-local-file link sync
+blf link sync
 ```
 
 ### Symlinks Not Working in Git
@@ -192,7 +192,7 @@ mkdir target
 
 # 5. Run sync
 cd my-files
-beyond-local-file link sync
+blf link sync
 
 # 6. Verify symlink
 dir ..\target
@@ -213,7 +213,7 @@ If you're using WSL, the tool works exactly like on Linux:
 ```bash
 # In WSL, no special permissions needed
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
-beyond-local-file link sync
+blf link sync
 ```
 
 **Note:** Symlinks created in WSL may not be accessible from Windows Explorer, and vice versa.

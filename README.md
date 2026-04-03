@@ -85,6 +85,17 @@ pipx install git+https://github.com/xingyuli/beyond-local-file.git
 
 For development setup, see [docs/development.md](docs/development.md).
 
+## Recommended: Create an Alias
+
+The command name `beyond-local-file` is long. For convenience, create an alias:
+
+```bash
+# Add to your ~/.bashrc, ~/.zshrc, or equivalent
+alias blf='beyond-local-file'
+```
+
+This documentation uses `blf` in all examples.
+
 ## Quick Start
 
 1. Create a `config.yml` in your managed projects directory:
@@ -101,13 +112,13 @@ project-b: /Users/username/workspace/project-b
 
 ```bash
 cd ~/my-dev-files
-beyond-local-file link sync
+blf link sync
 ```
 
 3. Check status:
 
 ```bash
-beyond-local-file link check
+blf link check
 ```
 
 ## Configuration
@@ -163,8 +174,8 @@ For detailed examples, see [docs/configuration-reference.md](docs/configuration-
 
 | Command | Description |
 |---------|-------------|
-| `link sync [PROJECT]` | Create symlinks in target directories |
-| `link check [PROJECT]` | Check symlink and Git exclude status |
+| `blf link sync [PROJECT]` | Create symlinks or copies in target directories |
+| `blf link check [PROJECT]` | Check link status and Git excludes |
 
 For full option details and usage examples, see [docs/cli-reference.md](docs/cli-reference.md).
 

@@ -35,7 +35,7 @@ uv run beyond-local-file --help
 
 # Run from your managed projects directory
 cd /path/to/your/managed-projects
-uv run --directory /path/to/beyond-local-file beyond-local-file link check
+uv run --directory /path/to/beyond-local-file blf link check
 ```
 
 ### Method 2: Using `uvx` with local path
@@ -48,7 +48,7 @@ uvx --from /path/to/beyond-local-file beyond-local-file --help
 
 # Run from managed projects directory
 cd /path/to/your/managed-projects
-uvx --from /path/to/beyond-local-file beyond-local-file link sync
+uvx --from /path/to/beyond-local-file blf link sync
 ```
 
 ### Method 3: Traditional virtual environment
@@ -70,7 +70,7 @@ beyond-local-file --help
 
 # Run from managed projects directory
 cd /path/to/your/managed-projects
-beyond-local-file link check
+blf link check
 ```
 
 **Note**: `uvx` creates its own isolated environments and won't see packages installed with `uv pip install -e .`. Use `uv run` or activate the virtual environment if you need the command available directly.

@@ -1,13 +1,13 @@
 # CLI Reference
 
-Complete command-line interface reference for `beyond-local-file`.
+Complete command-line interface reference for `beyond-local-file` (aliased as `blf`).
 
 ---
 
 ## Command Structure
 
 ```bash
-beyond-local-file [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS] [ARGUMENTS]
+blf [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS] [ARGUMENTS]
 ```
 
 ---
@@ -21,8 +21,8 @@ beyond-local-file [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS] [ARGUMENTS]
 
 **Examples:**
 ```bash
-beyond-local-file --help
-beyond-local-file --version
+blf --help
+blf --version
 ```
 
 ---
@@ -34,7 +34,7 @@ beyond-local-file --version
 Manage symlinks and physical copies between managed projects and target locations.
 
 ```bash
-beyond-local-file link SUBCOMMAND [OPTIONS] [ARGUMENTS]
+blf link SUBCOMMAND [OPTIONS] [ARGUMENTS]
 ```
 
 **Subcommands:**
@@ -50,7 +50,7 @@ Create symlinks (or physical copies for items marked with `copy: true`) from man
 ### Syntax
 
 ```bash
-beyond-local-file link sync [PROJECT_NAME] [OPTIONS]
+blf link sync [PROJECT_NAME] [OPTIONS]
 ```
 
 ### Arguments
@@ -90,16 +90,16 @@ beyond-local-file link sync [PROJECT_NAME] [OPTIONS]
 
 ```bash
 # Sync all projects
-beyond-local-file link sync
+blf link sync
 
 # Sync specific project
-beyond-local-file link sync my-project
+blf link sync my-project
 
 # Use custom config file
-beyond-local-file link sync -c custom.yml
+blf link sync -c custom.yml
 
 # Sync specific project with custom config
-beyond-local-file link sync my-project -c custom.yml
+blf link sync my-project -c custom.yml
 ```
 
 ### Output
@@ -125,7 +125,7 @@ Check the status of symlinks, copies, and Git exclude entries for each project a
 ### Syntax
 
 ```bash
-beyond-local-file link check [PROJECT_NAME] [OPTIONS]
+blf link check [PROJECT_NAME] [OPTIONS]
 ```
 
 ### Arguments
@@ -149,7 +149,7 @@ beyond-local-file link check [PROJECT_NAME] [OPTIONS]
 Compact Rich table showing status for all projects and targets.
 
 ```bash
-beyond-local-file link check
+blf link check
 ```
 
 **Output:**
@@ -171,7 +171,7 @@ beyond-local-file link check
 #### Table Format with Extra Excludes
 
 ```bash
-beyond-local-file link check --extra-exclude
+blf link check --extra-exclude
 ```
 
 **Output:**
@@ -192,7 +192,7 @@ Extra exclude entries:
 Detailed per-project output printed as each result is processed.
 
 ```bash
-beyond-local-file link check --format verbose
+blf link check --format verbose
 ```
 
 **Output:**
@@ -241,25 +241,25 @@ For items with `copy: true`:
 
 ```bash
 # Check all projects (table format)
-beyond-local-file link check
+blf link check
 
 # Check specific project
-beyond-local-file link check my-project
+blf link check my-project
 
 # Show extra exclude entries
-beyond-local-file link check --extra-exclude
+blf link check --extra-exclude
 
 # Verbose output
-beyond-local-file link check --format verbose
+blf link check --format verbose
 
 # Check specific project with verbose output
-beyond-local-file link check my-project --format verbose
+blf link check my-project --format verbose
 
 # Use custom config file
-beyond-local-file link check -c custom.yml
+blf link check -c custom.yml
 
 # All options combined
-beyond-local-file link check my-project -c custom.yml --extra-exclude --format verbose
+blf link check my-project -c custom.yml --extra-exclude --format verbose
 ```
 
 ---
@@ -294,36 +294,36 @@ my-project: /Users/username/workspace/my-project
 EOF
 
 # 2. Sync symlinks
-beyond-local-file link sync
+blf link sync
 
 # 3. Verify
-beyond-local-file link check
+blf link check
 ```
 
 ### Daily Usage
 
 ```bash
 # Sync all projects
-beyond-local-file link sync
+blf link sync
 
 # Check status
-beyond-local-file link check
+blf link check
 
 # Sync specific project
-beyond-local-file link sync my-project
+blf link sync my-project
 ```
 
 ### Troubleshooting
 
 ```bash
 # Check status with verbose output
-beyond-local-file link check --format verbose
+blf link check --format verbose
 
 # Check for extra exclude entries
-beyond-local-file link check --extra-exclude
+blf link check --extra-exclude
 
 # Re-sync specific project
-beyond-local-file link sync my-project
+blf link sync my-project
 ```
 
 ---
@@ -336,7 +336,7 @@ Commands run from your managed files directory (where `config.yml` is located).
 
 ```bash
 cd ~/my-dev-files
-beyond-local-file link sync
+blf link sync
 ```
 
 ### Config File Location
@@ -345,7 +345,7 @@ Default: `config.yml` in current directory
 
 Override with `-c`:
 ```bash
-beyond-local-file link sync -c /path/to/custom.yml
+blf link sync -c /path/to/custom.yml
 ```
 
 ### Git Integration

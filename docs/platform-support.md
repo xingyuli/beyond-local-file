@@ -34,7 +34,7 @@ uv tool install git+https://github.com/xingyuli/beyond-local-file.git
 
 # Use immediately
 cd ~/my-dev-files
-beyond-local-file link sync
+blf link sync
 ```
 
 ### Windows 10/11
@@ -48,7 +48,7 @@ uv tool install git+https://github.com/xingyuli/beyond-local-file.git
 
 # 3. Use
 cd C:\Users\YourName\my-dev-files
-beyond-local-file link sync
+blf link sync
 ```
 
 ### WSL (Windows Subsystem for Linux)
@@ -56,7 +56,7 @@ beyond-local-file link sync
 ```bash
 # Works exactly like Linux
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
-beyond-local-file link sync
+blf link sync
 ```
 
 ## Platform-Specific Details
