@@ -14,15 +14,16 @@ blf [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS] [ARGUMENTS]
 
 ## Global Options
 
-| Option | Description |
-|--------|-------------|
-| `--help` | Show help message and exit |
-| `--version` | Show version and exit |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-c, --config PATH` | Path | `config.yml` | Path to configuration file |
+| `--help` | Flag | - | Show help message and exit |
 
 **Examples:**
 ```bash
 blf --help
-blf --version
+blf -c custom.yml link sync
+blf --config /path/to/config.yml link check
 ```
 
 ---
@@ -59,12 +60,6 @@ blf link sync [PROJECT_NAME] [OPTIONS]
 |----------|----------|-------------|
 | `PROJECT_NAME` | No | Sync only this project; omit to sync all projects |
 
-### Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `-c, --config PATH` | Path | `config.yml` | Path to configuration file |
-
 ### Behavior
 
 **When target path doesn't exist:**
@@ -95,11 +90,11 @@ blf link sync
 # Sync specific project
 blf link sync my-project
 
-# Use custom config file
-blf link sync -c custom.yml
+# Use custom config file (global option)
+blf -c custom.yml link sync
 
 # Sync specific project with custom config
-blf link sync my-project -c custom.yml
+blf --config custom.yml link sync my-project
 ```
 
 ### Output
@@ -138,7 +133,6 @@ blf link check [PROJECT_NAME] [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `-c, --config PATH` | Path | `config.yml` | Path to configuration file |
 | `--extra-exclude` | Flag | Off | Show extra entries in `.git/info/exclude` |
 | `--format FORMAT` | Choice | `table` | Output format: `table` or `verbose` |
 
@@ -255,11 +249,11 @@ blf link check --format verbose
 # Check specific project with verbose output
 blf link check my-project --format verbose
 
-# Use custom config file
-blf link check -c custom.yml
+# Use custom config file (global option)
+blf -c custom.yml link check
 
 # All options combined
-blf link check my-project -c custom.yml --extra-exclude --format verbose
+blf --config custom.yml link check my-project --extra-exclude --format verbose
 ```
 
 ---
@@ -343,14 +337,15 @@ blf link sync
 
 Default: `config.yml` in current directory
 
-Override with `-c`:
+Override with `-c` or `--config` (global option):
 ```bash
-blf link sync -c /path/to/custom.yml
+blf -c /path/to/custom.yml link sync
+blf --config /path/to/custom.yml link check
 ```
 
 ### Git Integration
 
-For Git repositories, symlink names are automatically added to `.git/info/exclude` (not `.gitignore`).
+For Git repositories, all linked items (both symlinks and copies) are automatically added to `.git/info/exclude` (not `.gitignore`).
 
 **Why `.git/info/exclude`?**
 - Local to your repository
