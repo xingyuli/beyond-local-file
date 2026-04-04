@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -16,7 +17,11 @@ from .formatters import (
     CopyResultFormatter,
     SyncResultFormatter,
 )
+from .model.config import ConfigProject
+from .model.processing import ProcessingUnit, ProjectItem
+from .model.translator import translate_config_to_processing
 from .models import Project, ProjectConfiguration
+from .models import ProjectItem as OldProjectItem
 from .options import LinkStrategy, OutputFormat
 from .symlink_manager import Action, CheckResult, SymlinkManager
 
@@ -35,6 +40,9 @@ def get_absolute_path(path: str) -> str:
 
 def load_config(config: str, project_name: str | None = None) -> tuple[dict[str, ProjectConfiguration], Path] | None:
     """Load configuration and return project data with config directory.
+
+    DEPRECATED: Use load_config_projects() for new code. This function will be
+    removed after migration to the new model structure is complete.
 
     Args:
         config: Path to the YAML configuration file.
@@ -55,6 +63,35 @@ def load_config(config: str, project_name: str | None = None) -> tuple[dict[str,
         cfg = Config(config_path)
         cfg.load()
         projects = cfg.get_projects(project_name)
+        config_dir = Path(config_path).parent
+        return projects, config_dir
+    except Exception as e:
+        click.echo(str(e))
+        return None
+
+
+def load_config_projects(config: str, project_name: str | None = None) -> tuple[dict[str, ConfigProject], Path] | None:
+    """Load configuration using new model structure.
+
+    Args:
+        config: Path to the YAML configuration file.
+        project_name: Optional project name to filter. If provided, only
+                    returns configuration for that project.
+
+    Returns:
+        Tuple of (ConfigProject dict, config directory path).
+        Returns None if loading failed.
+    """
+    config_path = get_absolute_path(config)
+
+    if not Path(config_path).exists():
+        click.echo(f"Config file not found: {config_path}")
+        return None
+
+    try:
+        cfg = Config(config_path)
+        cfg.load()
+        projects = cfg.get_config_projects(project_name)
         config_dir = Path(config_path).parent
         return projects, config_dir
     except Exception as e:
@@ -85,6 +122,9 @@ class CmdOperation(ABC):
     def execute(self, project: Project, target_path: Path) -> bool:
         """Execute the operation for a single project/target pair.
 
+        DEPRECATED: Use execute_unit() for new code. This method will be
+        removed after migration to the new model structure is complete.
+
         Args:
             project: The project to process.
             target_path: The target directory to operate on.
@@ -92,6 +132,40 @@ class CmdOperation(ABC):
         Returns:
             True to continue processing, False to abort.
         """
+
+    def execute_unit(self, unit: ProcessingUnit) -> bool:
+        """Execute the operation for a single processing unit.
+
+        Default implementation converts ProcessingUnit to Project and calls
+        execute() for backward compatibility. Subclasses should override this
+        method to work directly with ProcessingUnit.
+
+        Args:
+            unit: The processing unit to execute.
+
+        Returns:
+            True to continue processing, False to abort.
+        """
+        # Convert ProcessingUnit to Project for backward compatibility
+        if unit.items is None:
+            # Sync everything: scan directory
+            project = Project.from_directory(unit.display_name, unit.managed_project_path)
+        else:
+            # Sync specified items: convert ProjectItem list
+            old_items = []
+            for item in unit.items:
+                # Convert new ProjectItem to old ProjectItem
+                old_items.append(
+                    OldProjectItem(
+                        name=item.name,
+                        is_directory=item.path.is_dir(),
+                        source_path=item.path,
+                        strategy=item.strategy,
+                    )
+                )
+            project = Project(name=unit.display_name, directory=unit.managed_project_path, items=old_items)
+
+        return self.execute(project, unit.target_project_path)
 
 
 class ProjectProcessor:
@@ -113,6 +187,9 @@ class ProjectProcessor:
 
     def process_all(self, operation: CmdOperation, skip_invalid: bool = True) -> bool:
         """Process all projects with the given operation.
+
+        DEPRECATED: Use process_all_units() for new code. This method will be
+        removed after migration to the new model structure is complete.
 
         Args:
             operation: The operation to execute for each (project, target) pair.
@@ -152,6 +229,73 @@ class ProjectProcessor:
 
                 if not operation.execute(project, target_path):
                     return False
+
+        return True
+
+    @staticmethod
+    def process_all_units(
+        config_projects: dict[str, ConfigProject],
+        operation: CmdOperation,
+        skip_invalid: bool = True,
+    ) -> bool:
+        """Process all projects using new model structure with translation layer.
+
+        Args:
+            config_projects: Dictionary of ConfigProject instances.
+            operation: The operation to execute for each processing unit.
+            skip_invalid: Whether to skip invalid projects or stop processing.
+
+        Returns:
+            True if all operations completed, False if aborted.
+        """
+        # Translate config to processing units
+        processing_units = translate_config_to_processing(config_projects)
+
+        # Execute each processing unit
+        for unit in processing_units:
+            # Validate managed project path
+            if not unit.managed_project_path.exists():
+                click.echo(f"Project directory does not exist: {unit.managed_project_path}")
+                if not skip_invalid:
+                    return False
+                continue
+
+            # Load items if not already loaded (items=None means sync everything)
+            current_unit = unit
+            if unit.items is None:
+                # Scan directory to get all items
+                items = []
+                if unit.managed_project_path.exists() and unit.managed_project_path.is_dir():
+                    for item_path in unit.managed_project_path.iterdir():
+                        items.append(
+                            ProjectItem(
+                                name=item_path.name,
+                                path=item_path,
+                                strategy=LinkStrategy.SYMLINK,
+                            )
+                        )
+                # Update unit with loaded items (create new instance since dataclass is immutable by default)
+                current_unit = replace(unit, items=items)
+
+            # Validate items exist
+            if not current_unit.items:
+                click.echo(f"No items found in {current_unit.display_name}")
+                if not skip_invalid:
+                    return False
+                continue
+
+            # Validate target path
+            if not current_unit.target_project_path.exists():
+                click.echo(f"Target directory does not exist: {current_unit.target_project_path}")
+                continue
+
+            # Print progress
+            if operation.verbose_progress:
+                click.echo(f"\nProcessing {current_unit.display_name} -> {current_unit.target_project_path}")
+
+            # Execute operation
+            if not operation.execute_unit(current_unit):
+                return False
 
         return True
 
