@@ -11,22 +11,31 @@ This file defines the storage and organization conventions for the `local-file/`
 ```
 local-file/
 ├── agentic/              # Kiro-generated content
-│   ├── analysis/        # Technical analysis reports
-│   ├── drafts/          # Informal plans, drafts, proposals
-│   ├── specs/           # Formal specification files
-│   └── summaries/       # Task completion summaries
+│   ├── analysis/        # Technical analysis reports (timestamped, flat)
+│   ├── drafts/          # Informal plans, drafts, proposals (timestamped, flat)
+│   ├── specs/           # Formal specification files (no timestamps, flat)
+│   └── summaries/       # Task completion summaries (timestamped, flat)
 └── tasks/               # Task tracking system
     ├── index.md         # Main hub linking to all task groups
     ├── manual/          # User-created tasks
     ├── auto-review/     # Auto-generated review findings
     └── releases/        # Archived completed tasks by release
+        └── v0.x.x/      # Example release
+            ├── CHANGELOG.md
+            ├── tasks/   # Archived tasks
+            │   ├── manual/
+            │   └── auto-review/
+            └── worklog/ # Archived agentic files
+                ├── analysis/
+                ├── drafts/
+                └── summaries/
 ```
 
 ---
 
 ## Agentic Directory (`local-file/agentic/`)
 
-Kiro-generated content organized by purpose.
+Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`, and `summaries/` use `YYYYMMDD-HH-` prefix for chronological ordering.
 
 ### analysis/
 
@@ -40,7 +49,9 @@ Kiro-generated content organized by purpose.
 - Dependency analysis
 - Architecture exploration
 
-**Naming:** Descriptive names that clearly indicate the analysis topic (e.g., `codebase-structure-for-copy-feature.md`)
+**Naming:** `YYYYMMDD-HH-descriptive-title.md` (e.g., `20260326-18-codebase-structure-for-copy-feature.md`)
+
+**Structure:** Flat directory - no subdirectories
 
 ### drafts/
 
@@ -58,7 +69,9 @@ Kiro-generated content organized by purpose.
 - Implementation approach sketches
 - Architecture alternatives
 
-**Naming:** Descriptive names indicating the draft content (e.g., `single-file-copy-proposal.md`)
+**Naming:** `YYYYMMDD-HH-descriptive-title.md` (e.g., `20260326-18-single-file-copy-proposal.md`)
+
+**Structure:** Flat directory - no subdirectories
 
 ### specs/
 
@@ -76,7 +89,9 @@ Kiro-generated content organized by purpose.
 - `config-format-spec.md`
 - `api-specification.md`
 
-**Naming:** Use `-spec.md` suffix for specification files
+**Naming:** Use `-spec.md` suffix for specification files (no timestamp prefix - specs are timeless)
+
+**Structure:** Flat directory - no subdirectories
 
 ### summaries/
 
@@ -84,14 +99,14 @@ Kiro-generated content organized by purpose.
 
 **When to write:** When a task has been completed and you want to summarize the changes made.
 
-**Format:** Prefix with `YYYYMMDD-HH` (date and hour) so files can be read in chronological order.
-
 **Examples:**
 - `20260403-14-task-system-improvements.md`
 - `20260327-09-copy-feature-implementation.md`
 - `20260320-16-subpath-support-added.md`
 
 **Naming:** `YYYYMMDD-HH-descriptive-title.md`
+
+**Structure:** Flat directory - no subdirectories
 
 ---
 
@@ -117,7 +132,13 @@ local-file/tasks/
     ├── README.md        # Documentation
     └── v0.x.x/          # Example: tasks completed in v0.2.0
         ├── CHANGELOG.md # Formal changelog for this release
-        └── *.md         # Archived completed task files
+        ├── tasks/       # Archived completed tasks
+        │   ├── manual/  # Archived manual tasks
+        │   └── auto-review/ # Archived auto-review tasks
+        └── worklog/     # Archived agentic worklog files
+            ├── analysis/   # Archived analysis files
+            ├── drafts/     # Archived draft files
+            └── summaries/  # Archived summary files
 ```
 
 ### Task Groups
@@ -162,7 +183,8 @@ For complex findings:
 When ready to release, trigger the "Prepare Release" hook which will:
 - Gather all completed manual tasks since last git tag
 - Generate formal CHANGELOG.md entries
-- Archive completed tasks to `local-file/tasks/releases/[version]/`
+- Archive completed tasks to `local-file/tasks/releases/[version]/tasks/manual/` and `tasks/auto-review/`
+- Archive agentic worklog files to `local-file/tasks/releases/[version]/worklog/analysis/`, `worklog/drafts/`, and `worklog/summaries/`
 - Update manual task index to remove completed tasks
 - Create a clean slate for the next development cycle
 - Note: Simple advices are NOT archived — they remain as a running log
