@@ -4,131 +4,338 @@ Complete reference for `config.yml` configuration file.
 
 ---
 
-## Format Specifications
+## Configuration Structure
 
-### Format 1: Simple String
+The configuration file maps managed project names to their target locations. Each project can have one or more mappings to target locations.
 
-Single target path as a string.
+### Basic Structure
 
 ```yaml
-project-name: /absolute/path/to/target
+project-name: <mapping>
 ```
 
-**Use when:** One project, one target, sync all files.
+Where `<mapping>` can be:
+- **Single mapping:** One mapping between managed project and target
+- **List of mappings:** Multiple mappings for the same managed project
 
-**Example:**
+### Mapping Types
+
+Each mapping can be defined in two forms:
+
+#### 1. Simple String Mapping
+
+Syncs everything from the managed project to the target.
+
 ```yaml
-my-tool: /Users/username/projects/my-tool
+/absolute/path/to/target
+```
+
+#### 2. Dict Mapping
+
+Supports selective subpath sync and copy strategy.
+
+```yaml
+target: /absolute/path/to/target  # can be string or list
+subpath:                          # optional: sync only these items
+  - relative/path/to/item1
+  - path: relative/path/to/item2  # optional: use copy instead of symlink
+    copy: true
 ```
 
 ---
 
-### Format 2: Simple List
+## Formal Grammar
 
-Multiple target paths as a list.
+This section provides a formal specification of the configuration format using YAML-aware grammar notation.
+
+### Grammar Definition
+
+```
+<config>          ::= <project-entry>+
+
+<project-entry>   ::= <project-name>: <mapping>
+
+<mapping>         ::= <single-mapping> | <mapping-list>
+
+<single-mapping>  ::= <string-mapping> | <dict-mapping>
+
+<mapping-list>    ::= - <single-mapping>
+                      (- <single-mapping>)*
+
+<string-mapping>  ::= <absolute-path>
+
+<dict-mapping>    ::= target: <target>
+                      [subpath: <subpath-list>]
+
+<target>          ::= <absolute-path> | <path-list>
+
+<path-list>       ::= - <absolute-path>
+                      (- <absolute-path>)*
+
+<subpath-list>    ::= - <subpath-item>
+                      (- <subpath-item>)*
+
+<subpath-item>    ::= <relative-path> | <copy-item>
+
+<copy-item>       ::= path: <relative-path>
+                      copy: true
+
+<project-name>    ::= <identifier>
+<absolute-path>   ::= <string>
+<relative-path>   ::= <string>
+<identifier>      ::= <string>
+```
+
+**Notation:**
+- `<angle-brackets>` denote non-terminals (grammar rules)
+- `::=` means "is defined as"
+- `|` means "or" (alternative)
+- `[]` means optional (in grammar, not YAML syntax)
+- `()*` means zero or more repetitions
+- `+` means one or more repetitions
+- `:` and `-` are actual YAML syntax
+
+### Grammar Examples
+
+Each production rule demonstrated with concrete YAML examples:
+
+#### `<string-mapping>` - Simple string mapping
 
 ```yaml
-project-name:
+my-project: /absolute/path/to/target
+```
+
+#### `<dict-mapping>` - Dict mapping with target only
+
+```yaml
+my-project:
+  target: /absolute/path/to/target
+```
+
+#### `<dict-mapping>` - Dict mapping with target and subpath
+
+```yaml
+my-project:
+  target: /absolute/path/to/target
+  subpath:
+    - .kiro/hooks
+    - .vscode
+```
+
+#### `<target>` as `<path-list>` - Multiple targets in dict
+
+```yaml
+my-project:
+  target:
+    - /absolute/path/to/target1
+    - /absolute/path/to/target2
+  subpath:
+    - .kiro/hooks
+```
+
+#### `<subpath-item>` as `<copy-item>` - Copy strategy
+
+```yaml
+my-project:
+  target: /absolute/path/to/target
+  subpath:
+    - .kiro/hooks
+    - path: .kiro/steering/rules.md
+      copy: true
+```
+
+#### `<mapping-list>` with `<string-mapping>` - List of simple strings
+
+```yaml
+my-project:
   - /absolute/path/to/target1
   - /absolute/path/to/target2
 ```
 
-**Use when:** One project, multiple targets, sync all files.
+#### `<mapping-list>` with `<dict-mapping>` - List of dicts
 
-**Example:**
 ```yaml
-api-service:
-  - /Users/username/work/api-v1
-  - /Users/username/work/api-v2
+my-project:
+  - target: /absolute/path/to/target1
+    subpath:
+      - .kiro/hooks
+  - target: /absolute/path/to/target2
+    subpath:
+      - .vscode
+```
+
+#### `<mapping-list>` mixed - List with both string and dict mappings
+
+```yaml
+my-project:
+  - /absolute/path/to/target1
+  - target: /absolute/path/to/target2
+    subpath:
+      - local-file/tasks/releases
+```
+
+#### Complete example - Multiple projects with various mappings
+
+```yaml
+# <string-mapping>
+project-a: /absolute/path/to/target
+
+# <dict-mapping> with subpath
+project-b:
+  target: /absolute/path/to/target
+  subpath:
+    - .kiro/hooks
+
+# <mapping-list> with <string-mapping>
+project-c:
+  - /absolute/path/to/target1
+  - /absolute/path/to/target2
+
+# <mapping-list> mixed
+project-d:
+  - /absolute/path/to/target1
+  - target: /absolute/path/to/target2
+    subpath:
+      - .kiro/hooks
+      - path: .kiro/steering/rules.md
+        copy: true
 ```
 
 ---
 
-### Format 3: Selective Subpaths
+## Complete Syntax
 
-Sync only specific files or directories.
+### Single Mapping
 
 ```yaml
-project-name:
-  target: /absolute/path/to/target  # string or list
+# Simple string - sync everything
+project-a: /absolute/path/to/target
+
+# Dict with subpath - sync only specific items
+project-b:
+  target: /absolute/path/to/target
   subpath:
-    - relative/path/to/item1
-    - relative/path/to/item2
+    - .kiro/hooks
+    - .vscode
+
+# Dict with copy strategy
+project-c:
+  target: /absolute/path/to/target
+  subpath:
+    - .kiro/hooks                    # symlink
+    - path: .kiro/steering/rules.md  # physical copy
+      copy: true
 ```
 
-**Use when:** Need to sync only specific items, not everything.
+### List of Mappings
 
-**Behavior:**
-- Only listed subpaths are synced
-- Intermediate directories created automatically
-- All items are symlinked by default
-
-**Example:**
 ```yaml
-frontend-app:
-  target: /Users/username/work/frontend
+# List of simple strings - sync everything to multiple targets
+project-d:
+  - /absolute/path/to/target1
+  - /absolute/path/to/target2
+
+# List of dicts - selective sync to multiple targets
+project-e:
+  - target: /absolute/path/to/target1
+    subpath:
+      - .kiro/hooks
+  - target: /absolute/path/to/target2
+    subpath:
+      - .vscode
+
+# Mixed list - combine simple strings and dicts
+project-f:
+  - /absolute/path/to/target1           # sync everything
+  - target: /absolute/path/to/target2   # sync only specific items
+    subpath:
+      - local-file/tasks/releases
+```
+
+### Dict with Multiple Targets
+
+The `target` key in a dict mapping can also be a list:
+
+```yaml
+# Sync same subpaths to multiple targets
+project-g:
+  target:
+    - /absolute/path/to/target1
+    - /absolute/path/to/target2
+  subpath:
+    - .kiro/hooks
+    - .vscode
+```
+
+---
+
+## Features
+
+### Subpath Mapping
+
+By default, all top-level items in a managed project are synced. Use `subpath` to sync only specific items:
+
+```yaml
+my-project:
+  target: /path/to/target
   subpath:
     - .kiro/hooks
     - .vscode/settings.json
     - docker-compose.dev.yml
 ```
 
-**With multiple targets:**
-```yaml
-frontend-app:
-  target:
-    - /Users/username/work/frontend-dev
-    - /Users/username/work/frontend-staging
-  subpath:
-    - .kiro/hooks
-    - .vscode/settings.json
-```
-
----
-
-### Format 4: Copy Strategy
-
-Create physical copies instead of symlinks for specific items.
-
-```yaml
-project-name:
-  target: /absolute/path/to/target  # string or list
-  subpath:
-    - item1                          # symlink (default)
-    - path: item2                    # physical copy
-      copy: true
-```
-
-**Use when:** Tools don't recognize symlinks and require physical files.
-
 **Behavior:**
-- Items without `copy: true` are symlinked (default)
-- Items with `copy: true` are physically copied
-- Bidirectional sync: detects changes in both locations
-- Conflict resolution: prompts when both sides changed
+- Only listed subpaths are synced
+- Intermediate directories created automatically
+- All items are symlinked by default
 
-**Example:**
+### Copy Strategy
+
+By default, items are symlinked. Use `copy: true` for physical copies when tools don't recognize symlinks:
+
 ```yaml
 my-project:
-  target: /Users/username/workspace/my-project
+  target: /path/to/target
   subpath:
-    - .kiro/hooks                    # symlink
-    - .vscode                        # symlink
+    - .kiro/hooks                    # symlink (default)
     - path: .kiro/steering/rules.md  # physical copy
       copy: true
 ```
 
-**With multiple targets:**
+**Behavior:**
+- Items without `copy: true` are symlinked
+- Items with `copy: true` are physically copied
+- Bidirectional sync: detects changes in both locations
+- Conflict resolution: prompts when both sides changed
+
+**Limitations:**
+- Copy mode only supports single files, not directories
+- This is intentional to keep symlinks as the primary workflow
+
+### Multiple Targets
+
+Sync the same managed project to multiple targets:
+
 ```yaml
-microservice:
+# Simple: sync everything to multiple targets
+api-service:
+  - /path/to/target1
+  - /path/to/target2
+
+# Dict: sync same subpaths to multiple targets
+frontend:
   target:
-    - /Users/username/work/service-a
-    - /Users/username/work/service-b
+    - /path/to/target1
+    - /path/to/target2
   subpath:
-    - .kiro/steering                 # symlink
-    - docker-compose.dev.yml         # symlink
-    - path: .qoder/rules.md          # physical copy (each target gets own copy)
-      copy: true
+    - .kiro/hooks
+
+# Mixed: different sync strategies for different targets
+my-project:
+  - /path/to/target1              # sync everything
+  - target: /path/to/target2      # sync only specific items
+    subpath:
+      - .kiro/hooks
 ```
 
 ---
@@ -140,15 +347,15 @@ microservice:
 | **Project names** | Directory names in your managed files location |
 | **Target paths** | Must be absolute paths |
 | **Subpaths** | Relative to the project directory |
-| **Copy flag** | Creates physical files instead of symlinks |
-| **Items** | Auto-discovered from filesystem (or specified in subpath) |
-| **Target key** | Accepts string or list in all formats |
+| **Mapping types** | Simple string (sync all) or dict (selective sync + copy) |
+| **Target key** | Accepts string or list in dict mappings |
+| **Copy flag** | Creates physical files instead of symlinks (files only) |
 
 ---
 
-## Complete Examples
+## Examples
 
-### Example 1: Simple Projects
+### Basic Usage
 
 ```yaml
 # Single target, sync everything
@@ -160,7 +367,7 @@ api-service:
   - /Users/username/work/api-v2
 ```
 
-### Example 2: Selective Sync
+### Selective Sync
 
 ```yaml
 # Sync only specific files
@@ -181,7 +388,7 @@ microservice:
     - docker-compose.dev.yml
 ```
 
-### Example 3: Tool Compatibility (Copy Strategy)
+### Copy Strategy
 
 ```yaml
 # IDE requires physical steering files
@@ -190,151 +397,52 @@ my-app:
   subpath:
     - .kiro/hooks                    # symlink
     - .vscode                        # symlink
-    - path: .kiro/steering/rules.md  # physical copy (Kiro IDE requires physical file)
+    - path: .kiro/steering/rules.md  # physical copy
       copy: true
 
-# Multiple targets with mixed strategies
+# Multiple targets with copy
 multi-env:
   target:
     - /Users/username/work/dev
     - /Users/username/work/staging
   subpath:
     - .kiro/hooks                    # shared (symlink)
-    - .vscode                        # shared (symlink)
     - path: .qoder/config.yml        # per-target (physical copy)
       copy: true
 ```
 
-### Example 4: Organized by Category
+### Mixed Strategies
 
 ```yaml
-# Development tools
-dev-tools: /Users/username/workspace/dev-tools
+# Different sync strategies for different targets
+beyond-local-file:
+  - /Users/username/projects/beyond-local-file  # full sync
+  - target: /Users/username/blog                # partial sync
+    subpath:
+      - local-file/tasks/releases
 
-# Testing configurations
-test-configs:
-  - /Users/username/workspace/project-a
-  - /Users/username/workspace/project-b
-  - /Users/username/workspace/project-c
-
-# IDE settings only
-ide-settings:
-  target:
-    - /Users/username/workspace/project-a
-    - /Users/username/workspace/project-b
-  subpath:
-    - .vscode
-    - .idea
-
-# Legacy project with selective sync
-legacy-app:
-  target: /Users/username/workspace/legacy
-  subpath:
-    - test.http
-    - .env.test
+# Complex mixed configuration
+my-project:
+  - /Users/username/work/project-full           # full sync
+  - /Users/username/work/project-full-2         # full sync
+  - target: /Users/username/work/project-partial # partial sync
+    subpath:
+      - .kiro/hooks
+      - .vscode
+  - target:                                      # partial sync with copy
+      - /Users/username/work/env-dev
+      - /Users/username/work/env-prod
+    subpath:
+      - .kiro/hooks
+      - path: .kiro/steering/rules.md
+        copy: true
 ```
-
-### Example 5: Mixed Configuration
-
-```yaml
-# Simple projects
-tool-a: /Users/username/projects/tool-a
-tool-b: /Users/username/projects/tool-b
-
-# Multiple targets
-api-service:
-  - /Users/username/work/api-v1
-  - /Users/username/work/api-v2
-
-# Selective sync
-frontend:
-  target: /Users/username/work/frontend
-  subpath:
-    - .kiro/hooks
-    - .vscode
-
-# Copy strategy
-backend:
-  target:
-    - /Users/username/work/backend-dev
-    - /Users/username/work/backend-prod
-  subpath:
-    - .kiro/hooks
-    - path: .kiro/steering/rules.md
-      copy: true
-```
-
----
-
-## Copy Strategy Details
-
-### When to Use
-
-Use `copy: true` when:
-- Tools don't recognize or follow symlinks
-- IDEs silently ignore symlinked configuration files
-- Files must be physical for tool compatibility
-
-**Example:** Kiro IDE requires steering files to be physical. Symlinked steering files are silently ignored.
-
-### Scope Limitations
-
-**Copy mode only supports single files — no directory-level copy.**
-
-This is an intentional design constraint:
-- Copy is a boundary-case escape hatch, not a general-purpose file distribution mechanism
-- Keeping symlinks as the primary workflow ensures centralized management
-- Directory-level copies would encourage large-scale duplication, defeating the tool's purpose
-
-```yaml
-# ✅ Correct: single file with copy
-subpath:
-  - path: .kiro/steering/rules.md
-    copy: true
-
-# ❌ Not supported: directory with copy
-subpath:
-  - path: .kiro/steering    # directories cannot use copy: true
-    copy: true
-```
-
-### Sync Behavior
-
-**Initial sync:**
-- Copies from managed to target
-- Records file state for change detection
-
-**Subsequent syncs:**
-- Detects changes in both locations
-- Three-way comparison: managed, target, last-sync-state
-
-**Change scenarios:**
-1. **No changes:** Skip
-2. **Managed changed only:** Sync managed → target
-3. **Target changed only:** Sync target → managed (reverse sync)
-4. **Both changed:** Conflict - prompt user for resolution
-
-### Conflict Resolution
-
-When both sides have changed:
-```
-Conflict detected: both managed and target files have changed
-  managed: /path/to/managed/.kiro/steering/rules.md
-  target:  /path/to/target/.kiro/steering/rules.md
-
-Choose resolution: [m]anaged / [t]arget / [s]kip
-```
-
-**Options:**
-- `m` — Use managed version (overwrite target with managed)
-- `t` — Use target version (overwrite managed with target, reverse sync)
-- `s` — Skip this file (keep both versions as-is, no changes)
 
 ---
 
 ## Best Practices
 
-### 1. Use Absolute Paths
+### Use Absolute Paths
 
 ```yaml
 # ✅ Recommended
@@ -344,12 +452,11 @@ project: /Users/username/workspace/project
 project: ../workspace/project
 ```
 
-### 2. Prefer Symlinks
+### Prefer Symlinks
 
-Use copy strategy only when necessary (tool compatibility).
+Use copy strategy only when necessary (tool compatibility):
 
 ```yaml
-# ✅ Recommended
 my-project:
   target: /Users/username/workspace/my-project
   subpath:
@@ -358,18 +465,7 @@ my-project:
       copy: true
 ```
 
-### 3. Group Related Projects
-
-```yaml
-# Personal projects
-personal-tool: /Users/username/personal/tool
-
-# Work projects
-work-api: /Users/username/work/api
-work-frontend: /Users/username/work/frontend
-```
-
-### 4. Use Selective Sync
+### Use Selective Sync
 
 Sync only what you need:
 
@@ -382,7 +478,7 @@ my-project:
     - .editorconfig
 ```
 
-### 5. Document Your Config
+### Document Your Config
 
 ```yaml
 # Shared development configurations
@@ -395,6 +491,43 @@ legacy-app:
     - test.http  # API testing
     - .env.test  # Test environment
 ```
+
+---
+
+## Advanced Topics
+
+### Copy Strategy Conflict Resolution
+
+When both managed and target files have changed, the tool prompts for resolution:
+
+```
+Conflict detected: both managed and target files have changed
+  managed: /path/to/managed/.kiro/steering/rules.md
+  target:  /path/to/target/.kiro/steering/rules.md
+
+Choose resolution: [m]anaged / [t]arget / [s]kip
+```
+
+**Options:**
+- `m` — Use managed version (overwrite target)
+- `t` — Use target version (overwrite managed, reverse sync)
+- `s` — Skip this file (keep both versions as-is)
+
+### Copy Strategy Sync Behavior
+
+**Initial sync:**
+- Copies from managed to target
+- Records file state for change detection
+
+**Subsequent syncs:**
+- Detects changes in both locations
+- Three-way comparison: managed, target, last-sync-state
+
+**Change scenarios:**
+1. No changes → Skip
+2. Managed changed only → Sync managed → target
+3. Target changed only → Sync target → managed (reverse sync)
+4. Both changed → Conflict (prompt user)
 
 ---
 

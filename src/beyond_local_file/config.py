@@ -12,33 +12,28 @@ class Config:
     """Manages configuration loaded from a YAML file.
 
     The configuration file maps project names to their target paths.
-    Four formats are supported:
+    Each project can have one or more mappings, where each mapping can be:
 
-    1. Simplified (string)::
+    - **Simple string mapping**: Syncs everything from project to target::
 
-        project-b: /path/to/target
+        project-a: /path/to/target
 
-    2. Simplified (list)::
+    - **Dict mapping**: Supports selective subpath sync and copy strategy::
 
-        project-a:
-          - /path/to/target1
-          - /path/to/target2
-
-    3. Full (dict with ``target`` + optional ``subpath``)::
-
-        project-c:
-          target: /path/to/target
-          subpath:
-            - .kiro/hooks
-
-    4. Full with per-file copy::
-
-        project-d:
+        project-b:
           target: /path/to/target
           subpath:
             - .kiro/hooks
             - path: .qoder/rules.md
               copy: true
+
+    Mappings can be combined in a list for multiple targets::
+
+        project-c:
+          - /path/to/target1
+          - target: /path/to/target2
+            subpath:
+              - .kiro/hooks
 
     Attributes:
         config_path: Path to the configuration file.
@@ -73,11 +68,10 @@ class Config:
     def get_projects(self, project_name: str | None = None) -> dict[str, ProjectConfiguration]:
         """Get project configurations with normalized paths.
 
-        Supports three config formats:
+        The configuration supports two mapping types:
 
-        1. Simplified (string): ``project-a: /path/to/target``
-        2. Simplified (list): ``project-a: [/path/to/target1, /path/to/target2]``
-        3. Full (dict with ``target`` + optional ``subpath``):
+        1. Simple string mapping: ``project-a: /path/to/target``
+        2. Dict mapping with optional subpath:
 
            .. code-block:: yaml
 
@@ -86,13 +80,25 @@ class Config:
                 subpath:
                   - .kiro/hooks
 
+        Mappings can be combined in a list:
+
+           .. code-block:: yaml
+
+              project-a:
+                - /path/to/target1
+                - target: /path/to/target2
+                  subpath:
+                    - .kiro/hooks
+
         Args:
             project_name: Optional project name to filter. If provided, only
                         returns configuration for that project.
 
         Returns:
             Dictionary mapping project names to ProjectConfiguration objects
-            containing the project path and target paths.
+            containing the project path and target paths. When a list contains
+            mixed mapping types, multiple ProjectConfiguration objects are created
+            with synthetic names (e.g., "project-a", "project-a#1", "project-a#2").
 
         Raises:
             ValueError: If the specified project_name is not in the config.
@@ -103,9 +109,12 @@ class Config:
         if project_name:
             if project_name not in self._data:
                 raise ValueError(f"Project '{project_name}' not found in config")
-            return {project_name: self._build_project_config(project_name, self._data[project_name])}
+            return self._build_project_configs(project_name, self._data[project_name])
 
-        return {name: self._build_project_config(name, value) for name, value in self._data.items()}
+        result = {}
+        for name, value in self._data.items():
+            result.update(self._build_project_configs(name, value))
+        return result
 
     def _is_full_format(self, value: str | list[str] | dict) -> bool:
         """Check whether a config value uses the full dict format.
@@ -119,6 +128,40 @@ class Config:
             True if the value is a dict with a ``target`` key.
         """
         return isinstance(value, dict) and "target" in value
+
+    def _is_mixed_format(self, value: str | list | dict) -> bool:
+        """Check whether a config value uses mixed format (list with strings and dicts).
+
+        Args:
+            value: The raw config value for a project.
+
+        Returns:
+            True if the value is a list containing both strings and dicts.
+        """
+        if not isinstance(value, list):
+            return False
+        has_string = any(isinstance(item, str) for item in value)
+        has_dict = any(isinstance(item, dict) and "target" in item for item in value)
+        return has_string and has_dict
+
+    def _build_project_configs(self, name: str, value: str | list | dict) -> dict[str, ProjectConfiguration]:
+        """Build ProjectConfiguration(s) from a raw config value.
+
+        Handles mixed format by splitting into multiple ProjectConfiguration objects.
+
+        Args:
+            name: The project name.
+            value: The raw YAML value (string, list, or dict).
+
+        Returns:
+            Dictionary mapping (possibly synthetic) names to ProjectConfiguration objects.
+        """
+        # Handle mixed format: list with both strings and dicts
+        if self._is_mixed_format(value):
+            return self._build_mixed_configs(name, value)
+
+        # Handle single configuration (all existing formats)
+        return {name: self._build_project_config(name, value)}
 
     def _build_project_config(self, name: str, value: str | list[str] | dict) -> ProjectConfiguration:
         """Build a ProjectConfiguration from a raw config value.
@@ -147,6 +190,43 @@ class Config:
             project_path=self._resolve_project_path(name),
             targets=self._normalize_targets(value),
         )
+
+    def _build_mixed_configs(self, name: str, value: list) -> dict[str, ProjectConfiguration]:
+        """Build multiple ProjectConfiguration objects from a mixed format list.
+
+        Splits a list containing both strings and dicts into separate configurations.
+
+        Args:
+            name: The project name.
+            value: List containing strings and/or dicts with target+subpath.
+
+        Returns:
+            Dictionary mapping synthetic names to ProjectConfiguration objects.
+        """
+        configs = {}
+        simple_targets = []
+        config_index = 0
+
+        for item in value:
+            if isinstance(item, str):
+                # Collect simple string targets
+                simple_targets.append(item)
+            elif isinstance(item, dict) and "target" in item:
+                # Create a separate config for this dict entry
+                synthetic_name = f"{name}#{config_index}" if config_index > 0 else name
+                config_index += 1
+                configs[synthetic_name] = self._build_project_config(synthetic_name, item)
+
+        # If there are simple targets, create a config for them
+        if simple_targets:
+            synthetic_name = f"{name}#{config_index}" if configs else name
+            configs[synthetic_name] = ProjectConfiguration(
+                name=synthetic_name,
+                project_path=self._resolve_project_path(name),
+                targets=self._normalize_targets(simple_targets),
+            )
+
+        return configs
 
     def _resolve_project_path(self, project_name: str) -> Path:
         """Resolve project path relative to config file directory.
