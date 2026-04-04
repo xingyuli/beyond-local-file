@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-05
+
+### Fixed
+- **Fix inconsistent project numbering suffix** — When multiple target projects exist, numbering now consistently uses `#{seq}` format (1-based sequence) for all projects. Previously, the first project appeared without a suffix while others showed `#1`, creating confusion. All multi-target projects now display as `project#1`, `project#2`, etc., while single-target projects remain without suffix.
+- **Fix config option placement** — Corrected test suite to reflect that `--config` is a global option at the root CLI level, not a command-specific option. Tests now properly verify the option appears in root help and use correct syntax: `blf --config custom.yml link sync`.
+- **Fix mixed configuration support** — Added support for mixing simple string format with selective subpath format for a single source with multiple targets. Users can now define configurations where some targets sync everything (simple string) while others sync only specific subdirectories (dict with subpath).
+
+### Documentation
+- **Update CLI reference for v0.2.0** — Corrected CLI reference documentation to show `--config` as a global option rather than command-specific. All examples now demonstrate proper usage with global option placement before subcommands.
+- **Add BNF configuration specification** — Added formal BNF (Backus-Naur Form) grammar specification to the configuration reference, providing a precise, unambiguous definition of the configuration format. This helps developers understand exact structure and valid combinations.
+- **Improve configuration reference clarity** — Restructured configuration reference documentation to reflect the actual composable specification structure instead of presenting it as 5 separate formats. Documentation now clearly shows how mappings can be single or list, and each mapping can be simple string or dict with selective subpaths.
+
+[0.2.1]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.2.1
+
 ## [0.2.0] - 2026-04-04
 
 ### Added
