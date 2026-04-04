@@ -220,11 +220,11 @@ def test_backward_compatible_config_format_variations():
 
 
 def test_backward_compatible_cli_commands():
-    """Test that all CLI commands work with the same syntax as before.
+    """Test that all CLI commands work with global --config option.
 
-    This test verifies that the command syntax remains unchanged:
-    - symlink sync [project_name] --config <path>
-    - symlink check [project_name] --config <path> --extra-exclude
+    This test verifies that the command syntax uses global options correctly:
+    - blf --config <path> symlink sync [project_name]
+    - blf --config <path> symlink check [project_name] --extra-exclude
     """
     runner = CliRunner()
 
@@ -242,24 +242,24 @@ def test_backward_compatible_cli_commands():
         config_path = td_path / "test-config.yml"
         config_path.write_text(f"test-project: {target_dir}\n")
 
-        # Test 1: sync with --config option
-        result1 = runner.invoke(cli, ["symlink", "sync", "--config", str(config_path)])
+        # Test 1: sync with --config global option
+        result1 = runner.invoke(cli, ["--config", str(config_path), "symlink", "sync"])
         assert result1.exit_code == 0
 
         # Test 2: sync with project name
-        result2 = runner.invoke(cli, ["symlink", "sync", "test-project", "--config", str(config_path)])
+        result2 = runner.invoke(cli, ["--config", str(config_path), "symlink", "sync", "test-project"])
         assert result2.exit_code == 0
 
-        # Test 3: check with --config option
-        result3 = runner.invoke(cli, ["symlink", "check", "--config", str(config_path)])
+        # Test 3: check with --config global option
+        result3 = runner.invoke(cli, ["--config", str(config_path), "symlink", "check"])
         assert result3.exit_code == 0
 
         # Test 4: check with --extra-exclude option
-        result4 = runner.invoke(cli, ["symlink", "check", "--config", str(config_path), "--extra-exclude"])
+        result4 = runner.invoke(cli, ["--config", str(config_path), "symlink", "check", "--extra-exclude"])
         assert result4.exit_code == 0
 
         # Test 5: check with project name
-        result5 = runner.invoke(cli, ["symlink", "check", "test-project", "--config", str(config_path)])
+        result5 = runner.invoke(cli, ["--config", str(config_path), "symlink", "check", "test-project"])
         assert result5.exit_code == 0
 
 

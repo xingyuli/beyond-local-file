@@ -51,18 +51,20 @@ def test_link_check_command_exists():
 
 
 def test_sync_accepts_config_option():
-    """Test that sync command accepts --config option."""
+    """Test that --config global option is available for sync command."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["link", "sync", "--help"])
+    # --config is a global option, so it appears in root help
+    result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "--config" in result.output or "-c" in result.output
     assert "Path to config file" in result.output
 
 
 def test_check_accepts_config_option():
-    """Test that check command accepts --config option."""
+    """Test that --config global option is available for check command."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["link", "check", "--help"])
+    # --config is a global option, so it appears in root help
+    result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "--config" in result.output or "-c" in result.output
     assert "Path to config file" in result.output
@@ -136,7 +138,8 @@ def test_error_message_with_custom_config_not_found() -> None:
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        result = runner.invoke(cli, ["link", "check", "--config", "nonexistent.yml"])
+        # Use correct global option syntax: --config before subcommand
+        result = runner.invoke(cli, ["--config", "nonexistent.yml", "link", "check"])
 
         assert "Config file not found" in result.output
         assert "nonexistent.yml" in result.output
