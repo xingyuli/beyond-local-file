@@ -7,6 +7,8 @@ into processing units (reflecting execution structure).
 from dataclasses import dataclass
 from pathlib import Path
 
+import click
+
 from ..options import LinkStrategy
 from .config import ConfigProject
 from .processing import ManagedProjectItem, ProcessingUnit
@@ -49,8 +51,9 @@ def translate_config_to_processing(
       - Use zero-padding when any index >= 10 (e.g., #01, #01-01)
 
     Items loading:
-      - If mapping has no subpaths: items = None (sync everything)
-      - If mapping has subpaths: items = list[ManagedProjectItem] (sync specified items only)
+      - If mapping has no subpaths: expand all files/directories as symlinks
+      - If mapping has subpaths: load only specified items with their strategies
+      - Empty managed projects are reported and skipped
 
     Args:
         config_projects: Dictionary of project name to ConfigProject.
@@ -99,6 +102,13 @@ def translate_config_to_processing(
                     subpaths=mapping.subpaths,
                     copy_paths=mapping.copy_paths,
                 )
+
+                # Skip if no items found (empty managed project)
+                if not items:
+                    click.echo(
+                        f"Info: Skipping {display_name} - no items found in {config_project.managed_project_path}"
+                    )
+                    continue
 
                 processing_units.append(
                     ProcessingUnit(
@@ -155,7 +165,7 @@ def _load_items(
     managed_project_path: Path,
     subpaths: list[str] | None,
     copy_paths: set[str] | None,
-) -> list[ManagedProjectItem] | None:
+) -> list[ManagedProjectItem]:
     """Load project items based on subpaths configuration.
 
     Args:
@@ -164,15 +174,24 @@ def _load_items(
         copy_paths: Optional set of subpath names that use copy strategy.
 
     Returns:
-        None if no subpaths specified (sync everything),
-        list[ManagedProjectItem] if subpaths specified (sync only those items).
+        List of ManagedProjectItem instances. Empty list if no items found.
 
     Raises:
         ValueError: If copy strategy is used on a directory.
     """
-    # No subpaths: sync everything (items will be loaded at execution time)
+    # No subpaths: expand all files/directories as symlinks
     if subpaths is None:
-        return None
+        items: list[ManagedProjectItem] = []
+        if managed_project_path.exists() and managed_project_path.is_dir():
+            for item_path in managed_project_path.iterdir():
+                items.append(
+                    ManagedProjectItem(
+                        name=item_path.name,
+                        path=item_path,
+                        strategy=LinkStrategy.SYMLINK,
+                    )
+                )
+        return items
 
     # Subpaths specified: create items for each valid subpath
     copy_set = copy_paths or set()

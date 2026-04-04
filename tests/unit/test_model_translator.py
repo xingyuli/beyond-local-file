@@ -185,10 +185,10 @@ class TestDisplayNameGeneration:
 
 
 class TestItemsLoading:
-    """Test items loading logic (None vs list[ProjectItem])."""
+    """Test items loading logic (always returns list[ProjectItem])."""
 
-    def test_no_subpaths_items_is_none(self, temp_project_dir: Path) -> None:
-        """When mapping has no subpaths, items should be None (sync everything)."""
+    def test_no_subpaths_expands_all_items(self, temp_project_dir: Path) -> None:
+        """When mapping has no subpaths, all files/directories are expanded as symlinks."""
         config_projects = {
             "my-project": ConfigProject(
                 managed_project_name="my-project",
@@ -202,7 +202,16 @@ class TestItemsLoading:
         units = translate_config_to_processing(config_projects)
 
         assert len(units) == 1
-        assert units[0].items is None
+        assert units[0].items is not None
+        assert len(units[0].items) == 3  # file1.txt, file2.txt, .kiro  # noqa: PLR2004
+
+        # All items should use symlink strategy
+        for item in units[0].items:
+            assert item.strategy == LinkStrategy.SYMLINK
+
+        # Check item names
+        item_names = {item.name for item in units[0].items}
+        assert item_names == {"file1.txt", "file2.txt", ".kiro"}
 
     def test_with_subpaths_items_is_list(self, temp_project_dir: Path) -> None:
         """When mapping has subpaths, items should be a list of ProjectItem."""

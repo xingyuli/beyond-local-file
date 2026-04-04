@@ -140,9 +140,7 @@ def test_sync_skips_existing_correct_symlinks(sample_items: list[ManagedProjectI
     assert len(result2.failed) == 0
 
 
-def test_sync_detects_incorrect_symlinks(
-    sample_items: list[ManagedProjectItem], temp_target_dir: Path
-) -> None:
+def test_sync_detects_incorrect_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
     """Test that sync detects symlinks pointing to wrong sources.
 
     Args:

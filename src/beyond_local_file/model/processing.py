@@ -36,8 +36,8 @@ class ProcessingUnit:
         managed_project_name: Original project name from configuration.
         managed_project_path: Absolute path to the managed project directory.
         target_project_path: Single target path for this processing unit.
-        items: None = sync everything, list = sync specified items only.
-               Empty list is invalid and should be caught during validation.
+        items: Non-empty list of items to sync. Empty managed projects are
+               filtered out during translation.
         display_name: Computed display name with suffix for output.
         mapping_index: Which mapping this unit comes from (0-based).
         target_index: Which target within the mapping (0-based).
@@ -65,7 +65,7 @@ class ProcessingUnit:
     managed_project_name: str
     managed_project_path: Path
     target_project_path: Path
-    items: list[ManagedProjectItem] | None
+    items: list[ManagedProjectItem]
     display_name: str
     mapping_index: int
     target_index: int

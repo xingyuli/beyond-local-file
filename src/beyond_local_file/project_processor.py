@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -18,7 +17,7 @@ from .formatters import (
     SyncResultFormatter,
 )
 from .model.config import ConfigProject
-from .model.processing import ManagedProjectItem, ProcessingUnit
+from .model.processing import ProcessingUnit
 from .model.translator import translate_config_to_processing
 from .options import LinkStrategy, OutputFormat
 from .symlink_manager import Action, CheckResult, SymlinkManager
@@ -119,7 +118,7 @@ class ProjectProcessor:
         Returns:
             True if all operations completed, False if aborted.
         """
-        # Translate config to processing units
+        # Translate config to processing units (items are already expanded)
         processing_units = translate_config_to_processing(config_projects)
 
         # Execute each processing unit
@@ -131,41 +130,17 @@ class ProjectProcessor:
                     return False
                 continue
 
-            # Load items if not already loaded (items=None means sync everything)
-            current_unit = unit
-            if unit.items is None:
-                # Scan directory to get all items
-                items = []
-                if unit.managed_project_path.exists() and unit.managed_project_path.is_dir():
-                    for item_path in unit.managed_project_path.iterdir():
-                        items.append(
-                            ManagedProjectItem(
-                                name=item_path.name,
-                                path=item_path,
-                                strategy=LinkStrategy.SYMLINK,
-                            )
-                        )
-                # Update unit with loaded items (create new instance since dataclass is immutable by default)
-                current_unit = replace(unit, items=items)
-
-            # Validate items exist
-            if not current_unit.items:
-                click.echo(f"No items found in {current_unit.display_name}")
-                if not skip_invalid:
-                    return False
-                continue
-
             # Validate target path
-            if not current_unit.target_project_path.exists():
-                click.echo(f"Target directory does not exist: {current_unit.target_project_path}")
+            if not unit.target_project_path.exists():
+                click.echo(f"Target directory does not exist: {unit.target_project_path}")
                 continue
 
             # Print progress
             if operation.verbose_progress:
-                click.echo(f"\nProcessing {current_unit.display_name} -> {current_unit.target_project_path}")
+                click.echo(f"\nProcessing {unit.display_name} -> {unit.target_project_path}")
 
             # Execute operation
-            if not operation.execute_unit(current_unit):
+            if not operation.execute_unit(unit):
                 return False
 
         return True
@@ -203,9 +178,6 @@ class SyncOperation(CmdOperation):
         Returns:
             True to continue, False if aborted.
         """
-        if not unit.items:
-            return True
-
         # PARTITION: Divide items by strategy
         symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
         copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
@@ -272,9 +244,6 @@ class CheckOperation(CmdOperation):
         Returns:
             Always True to continue processing.
         """
-        if not unit.items:
-            return True
-
         # PARTITION: Divide items by strategy
         symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
         copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
