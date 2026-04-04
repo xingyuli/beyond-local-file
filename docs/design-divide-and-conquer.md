@@ -1,39 +1,37 @@
-# Architecture Design: Link Strategy Management
+# Design: Divide-and-Conquer Strategy Management
 
-> **📖 Note**: This document describes the internal architecture. For user-facing configuration, see [configuration-reference.md](configuration-reference.md) and [config-format-clarification.md](config-format-clarification.md).
+> **📖 Note**: This document describes the divide-and-conquer pattern for managing link strategies. For an overview, see [design-overview.md](design-overview.md). For model architecture, see [design-model-separation.md](design-model-separation.md).
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Core Concepts](#core-concepts)
-3. [Divide-and-Conquer Strategy](#divide-and-conquer-strategy)
-4. [Protocol-Based Architecture](#protocol-based-architecture)
-5. [Result Type Design](#result-type-design)
-6. [Manager Implementations](#manager-implementations)
-7. [Operations Layer](#operations-layer)
-8. [Extending the System](#extending-the-system)
-9. [Design Principles](#design-principles)
-10. [Common Patterns](#common-patterns)
+2. [The Problem Space](#the-problem-space)
+3. [The Solution Space](#the-solution-space)
+4. [Divide-and-Conquer Strategy](#divide-and-conquer-strategy)
+5. [Protocol-Based Architecture](#protocol-based-architecture)
+6. [Result Type Design](#result-type-design)
+7. [Manager Implementations](#manager-implementations)
+8. [Operations Layer](#operations-layer)
+9. [Extending the System](#extending-the-system)
+10. [Code Templates](#code-templates)
+11. [Common Mistakes](#common-mistakes)
+12. [Testing Patterns](#testing-patterns)
 
 ---
 
 ## Overview
 
-This document describes the architecture for managing different link strategies (symlink, copy, etc.) in the beyond-local-file project. The design follows a **divide-and-conquer** approach with **protocol-based composition** to enable clean separation of concerns and easy extensibility.
+This document describes the architecture for managing different link strategies (symlink, copy, etc.). The design follows a **divide-and-conquer** approach with **protocol-based composition** to enable clean separation of concerns and easy extensibility.
 
-### Key Design Goals
+### Key Concepts
 
-1. **Partition Strategy**: Divide items by strategy, delegate to specialized managers
-2. **Unified Interface**: All managers implement the same protocol
-3. **Clean Composition**: Strategy-specific details via protocol, not inheritance
-4. **Type Safety**: Compile-time guarantees through protocols and type hints
-5. **Extensibility**: Add new strategies without modifying existing code
+```
+Project Items → PARTITION by strategy → Managers → CONQUER independently
+```
 
 ---
 
-## Core Concepts
-
-### The Problem Space
+## The Problem Space
 
 > **⚠️ IMPORTANT**: The YAML example below is a **conceptual illustration** of the internal data model, NOT the actual `config.yml` format. For the real configuration format, see `README.md` and `docs/configuration-reference.md`.
 
@@ -54,7 +52,9 @@ projects:
         strategy: copy     # Physical copy with sync
 ```
 
-### The Solution Space
+---
+
+## The Solution Space
 
 ```
 ┌─────────────────────────────────────────┐
@@ -396,19 +396,6 @@ def check_links(self) -> LinkCheckResult:
     return result
 ```
 
-**Legacy Methods:**
-```python
-def sync(self, ask_callback=None) -> SyncResult:
-    """Legacy method for backward compatibility."""
-    # Existing implementation unchanged
-    ...
-
-def check(self, all_item_names=None) -> CheckResult:
-    """Legacy method for backward compatibility."""
-    # Existing implementation unchanged
-    ...
-```
-
 ### CopyManager
 
 **Responsibility**: Create and manage physical file copies with bidirectional sync
@@ -465,19 +452,6 @@ def check_links(self) -> LinkCheckResult:
     result.details = details  # Copy-specific details
     
     return result
-```
-
-**Legacy Methods:**
-```python
-def sync(self, conflict_callback=None) -> CopyResult:
-    """Legacy method for backward compatibility."""
-    # Existing implementation unchanged
-    ...
-
-def check(self) -> CopyCheckResult:
-    """Legacy method for backward compatibility."""
-    # Existing implementation unchanged
-    ...
 ```
 
 ---
@@ -598,294 +572,220 @@ git_result = symlink_mgr.check_git_excludes(all_valid_entries)
 
 ### Adding a New Strategy
 
-**Step 1: Define the strategy enum**
+See the full example in the original architecture-design.md document. The key steps are:
 
-```python
-# In options.py
-class LinkStrategy(StrEnum):
-    SYMLINK = "symlink"
-    COPY = "copy"
-    HARDLINK = "hardlink"  # New strategy
-```
-
-**Step 2: Create strategy-specific details (if needed)**
-
-```python
-# In link_strategy_protocol.py
-@dataclass
-class HardlinkCreateDetails:
-    """Hardlink-specific details for create operations."""
-    hardlink_count: int
-    
-    def get_summary(self) -> str:
-        return f"Created {self.hardlink_count} hardlinks"
-
-@dataclass
-class HardlinkCheckDetails:
-    """Hardlink-specific details for check operations."""
-    broken_links: list[str]
-    
-    def get_summary(self) -> str:
-        if self.broken_links:
-            return f"Broken links: {len(self.broken_links)}"
-        return "All links valid"
-```
-
-**Step 3: Create the manager**
-
-```python
-# In hardlink_manager.py
-class HardlinkManager:
-    """Manages hardlink creation and checking."""
-    
-    def __init__(self, hardlink_items: list[ProjectItem], target_path: Path):
-        """Initialize with pre-filtered hardlink items."""
-        self.hardlink_items = hardlink_items
-        self.target_path = target_path
-        self.git_manager = GitExcludeManager(target_path)
-    
-    # Implement LinkStrategyManager protocol
-    
-    def get_managed_items(self) -> list[ProjectItem]:
-        return self.hardlink_items
-    
-    def create_links(self) -> LinkCreateResult:
-        """Create hardlinks for all managed items."""
-        result = LinkCreateResult()
-        hardlink_count = 0
-        
-        for item in self.hardlink_items:
-            target_file = self.target_path / item.name
-            try:
-                os.link(item.source_path, target_file)
-                result.created.add(item.name)
-                hardlink_count += 1
-            except OSError:
-                result.failed.add(item.name)
-        
-        # Add strategy-specific details
-        details = HardlinkCreateDetails(hardlink_count=hardlink_count)
-        result.details = details
-        
-        return result
-    
-    def check_links(self) -> LinkCheckResult:
-        """Check status of hardlinks."""
-        result = LinkCheckResult()
-        broken_links = []
-        
-        for item in self.hardlink_items:
-            target_file = self.target_path / item.name
-            if target_file.exists():
-                # Check if it's actually a hardlink (same inode)
-                if target_file.stat().st_ino == item.source_path.stat().st_ino:
-                    result.exists.append(item.name)
-                else:
-                    broken_links.append(item.name)
-            else:
-                result.missing.append(item.name)
-        
-        # Add strategy-specific details
-        details = HardlinkCheckDetails(broken_links=broken_links)
-        result.details = details
-        
-        return result
-    
-    def add_git_excludes(self) -> GitExcludeAddResult:
-        """Add git exclude entries for hardlink items."""
-        result = GitExcludeAddResult()
-        
-        if not self.git_manager.is_git_repo():
-            return result
-        
-        item_names = {i.name for i in self.hardlink_items}
-        if item_names:
-            added, existing = self.git_manager.write_entries(item_names)
-            result.added = added
-            result.existing = existing
-        
-        return result
-    
-    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
-        """Check git exclude status for hardlink items."""
-        result = GitExcludeCheckResult()
-        
-        if not self.git_manager.is_git_repo():
-            item_names = {i.name for i in self.hardlink_items}
-            result.missing = item_names
-            return result
-        
-        exclude_entries = self.git_manager.read_entries()
-        item_names = {i.name for i in self.hardlink_items}
-        
-        result.present = item_names & exclude_entries
-        result.missing = item_names - exclude_entries
-        result.extra = exclude_entries - all_valid_entries
-        
-        return result
-```
-
-**Step 4: Update operations**
-
-```python
-# In project_processor.py
-class SyncOperation(CmdOperation):
-    def execute(self, project: Project, target_path: Path) -> bool:
-        # PARTITION
-        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
-        hardlink_items = [i for i in project.items if i.strategy == LinkStrategy.HARDLINK]  # New
-        
-        # CONQUER
-        if symlink_items:
-            # ... existing code
-        
-        if copy_items:
-            # ... existing code
-        
-        if hardlink_items:  # New
-            hardlink_mgr = HardlinkManager(hardlink_items, target_path)
-            result = hardlink_mgr.create_links()
-            # Format and display results
-        
-        return True
-```
+1. Define the strategy enum
+2. Create strategy-specific details (if needed)
+3. Create the manager implementing LinkStrategyManager protocol
+4. Update operations to partition and delegate
 
 **That's it!** No changes to existing managers needed.
 
 ---
 
-## Design Principles
+## Code Templates
 
-### 1. Single Responsibility Principle (SRP)
-
-**Operations:**
-- Responsible for partitioning items by strategy
-- Responsible for coordinating between managers
-- Responsible for aggregating results
-
-**Managers:**
-- Responsible for executing their specific strategy
-- NOT responsible for filtering items
-- NOT responsible for knowing about other strategies
-
-**Result Types:**
-- Responsible for common fields only
-- NOT responsible for strategy-specific fields
-
-**Details Types:**
-- Responsible for strategy-specific fields only
-
-### 2. Open/Closed Principle (OCP)
-
-**Open for extension:**
-- Add new strategies by creating new managers
-- Add new details by creating new detail types
-
-**Closed for modification:**
-- Existing managers don't change when adding new strategies
-- Unified result types don't change when adding new strategies
-- Protocol doesn't change when adding new strategies
-
-### 3. Liskov Substitution Principle (LSP)
-
-All managers implement `LinkStrategyManager` protocol and can be used interchangeably:
+### New Manager Template
 
 ```python
-def process_manager(manager: LinkStrategyManager) -> None:
-    """Works with any manager that implements the protocol."""
-    items = manager.get_managed_items()
-    result = manager.create_links()
-    # ... process result
+class NewStrategyManager:
+    def __init__(self, items: list[ProjectItem], target_path: Path):
+        self.items = items  # Pre-filtered by caller
+        self.target_path = target_path
+        self.git_manager = GitExcludeManager(target_path)
+    
+    def get_managed_items(self) -> list[ProjectItem]:
+        return self.items
+    
+    def create_links(self) -> LinkCreateResult:
+        result = LinkCreateResult()
+        # ... implementation
+        result.details = NewCreateDetails(...) if needed else None
+        return result
+    
+    def check_links(self) -> LinkCheckResult:
+        result = LinkCheckResult()
+        # ... implementation
+        result.details = NewCheckDetails(...) if needed else None
+        return result
+    
+    def add_git_excludes(self) -> GitExcludeAddResult:
+        result = GitExcludeAddResult()
+        if not self.git_manager.is_git_repo():
+            return result
+        item_names = {i.name for i in self.items}
+        if item_names:
+            added, existing = self.git_manager.write_entries(item_names)
+            result.added = added
+            result.existing = existing
+        return result
+    
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
+        result = GitExcludeCheckResult()
+        if not self.git_manager.is_git_repo():
+            result.missing = {i.name for i in self.items}
+            return result
+        exclude_entries = self.git_manager.read_entries()
+        item_names = {i.name for i in self.items}
+        result.present = item_names & exclude_entries
+        result.missing = item_names - exclude_entries
+        result.extra = exclude_entries - all_valid_entries
+        return result
 ```
 
-### 4. Interface Segregation Principle (ISP)
-
-**Unified result types have minimal interface:**
-- Only common fields that all strategies need
-- No strategy-specific fields
-
-**Details types have strategy-specific interface:**
-- Only fields relevant to that strategy
-- Implement minimal protocol (`get_summary()`)
-
-### 5. Dependency Inversion Principle (DIP)
-
-**Operations depend on abstractions:**
-- Depend on `LinkStrategyManager` protocol, not concrete managers
-- Depend on unified result types, not strategy-specific types
-
-**Managers depend on abstractions:**
-- Depend on `ProjectItem` interface
-- Depend on `GitExcludeManager` interface
-
----
-
-## Common Patterns
-
-### Pattern 1: Partition and Delegate
+### New Details Template
 
 ```python
-# PARTITION
-symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
-copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
+@dataclass
+class NewCreateDetails:
+    """Strategy-specific details for create operations."""
+    field1: type1
+    field2: type2
+    
+    def get_summary(self) -> str:
+        return f"Summary: {self.field1}, {self.field2}"
 
-# DELEGATE
-if symlink_items:
-    manager = SymlinkManager(symlink_items, target_path)
-    result = manager.create_links()
-
-if copy_items:
-    manager = CopyManager(copy_items, target_path, config_dir)
-    result = manager.create_links()
+@dataclass
+class NewCheckDetails:
+    """Strategy-specific details for check operations."""
+    field1: type1
+    field2: type2
+    
+    def get_summary(self) -> str:
+        return f"Summary: {self.field1}, {self.field2}"
 ```
 
-### Pattern 2: Aggregate and Pass
+### Operation Partition Template
+
+```python
+def execute(self, project: Project, target_path: Path) -> bool:
+    # PARTITION
+    strategy1_items = [i for i in project.items if i.strategy == Strategy.ONE]
+    strategy2_items = [i for i in project.items if i.strategy == Strategy.TWO]
+    
+    # CONQUER
+    if strategy1_items:
+        mgr = Strategy1Manager(strategy1_items, target_path)
+        result = mgr.create_links()
+        # ... process result
+    
+    if strategy2_items:
+        mgr = Strategy2Manager(strategy2_items, target_path)
+        result = mgr.create_links()
+        # ... process result
+    
+    return True
+```
+
+### Git Exclude Aggregation Template
 
 ```python
 # AGGREGATE
 all_valid_entries: set[str] = set()
-for manager in managers:
-    all_valid_entries.update(i.name for i in manager.get_managed_items())
+if manager1:
+    all_valid_entries.update(i.name for i in manager1.get_managed_items())
+if manager2:
+    all_valid_entries.update(i.name for i in manager2.get_managed_items())
 
 # PASS
-for manager in managers:
-    git_result = manager.check_git_excludes(all_valid_entries)
+if manager1:
+    git_result = manager1.check_git_excludes(all_valid_entries)
+if manager2:
+    git_result = manager2.check_git_excludes(all_valid_entries)
 ```
 
-### Pattern 3: Type-Safe Details Access
+---
 
+## Common Mistakes
+
+### ❌ Manager Filters Internally
 ```python
-# Check if details exist
-if result.details:
-    # Use protocol method
-    print(result.details.get_summary())
-
-# Type-safe access to specific details
-if isinstance(result.details, CopyCreateDetails):
-    if result.details.reverse_copied:
-        print(f"Reverse copied: {result.details.reverse_copied}")
+class Manager:
+    def __init__(self, project: Project, target_path: Path):
+        self.items = [i for i in project.items if i.strategy == MY_STRATEGY]
 ```
 
-### Pattern 4: Uniform Result Processing
-
+### ✅ Manager Receives Partition
 ```python
-# Process results uniformly across all strategies
-def process_result(result: LinkCreateResult) -> None:
-    """Process result from any manager."""
-    print(f"Created: {len(result.created)}")
-    print(f"Failed: {len(result.failed)}")
-    
-    # Access strategy-specific details if available
-    if result.details:
-        print(f"Details: {result.details.get_summary()}")
+class Manager:
+    def __init__(self, items: list[ProjectItem], target_path: Path):
+        self.items = items  # Pre-filtered by caller
+```
+
+---
+
+### ❌ Strategy-Specific Fields in Unified Type
+```python
+@dataclass
+class LinkCreateResult:
+    created: set[str]
+    reverse_copied: set[str]  # Copy-specific!
+```
+
+### ✅ Strategy-Specific Fields in Details
+```python
+@dataclass
+class LinkCreateResult:
+    created: set[str]
+    details: LinkCreateDetails | None = None
+
+@dataclass
+class CopyCreateDetails:
+    reverse_copied: set[str]
+```
+
+---
+
+### ❌ Inconsistent Naming
+```python
+LinkOperationResult  # Has "Operation"
+LinkCheckResult      # No suffix
+```
+
+### ✅ Consistent Naming
+```python
+LinkCreateResult  # Verb + Result
+LinkCheckResult   # Verb + Result
+```
+
+---
+
+## Testing Patterns
+
+### Test Manager in Isolation
+```python
+def test_manager():
+    items = [ProjectItem(name="file.txt", strategy=MY_STRATEGY, ...)]
+    manager = MyManager(items, target_path)
+    result = manager.create_links()
+    assert "file.txt" in result.created
+```
+
+### Test Protocol Compliance
+```python
+def test_protocol_compliance():
+    manager = MyManager(items, target_path)
+    assert hasattr(manager, "get_managed_items")
+    assert hasattr(manager, "create_links")
+    assert hasattr(manager, "check_links")
+    assert hasattr(manager, "add_git_excludes")
+    assert hasattr(manager, "check_git_excludes")
+```
+
+### Test Result Types
+```python
+def test_result_types():
+    result = manager.create_links()
+    assert isinstance(result, LinkCreateResult)
+    assert hasattr(result, "created")
+    assert hasattr(result, "details")
 ```
 
 ---
 
 ## Summary
 
-This architecture provides:
+The divide-and-conquer architecture provides:
 
 1. **Clean Partition Strategy** - Operations divide, managers conquer
 2. **Protocol-Based Design** - Uniform interface, flexible implementation
@@ -897,12 +797,11 @@ This architecture provides:
 
 The design properly supports multiple link strategies while maintaining clean separation of concerns and enabling easy extension with new strategies in the future.
 
-
 ---
 
 ## See Also
 
-- **[Architecture Quick Reference](architecture-quick-reference.md)** - Quick overview of the architecture
-- **[Config Format Clarification](config-format-clarification.md)** - Understanding config vs architecture
-- **[Development Guide](development.md)** - Contributing and development setup
-- **[Configuration Reference](configuration-reference.md)** - User-facing configuration guide
+- **[design-overview.md](design-overview.md)** - Architecture overview
+- **[design-model-separation.md](design-model-separation.md)** - Two-model architecture details
+- **[configuration-reference.md](configuration-reference.md)** - Configuration format guide
+- **[development.md](development.md)** - Development workflow

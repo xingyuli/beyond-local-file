@@ -17,7 +17,12 @@ New to beyond-local-file? Start here:
 - **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
 - **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
 - **[Config Format Clarification](config-format-clarification.md)** - Understanding configuration vs architecture
-- **[Architecture Design](architecture-design.md)** - Internal architecture and design principles
+- **[Design Overview](design-overview.md)** - Architecture overview and design principles
+
+### Design Documentation
+
+- **[Design: Model Separation](design-model-separation.md)** - Two-model architecture (config vs processing)
+- **[Design: Divide-and-Conquer](design-divide-and-conquer.md)** - Strategy management and protocol-based design
 
 ### Platform-Specific Guides
 
@@ -27,7 +32,6 @@ New to beyond-local-file? Start here:
 ## Developer Documentation
 
 - **[Development Guide](development.md)** - Contributing, testing, and development setup
-- **[Architecture Quick Reference](architecture-quick-reference.md)** - Quick architecture overview
 
 ## Quick Navigation
 
@@ -37,7 +41,7 @@ New to beyond-local-file? Start here:
 - **Understand configuration** → [Configuration Reference](configuration-reference.md)
 - **Learn all commands** → [CLI Reference](cli-reference.md)
 - **Use on Windows** → [Windows Support](windows-support.md)
-- **Understand the architecture** → [Architecture Design](architecture-design.md)
+- **Understand the architecture** → [Design Overview](design-overview.md)
 - **Contribute code** → [Development Guide](development.md)
 
 ### Common Tasks

@@ -6,7 +6,7 @@ This document defines the official `config.yml` format and clarifies the distinc
 
 ## Important Note
 
-The "Problem Space" section in `docs/architecture-design.md` shows **conceptual examples** for explaining architecture, NOT the actual configuration format. Always refer to this document for the real format.
+The "Problem Space" section in `docs/design-divide-and-conquer.md` shows **conceptual examples** for explaining architecture, NOT the actual configuration format. Always refer to this document for the real format.
 
 ---
 
@@ -133,7 +133,7 @@ These fields exist in the internal model, not the user config.
 | Items | Auto-discovered or subpath | Explicit list |
 | Purpose | User-facing | Internal processing |
 
-**Key takeaway:** Use `README.md` and `docs/configuration-reference.md` for configuration. The `docs/architecture-design.md` examples illustrate internal architecture only.
+**Key takeaway:** Use `README.md` and `docs/configuration-reference.md` for configuration. The `docs/design-divide-and-conquer.md` examples illustrate internal architecture only.
 
 ---
 
@@ -141,5 +141,5 @@ These fields exist in the internal model, not the user config.
 
 - **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
 - **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
-- **[Architecture Design](architecture-design.md)** - Internal architecture
+- **[Design Overview](design-overview.md)** - Architecture overview
 - **[Main README](../README.md)** - Getting started guide
