@@ -16,7 +16,7 @@ Set PlaybackSpeed 1.0
 Type "# Beyond Local File - Demo"
 Sleep 1s
 Enter
-Type "# Manage local dev files across projects with symlinks"
+Type "# Manage local dev files across projects with links"
 Sleep 2s
 Enter 2
 
@@ -57,17 +57,17 @@ Enter
 Sleep 1s
 
 # Run sync command
-Type "# Sync creates symlinks automatically"
+Type "# Sync creates links automatically"
 Sleep 1s
 Enter
-Type "beyond-local-file symlink sync"
+Type "beyond-local-file link sync"
 Sleep 500ms
 Enter
 Sleep 5s
 Enter
 
 # Check the results
-Type "# Verify symlinks were created"
+Type "# Verify links were created"
 Sleep 1s
 Enter
 Type "cd ../target-project"
@@ -97,12 +97,12 @@ Enter
 Type "cd ../my-dev-files"
 Sleep 500ms
 Enter
-Type "beyond-local-file symlink check"
+Type "beyond-local-file link check"
 Sleep 500ms
 Enter
 Sleep 4s
 Enter
 
 # End
-Type "# ✨ Done! Symlinks + Git excludes configured automatically"
+Type "# ✨ Done! Links + Git excludes configured automatically"
 Sleep 3s
