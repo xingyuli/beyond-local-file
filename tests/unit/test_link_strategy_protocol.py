@@ -15,7 +15,8 @@ from beyond_local_file.link_strategy_protocol import (
     LinkCreateResult,
     LinkStrategyManager,
 )
-from beyond_local_file.models import Project, ProjectItem
+from beyond_local_file.model.processing import ManagedProjectItem
+from beyond_local_file.models import Project
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.symlink_manager import SymlinkManager
 
@@ -62,10 +63,9 @@ def sample_project(temp_project_dir: Path) -> Project:
         Project instance with test items.
     """
     items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="file1.txt",
-            is_directory=False,
-            source_path=temp_project_dir / "file1.txt",
+            path=temp_project_dir / "file1.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
     ]
@@ -137,10 +137,9 @@ def test_copy_manager_implements_protocol(
     from beyond_local_file.copy_manager import CopyManager  # noqa: PLC0415 -- avoid circular import
 
     copy_items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="file1.txt",
-            is_directory=False,
-            source_path=temp_project_dir / "file1.txt",
+            path=temp_project_dir / "file1.txt",
             strategy=LinkStrategy.COPY,
         ),
     ]

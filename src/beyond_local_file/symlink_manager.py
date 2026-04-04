@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .git_manager import GitExcludeManager
 from .link_strategy_protocol import GitExcludeAddResult, GitExcludeCheckResult, LinkCheckResult, LinkCreateResult
-from .models import ProjectItem
+from .model.processing import ManagedProjectItem
 
 
 class Action(Enum):
@@ -75,11 +75,11 @@ class SymlinkManager:
         git_manager: Manager for Git exclude file operations.
     """
 
-    def __init__(self, symlink_items: list[ProjectItem], target_path: Path):
+    def __init__(self, symlink_items: list[ManagedProjectItem], target_path: Path):
         """Initialize the SymlinkManager.
 
         Args:
-            symlink_items: List of ProjectItem instances with SYMLINK strategy.
+            symlink_items: List of ManagedProjectItem instances with SYMLINK strategy.
                           Should be pre-filtered by the caller.
             target_path: The target directory for symlinks.
         """
@@ -111,12 +111,12 @@ class SymlinkManager:
         for item in self.symlink_items:
             link_path = self.target_path / item.name
 
-            if self._is_link_correct(link_path, item.source_path):
+            if self._is_link_correct(link_path, item.path):
                 result.already_correct.add(item.name)
                 continue
 
             if link_path.exists() or link_path.is_symlink():
-                action = self._handle_existing_path(link_path, item.source_path, ask_callback)
+                action = self._handle_existing_path(link_path, item.path, ask_callback)
                 if action == Action.SKIP:
                     result.skipped.add(item.name)
                     continue
@@ -129,7 +129,7 @@ class SymlinkManager:
             # Ensure parent directories exist for subpath items
             link_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if not self._create_symlink(item.source_path, link_path):
+            if not self._create_symlink(item.path, link_path):
                 result.failed.add(item.name)
                 continue
             result.created.add(item.name)
@@ -181,11 +181,11 @@ class SymlinkManager:
 
     # Protocol methods (LinkStrategyManager interface)
 
-    def get_managed_items(self) -> list[ProjectItem]:
+    def get_managed_items(self) -> list[ManagedProjectItem]:
         """Return the list of items this manager handles.
 
         Returns:
-            List of ProjectItem instances managed by this manager.
+            List of ManagedProjectItem instances managed by this manager.
         """
         return self.symlink_items
 

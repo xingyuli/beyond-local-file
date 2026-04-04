@@ -177,7 +177,7 @@ class LinkStrategyManager(Protocol):
         """Return the list of items this manager handles.
 
         Returns:
-            List of ProjectItem instances managed by this manager.
+            List of ManagedProjectItem instances managed by this manager.
         """
         ...
 

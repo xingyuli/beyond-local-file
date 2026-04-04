@@ -8,14 +8,14 @@ Processing models represent execution units after translation.
 """
 
 from .config import Config, ConfigProject, Mapping
-from .processing import ProcessingUnit, ProjectItem
+from .processing import ManagedProjectItem, ProcessingUnit
 from .translator import translate_config_to_processing
 
 __all__ = [
     "Config",
     "ConfigProject",
+    "ManagedProjectItem",
     "Mapping",
     "ProcessingUnit",
-    "ProjectItem",
     "translate_config_to_processing",
 ]

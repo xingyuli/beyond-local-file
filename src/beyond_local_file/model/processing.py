@@ -11,7 +11,7 @@ from ..options import LinkStrategy
 
 
 @dataclass
-class ProjectItem:
+class ManagedProjectItem:
     """A single file or directory in the managed project.
 
     Attributes:
@@ -65,7 +65,7 @@ class ProcessingUnit:
     managed_project_name: str
     managed_project_path: Path
     target_project_path: Path
-    items: list[ProjectItem] | None
+    items: list[ManagedProjectItem] | None
     display_name: str
     mapping_index: int
     target_index: int

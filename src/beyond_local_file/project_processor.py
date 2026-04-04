@@ -18,10 +18,9 @@ from .formatters import (
     SyncResultFormatter,
 )
 from .model.config import ConfigProject
-from .model.processing import ProcessingUnit, ProjectItem
+from .model.processing import ManagedProjectItem, ProcessingUnit
 from .model.translator import translate_config_to_processing
-from .models import Project, ProjectConfiguration
-from .models import ProjectItem as OldProjectItem
+from .models import Project
 from .options import LinkStrategy, OutputFormat
 from .symlink_manager import Action, CheckResult, SymlinkManager
 
@@ -36,38 +35,6 @@ def get_absolute_path(path: str) -> str:
         Absolute path as a string.
     """
     return str(Path(path).resolve())
-
-
-def load_config(config: str, project_name: str | None = None) -> tuple[dict[str, ProjectConfiguration], Path] | None:
-    """Load configuration and return project data with config directory.
-
-    DEPRECATED: Use load_config_projects() for new code. This function will be
-    removed after migration to the new model structure is complete.
-
-    Args:
-        config: Path to the YAML configuration file.
-        project_name: Optional project name to filter. If provided, only
-                    returns configuration for that project.
-
-    Returns:
-        Tuple of (project configurations dict, config directory path).
-        Returns None if loading failed.
-    """
-    config_path = get_absolute_path(config)
-
-    if not Path(config_path).exists():
-        click.echo(f"Config file not found: {config_path}")
-        return None
-
-    try:
-        cfg = Config(config_path)
-        cfg.load()
-        projects = cfg.get_projects(project_name)
-        config_dir = Path(config_path).parent
-        return projects, config_dir
-    except Exception as e:
-        click.echo(str(e))
-        return None
 
 
 def load_config_projects(config: str, project_name: str | None = None) -> tuple[dict[str, ConfigProject], Path] | None:
@@ -151,19 +118,8 @@ class CmdOperation(ABC):
             # Sync everything: scan directory
             project = Project.from_directory(unit.display_name, unit.managed_project_path)
         else:
-            # Sync specified items: convert ProjectItem list
-            old_items = []
-            for item in unit.items:
-                # Convert new ProjectItem to old ProjectItem
-                old_items.append(
-                    OldProjectItem(
-                        name=item.name,
-                        is_directory=item.path.is_dir(),
-                        source_path=item.path,
-                        strategy=item.strategy,
-                    )
-                )
-            project = Project(name=unit.display_name, directory=unit.managed_project_path, items=old_items)
+            # Sync specified items: use items directly (ManagedProjectItem is now unified)
+            project = Project(name=unit.display_name, directory=unit.managed_project_path, items=unit.items)
 
         return self.execute(project, unit.target_project_path)
 
@@ -171,66 +127,9 @@ class CmdOperation(ABC):
 class ProjectProcessor:
     """Processes projects for sync and check operations.
 
-    This class encapsulates the common logic for validating and processing
-    projects, reducing duplication between CLI commands.
+    This class provides static methods for processing projects using the new
+    model structure with translation layer.
     """
-
-    def __init__(self, projects_data: dict[str, ProjectConfiguration], config_dir: Path):
-        """Initialize the processor with project data.
-
-        Args:
-            projects_data: Dictionary mapping project names to ProjectConfiguration objects.
-            config_dir: Directory where the config file lives.
-        """
-        self.projects_data = projects_data
-        self.config_dir = config_dir
-
-    def process_all(self, operation: CmdOperation, skip_invalid: bool = True) -> bool:
-        """Process all projects with the given operation.
-
-        DEPRECATED: Use process_all_units() for new code. This method will be
-        removed after migration to the new model structure is complete.
-
-        Args:
-            operation: The operation to execute for each (project, target) pair.
-            skip_invalid: Whether to skip invalid projects or stop processing.
-
-        Returns:
-            True if all operations completed, False if aborted.
-        """
-        for proj_name, proj_config in self.projects_data.items():
-            project_dir = proj_config.project_path
-            target_paths = proj_config.targets
-
-            if not project_dir.exists():
-                click.echo(f"Project directory does not exist: {project_dir}")
-                if not skip_invalid:
-                    return False
-                continue
-
-            if proj_config.subpaths:
-                project = Project.from_subpaths(proj_name, project_dir, proj_config.subpaths, proj_config.copy_paths)
-            else:
-                project = Project.from_directory(proj_name, project_dir)
-
-            if not project.items:
-                click.echo(f"No items found in {project.name}")
-                if not skip_invalid:
-                    return False
-                continue
-
-            for target_path in target_paths:
-                if not target_path.exists():
-                    click.echo(f"Target directory does not exist: {target_path}")
-                    continue
-
-                if operation.verbose_progress:
-                    click.echo(f"\nProcessing {proj_name} -> {target_path}")
-
-                if not operation.execute(project, target_path):
-                    return False
-
-        return True
 
     @staticmethod
     def process_all_units(
@@ -268,7 +167,7 @@ class ProjectProcessor:
                 if unit.managed_project_path.exists() and unit.managed_project_path.is_dir():
                     for item_path in unit.managed_project_path.iterdir():
                         items.append(
-                            ProjectItem(
+                            ManagedProjectItem(
                                 name=item_path.name,
                                 path=item_path,
                                 strategy=LinkStrategy.SYMLINK,

@@ -18,7 +18,7 @@ from .link_strategy_protocol import (
     LinkCheckResult,
     LinkCreateResult,
 )
-from .models import ProjectItem
+from .model.processing import ManagedProjectItem
 from .options import LinkStrategy, SyncStatus
 from .sync_state import SyncState
 
@@ -90,7 +90,7 @@ class CopyManager:
         git_manager: Manager for Git exclude file operations.
     """
 
-    def __init__(self, copy_items: list[ProjectItem], target_path: Path, config_dir: Path):
+    def __init__(self, copy_items: list[ManagedProjectItem], target_path: Path, config_dir: Path):
         """Initialize the CopyManager.
 
         Args:
@@ -131,7 +131,7 @@ class CopyManager:
 
         for item in self.copy_items:
             target_file = self.target_path / item.name
-            managed_file = item.source_path
+            managed_file = item.path
 
             if not target_file.exists():
                 # First-time copy
@@ -179,7 +179,7 @@ class CopyManager:
                 result.missing.append(item.name)
                 continue
 
-            status = self.sync_state.detect_status(item.source_path, target_file)
+            status = self.sync_state.detect_status(item.path, target_file)
             status_map = {
                 SyncStatus.IN_SYNC: result.in_sync,
                 SyncStatus.MANUALLY_SYNCED: result.manually_synced,
@@ -193,11 +193,11 @@ class CopyManager:
 
     # Protocol methods (LinkStrategyManager interface)
 
-    def get_managed_items(self) -> list[ProjectItem]:
+    def get_managed_items(self) -> list[ManagedProjectItem]:
         """Return the list of items this manager handles.
 
         Returns:
-            List of ProjectItem instances managed by this manager.
+            List of ManagedProjectItem instances managed by this manager.
         """
         return self.copy_items
 

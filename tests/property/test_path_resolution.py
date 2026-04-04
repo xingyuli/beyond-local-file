@@ -141,11 +141,11 @@ def test_project_path_resolved_relative_to_config_file(
 
             # Load the config
             cfg = Config(config_file)
-            projects = cfg.get_projects()
+            config_projects = cfg.get_config_projects()
 
             # Get the resolved project path from the config
-            project_data = projects[relative_project_path]
-            actual_project_path = project_data.project_path
+            project_data = config_projects[relative_project_path]
+            actual_project_path = project_data.managed_project_path
 
             # Expected: project path should resolve relative to config file directory
             expected_project_path = (config_dir / relative_project_path).resolve()
@@ -223,11 +223,12 @@ def test_target_path_resolved_relative_to_cwd(
 
             # Load the config
             cfg = Config(config_file)
-            projects = cfg.get_projects()
+            config_projects = cfg.get_config_projects()
 
             # Get the resolved target paths from the config
-            project_data = projects["test_project"]
-            resolved_targets = project_data.targets
+            project_data = config_projects["test_project"]
+            # Get targets from first mapping
+            resolved_targets = project_data.mappings[0].targets
 
             # Expected path: CWD + relative_target_path
             expected_target_path = (test_cwd / relative_target_path).resolve()
@@ -324,15 +325,16 @@ def test_working_directory_independence(
             # Load the config using absolute path to config file
             # This simulates: beyond-local-file --config /path/to/config.yml
             cfg = Config(config_file)
-            projects = cfg.get_projects()
+            config_projects = cfg.get_config_projects()
 
             # Verify the config was loaded successfully
-            assert project_name in projects, f"Project '{project_name}' not found in loaded config"
+            assert project_name in config_projects, f"Project '{project_name}' not found in loaded config"
 
             # Get the resolved project path
-            project_data = projects[project_name]
-            actual_project_path = project_data.project_path
-            actual_targets = project_data.targets
+            project_data = config_projects[project_name]
+            actual_project_path = project_data.managed_project_path
+            # Get targets from first mapping
+            actual_targets = project_data.mappings[0].targets
 
             # Expected: project path should resolve relative to config file directory
             expected_project_path = (config_dir / project_name).resolve()

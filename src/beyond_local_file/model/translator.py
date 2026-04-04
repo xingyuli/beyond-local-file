@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..options import LinkStrategy
 from .config import ConfigProject
-from .processing import ProcessingUnit, ProjectItem
+from .processing import ManagedProjectItem, ProcessingUnit
 
 # Padding threshold for display names
 _PADDING_THRESHOLD = 10
@@ -50,7 +50,7 @@ def translate_config_to_processing(
 
     Items loading:
       - If mapping has no subpaths: items = None (sync everything)
-      - If mapping has subpaths: items = list[ProjectItem] (sync specified items only)
+      - If mapping has subpaths: items = list[ManagedProjectItem] (sync specified items only)
 
     Args:
         config_projects: Dictionary of project name to ConfigProject.
@@ -155,7 +155,7 @@ def _load_items(
     managed_project_path: Path,
     subpaths: list[str] | None,
     copy_paths: set[str] | None,
-) -> list[ProjectItem] | None:
+) -> list[ManagedProjectItem] | None:
     """Load project items based on subpaths configuration.
 
     Args:
@@ -165,7 +165,7 @@ def _load_items(
 
     Returns:
         None if no subpaths specified (sync everything),
-        list[ProjectItem] if subpaths specified (sync only those items).
+        list[ManagedProjectItem] if subpaths specified (sync only those items).
 
     Raises:
         ValueError: If copy strategy is used on a directory.
@@ -176,7 +176,7 @@ def _load_items(
 
     # Subpaths specified: create items for each valid subpath
     copy_set = copy_paths or set()
-    items: list[ProjectItem] = []
+    items: list[ManagedProjectItem] = []
 
     for subpath in subpaths:
         source_path = managed_project_path / subpath
@@ -188,7 +188,7 @@ def _load_items(
                 raise ValueError(f"Copy strategy is not supported for directories: {subpath}")
 
             items.append(
-                ProjectItem(
+                ManagedProjectItem(
                     name=subpath,
                     path=source_path,
                     strategy=strategy,

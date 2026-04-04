@@ -5,7 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from beyond_local_file.models import Project, ProjectItem
+from beyond_local_file.model.processing import ManagedProjectItem
+from beyond_local_file.models import Project
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.project_processor import CheckOperation, SyncOperation
 from beyond_local_file.symlink_manager import Action, SymlinkManager
@@ -33,7 +34,7 @@ def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
     """Test that the callback receives both target path and expected source."""
     # Create a project
     items = [
-        ProjectItem(name="file1.txt", is_directory=False, source_path=temp_project_dir / "file1.txt"),
+        ManagedProjectItem(name="file1.txt", path=temp_project_dir / "file1.txt", strategy=LinkStrategy.SYMLINK),
     ]
     project = Project(name="test-project", directory=temp_project_dir, items=items)
 
@@ -62,7 +63,7 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     """Test that overwrite action works correctly."""
     # Create a project
     items = [
-        ProjectItem(name="file1.txt", is_directory=False, source_path=temp_project_dir / "file1.txt"),
+        ManagedProjectItem(name="file1.txt", path=temp_project_dir / "file1.txt", strategy=LinkStrategy.SYMLINK),
     ]
     project = Project(name="test-project", directory=temp_project_dir, items=items)
 
@@ -114,28 +115,24 @@ def test_sync_with_mixed_strategies(tmp_path: Path) -> None:
 
     # Create project with mixed strategies
     items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="symlink1.txt",
-            is_directory=False,
-            source_path=project_dir / "symlink1.txt",
+            path=project_dir / "symlink1.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="symlink2.txt",
-            is_directory=False,
-            source_path=project_dir / "symlink2.txt",
+            path=project_dir / "symlink2.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="copy1.txt",
-            is_directory=False,
-            source_path=project_dir / "copy1.txt",
+            path=project_dir / "copy1.txt",
             strategy=LinkStrategy.COPY,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="copy2.txt",
-            is_directory=False,
-            source_path=project_dir / "copy2.txt",
+            path=project_dir / "copy2.txt",
             strategy=LinkStrategy.COPY,
         ),
     ]
@@ -194,16 +191,14 @@ def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
 
     # Create project with mixed strategies
     items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="symlink_file.txt",
-            is_directory=False,
-            source_path=project_dir / "symlink_file.txt",
+            path=project_dir / "symlink_file.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="copy_file.txt",
-            is_directory=False,
-            source_path=project_dir / "copy_file.txt",
+            path=project_dir / "copy_file.txt",
             strategy=LinkStrategy.COPY,
         ),
     ]

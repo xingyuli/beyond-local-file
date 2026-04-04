@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.models import Project, ProjectItem
+from beyond_local_file.model.processing import ManagedProjectItem
+from beyond_local_file.models import Project
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.project_processor import CheckOperation, SyncOperation
 
@@ -72,16 +73,14 @@ def sample_project(temp_project_dir: Path) -> Project:
         Project instance with test items.
     """
     items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="file1.txt",
-            is_directory=False,
-            source_path=temp_project_dir / "file1.txt",
+            path=temp_project_dir / "file1.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="file2.txt",
-            is_directory=False,
-            source_path=temp_project_dir / "file2.txt",
+            path=temp_project_dir / "file2.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
     ]
@@ -207,16 +206,14 @@ def test_check_operation_with_mixed_strategies(
     (project_dir / "copy_file.txt").write_text("copy content")
 
     items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="symlink_file.txt",
-            is_directory=False,
-            source_path=project_dir / "symlink_file.txt",
+            path=project_dir / "symlink_file.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="copy_file.txt",
-            is_directory=False,
-            source_path=project_dir / "copy_file.txt",
+            path=project_dir / "copy_file.txt",
             strategy=LinkStrategy.COPY,
         ),
     ]

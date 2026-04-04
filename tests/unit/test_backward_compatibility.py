@@ -53,26 +53,23 @@ def test_existing_config_files_work():
 
         # Load config and verify it works
         cfg = Config(config_path)
-        projects = cfg.get_projects()
+        config_projects = cfg.get_config_projects()
 
-        # Verify projects are loaded with sequence suffixes for multiple targets
-        # project-a has 2 targets, so it gets split into project-a#1 and project-a#2
-        assert "project-a#1" in projects
-        assert "project-a#2" in projects
-        # project-b has 1 target, so it keeps the original name
-        assert "project-b" in projects
+        # Verify projects are loaded correctly
+        # project-a has a list of 2 string mappings (each string becomes a separate mapping)
+        assert "project-a" in config_projects
+        assert len(config_projects["project-a"].mappings) == 2  # noqa: PLR2004
+        assert len(config_projects["project-a"].mappings[0].targets) == 1
+        assert len(config_projects["project-a"].mappings[1].targets) == 1
 
-        # Verify each project-a config has one target
-        assert len(projects["project-a#1"].targets) == 1
-        assert len(projects["project-a#2"].targets) == 1
-
-        # Verify project-b has one target
-        assert len(projects["project-b"].targets) == 1
+        # project-b has 1 target
+        assert "project-b" in config_projects
+        assert len(config_projects["project-b"].mappings) == 1
+        assert len(config_projects["project-b"].mappings[0].targets) == 1
 
         # Verify paths are resolved correctly
-        assert projects["project-a#1"].project_path == (td_path / "project-a").resolve()
-        assert projects["project-a#2"].project_path == (td_path / "project-a").resolve()
-        assert projects["project-b"].project_path == (td_path / "project-b").resolve()
+        assert config_projects["project-a"].managed_project_path == (td_path / "project-a").resolve()
+        assert config_projects["project-b"].managed_project_path == (td_path / "project-b").resolve()
 
 
 def test_same_output_format():
@@ -188,10 +185,10 @@ def test_backward_compatible_config_format_variations():
         (td_path / "target1").mkdir()
 
         cfg1 = Config(config_path1)
-        projects1 = cfg1.get_projects()
-        assert len(projects1["project1"].targets) == 1
+        config_projects1 = cfg1.get_config_projects()
+        assert len(config_projects1["project1"].mappings[0].targets) == 1
 
-        # Test 2: Multiple targets as list - now creates separate configs with suffixes
+        # Test 2: Multiple targets as list - now stored in single mapping
         config2 = {"project2": [str(td_path / "target2"), str(td_path / "target3")]}
         config_path2 = td_path / "config2.yml"
         config_path2.write_text(yaml.dump(config2))
@@ -201,13 +198,13 @@ def test_backward_compatible_config_format_variations():
         (td_path / "target3").mkdir()
 
         cfg2 = Config(config_path2)
-        projects2 = cfg2.get_projects()
-        # Multiple targets get split into separate configs with sequence suffixes
-        assert len(projects2) == 2  # noqa: PLR2004 - test expects 2 configs
-        assert "project2#1" in projects2
-        assert "project2#2" in projects2
-        assert len(projects2["project2#1"].targets) == 1
-        assert len(projects2["project2#2"].targets) == 1
+        config_projects2 = cfg2.get_config_projects()
+        # Multiple string targets in a list create separate mappings
+        assert len(config_projects2) == 1
+        assert "project2" in config_projects2
+        assert len(config_projects2["project2"].mappings) == 2  # noqa: PLR2004
+        assert len(config_projects2["project2"].mappings[0].targets) == 1
+        assert len(config_projects2["project2"].mappings[1].targets) == 1
 
         # Test 3: Mixed absolute and relative paths
         config3 = {
@@ -224,11 +221,13 @@ def test_backward_compatible_config_format_variations():
         (td_path / "target6").mkdir()
 
         cfg3 = Config(config_path3)
-        projects3 = cfg3.get_projects()
-        assert "project3" in projects3
-        # project4 has multiple targets, so it gets split with suffixes
-        assert "project4#1" in projects3
-        assert "project4#2" in projects3
+        config_projects3 = cfg3.get_config_projects()
+        assert "project3" in config_projects3
+        # project4 has list of 2 string targets, creating 2 separate mappings
+        assert "project4" in config_projects3
+        assert len(config_projects3["project4"].mappings) == 2  # noqa: PLR2004
+        assert len(config_projects3["project4"].mappings[0].targets) == 1
+        assert len(config_projects3["project4"].mappings[1].targets) == 1
 
 
 def test_backward_compatible_cli_commands():
@@ -309,8 +308,8 @@ def test_backward_compatible_relative_paths():
 
         # Load config and verify relative path resolution
         cfg = Config(config_path)
-        projects = cfg.get_projects()
+        config_projects = cfg.get_config_projects()
 
         # The project path should be resolved relative to config file
         expected_project_path = (config_dir / "projects" / "my-project").resolve()
-        assert projects["projects/my-project"].project_path == expected_project_path
+        assert config_projects["projects/my-project"].managed_project_path == expected_project_path

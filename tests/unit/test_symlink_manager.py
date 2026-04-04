@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.models import Project, ProjectItem
+from beyond_local_file.model.processing import ManagedProjectItem
+from beyond_local_file.models import Project
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.symlink_manager import Action, SymlinkManager
 
@@ -59,22 +60,19 @@ def sample_project(temp_project_dir: Path) -> Project:
         Project instance with test items.
     """
     items = [
-        ProjectItem(
+        ManagedProjectItem(
             name="file1.txt",
-            is_directory=False,
-            source_path=temp_project_dir / "file1.txt",
+            path=temp_project_dir / "file1.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="file2.txt",
-            is_directory=False,
-            source_path=temp_project_dir / "file2.txt",
+            path=temp_project_dir / "file2.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
-        ProjectItem(
+        ManagedProjectItem(
             name="subdir",
-            is_directory=True,
-            source_path=temp_project_dir / "subdir",
+            path=temp_project_dir / "subdir",
             strategy=LinkStrategy.SYMLINK,
         ),
     ]
