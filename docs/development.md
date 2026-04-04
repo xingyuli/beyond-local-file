@@ -3,9 +3,6 @@
 ## Table of Contents
 
 - [Development Installation](#development-installation)
-  - [Method 1: Using uv run (Recommended)](#method-1-using-uv-run-recommended)
-  - [Method 2: Using uvx with local path](#method-2-using-uvx-with-local-path)
-  - [Method 3: Traditional virtual environment](#method-3-traditional-virtual-environment)
 - [Running Tests](#running-tests)
 - [Code Quality](#code-quality)
   - [Pre-commit Hooks](#pre-commit-hooks)
@@ -22,58 +19,50 @@ This guide is for developers who want to contribute to or modify the `beyond-loc
 
 ## Development Installation
 
-If you need to modify the tool code, clone the repository and use one of these methods:
-
-### Method 1: Using `uv run` (Recommended)
+If you need to modify the tool code, clone the repository and run it directly from the local source:
 
 ```bash
 git clone https://github.com/xingyuli/beyond-local-file.git
 cd beyond-local-file
 
 # Run directly from the tool repository
-uv run beyond-local-file --help
+uv run --no-cache beyond-local-file --help
 
 # Run from your managed projects directory
 cd /path/to/your/managed-projects
-uv run --directory /path/to/beyond-local-file blf link check
+uv run --no-cache --project /path/to/beyond-local-file beyond-local-file link check
 ```
 
-### Method 2: Using `uvx` with local path
+### Recommended: Create a Development Alias
+
+For convenience, add this alias to your shell configuration (`~/.bashrc`, `~/.zshrc`, etc.):
 
 ```bash
-git clone https://github.com/xingyuli/beyond-local-file.git
-
-# Run from anywhere, pointing to local repository
-uvx --from /path/to/beyond-local-file beyond-local-file --help
-
-# Run from managed projects directory
-cd /path/to/your/managed-projects
-uvx --from /path/to/beyond-local-file blf link sync
+alias blf_dev='uv run --no-cache --project /path/to/beyond-local-file beyond-local-file'
 ```
 
-### Method 3: Traditional virtual environment
+This mirrors the production alias pattern:
 
 ```bash
-git clone https://github.com/xingyuli/beyond-local-file.git
-cd beyond-local-file
-
-# Create and activate virtual environment
-uv venv
-source .venv/bin/activate  # On macOS/Linux
-# .venv\Scripts\activate   # On Windows
-
-# Install in editable mode
-uv pip install -e .
-
-# Now the command is available in your PATH
-beyond-local-file --help
-
-# Run from managed projects directory
-cd /path/to/your/managed-projects
-blf link check
+alias blf='beyond-local-file'      # production (installed via uv tool install)
+alias blf_dev='uv run --no-cache --project /path/to/beyond-local-file beyond-local-file'  # development
 ```
 
-**Note**: `uvx` creates its own isolated environments and won't see packages installed with `uv pip install -e .`. Use `uv run` or activate the virtual environment if you need the command available directly.
+With the alias configured, you can use `blf_dev` from any directory:
+
+```bash
+cd /path/to/your/managed-projects
+blf_dev link check
+blf_dev link sync
+```
+
+### Why This Approach?
+
+- `--no-cache` ensures you always run the latest code from your local repository
+- `--project` discovers the project without changing the working directory (preserves config path resolution)
+- No installation or virtual environment activation required
+- Clean output without build messages
+- Works from any directory
 
 ## Running Tests
 

@@ -114,6 +114,10 @@ Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`
 
 All project tasks are tracked under `local-file/tasks/` with task groups, indices, and individual task files.
 
+**For complete task format specification, see:** `local-file/agentic/specs/task-definition-spec.md`
+
+This section provides a quick reference. The formal spec contains detailed guidelines on task structure, naming conventions, workflow, and best practices.
+
 ### Structure
 
 ```
