@@ -175,7 +175,7 @@ class Config:
         """Split a configuration with multiple targets into separate configs.
 
         Args:
-            name: The base project name.
+            name: The base project name (original, without suffix).
             config: ProjectConfiguration with multiple targets.
 
         Returns:
@@ -183,11 +183,12 @@ class Config:
             one per target with 1-based sequence suffixes.
         """
         configs = {}
+        # Use the project_path from the original config (already resolved correctly)
         for seq, target in enumerate(config.targets, start=1):
             synthetic_name = f"{name}#{seq}"
             configs[synthetic_name] = ProjectConfiguration(
                 name=synthetic_name,
-                project_path=config.project_path,
+                project_path=config.project_path,  # Reuse already-resolved path
                 targets=[target],
                 subpaths=config.subpaths,
                 copy_paths=config.copy_paths,
@@ -238,6 +239,8 @@ class Config:
         configs = {}
         simple_targets = []
         seq = 1  # 1-based sequence number
+        # Resolve project path once using the original name (without suffix)
+        project_path = self._resolve_project_path(name)
 
         for item in value:
             if isinstance(item, str):
@@ -247,14 +250,23 @@ class Config:
                 # Create a separate config for this dict entry with 1-based sequence
                 synthetic_name = f"{name}#{seq}"
                 seq += 1
-                configs[synthetic_name] = self._build_project_config(synthetic_name, item)
+                targets = self._normalize_targets(item["target"])
+                raw_subpaths = item.get("subpath")
+                subpaths, copy_paths = self._parse_subpaths(raw_subpaths)
+                configs[synthetic_name] = ProjectConfiguration(
+                    name=synthetic_name,
+                    project_path=project_path,  # Use pre-resolved path
+                    targets=targets,
+                    subpaths=subpaths,
+                    copy_paths=copy_paths or None,
+                )
 
         # If there are simple targets, create a config for them
         if simple_targets:
             synthetic_name = f"{name}#{seq}"
             configs[synthetic_name] = ProjectConfiguration(
                 name=synthetic_name,
-                project_path=self._resolve_project_path(name),
+                project_path=project_path,  # Use pre-resolved path
                 targets=self._normalize_targets(simple_targets),
             )
 
