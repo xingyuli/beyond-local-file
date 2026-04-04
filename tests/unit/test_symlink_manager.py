@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.models import Project
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.symlink_manager import Action, SymlinkManager
 
@@ -50,16 +49,16 @@ def temp_target_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_project(temp_project_dir: Path) -> Project:
-    """Create a sample project with symlink items.
+def sample_items(temp_project_dir: Path) -> list[ManagedProjectItem]:
+    """Create a sample list of managed project items.
 
     Args:
         temp_project_dir: Temporary project directory fixture.
 
     Returns:
-        Project instance with test items.
+        List of ManagedProjectItem instances.
     """
-    items = [
+    return [
         ManagedProjectItem(
             name="file1.txt",
             path=temp_project_dir / "file1.txt",
@@ -76,20 +75,22 @@ def sample_project(temp_project_dir: Path) -> Project:
             strategy=LinkStrategy.SYMLINK,
         ),
     ]
-    return Project(name="test-project", directory=temp_project_dir, items=items)
 
 
 # Test Suite: SymlinkManager Sync Behavior
 
 
-def test_sync_creates_symlinks_for_all_items(sample_project: Project, temp_target_dir: Path) -> None:
+def test_sync_creates_symlinks_for_all_items(
+    sample_items: list[ManagedProjectItem], temp_project_dir: Path, temp_target_dir: Path
+) -> None:
     """Test that sync creates symlinks for all project items.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
+        temp_project_dir: Temporary project directory fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
     result = manager.sync()
 
     # All items should be created
@@ -109,19 +110,19 @@ def test_sync_creates_symlinks_for_all_items(sample_project: Project, temp_targe
     assert (temp_target_dir / "file2.txt").is_symlink()
     assert (temp_target_dir / "subdir").is_symlink()
 
-    assert (temp_target_dir / "file1.txt").resolve() == (sample_project.directory / "file1.txt").resolve()
-    assert (temp_target_dir / "file2.txt").resolve() == (sample_project.directory / "file2.txt").resolve()
-    assert (temp_target_dir / "subdir").resolve() == (sample_project.directory / "subdir").resolve()
+    assert (temp_target_dir / "file1.txt").resolve() == (temp_project_dir / "file1.txt").resolve()
+    assert (temp_target_dir / "file2.txt").resolve() == (temp_project_dir / "file2.txt").resolve()
+    assert (temp_target_dir / "subdir").resolve() == (temp_project_dir / "subdir").resolve()
 
 
-def test_sync_skips_existing_correct_symlinks(sample_project: Project, temp_target_dir: Path) -> None:
+def test_sync_skips_existing_correct_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
     """Test that sync skips symlinks that already exist and are correct.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
 
     # First sync creates symlinks
     result1 = manager.sync()
@@ -139,11 +140,13 @@ def test_sync_skips_existing_correct_symlinks(sample_project: Project, temp_targ
     assert len(result2.failed) == 0
 
 
-def test_sync_detects_incorrect_symlinks(sample_project: Project, temp_target_dir: Path) -> None:
+def test_sync_detects_incorrect_symlinks(
+    sample_items: list[ManagedProjectItem], temp_target_dir: Path
+) -> None:
     """Test that sync detects symlinks pointing to wrong sources.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         temp_target_dir: Temporary target directory fixture.
     """
     # Create incorrect symlinks (pointing to wrong sources)
@@ -155,7 +158,7 @@ def test_sync_detects_incorrect_symlinks(sample_project: Project, temp_target_di
     def skip_callback(target_path: str, expected_source: str) -> Action:
         return Action.SKIP
 
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
     result = manager.sync(ask_callback=skip_callback)
 
     # file1.txt should be skipped (incorrect symlink)
@@ -168,11 +171,14 @@ def test_sync_detects_incorrect_symlinks(sample_project: Project, temp_target_di
     assert (temp_target_dir / "file1.txt").resolve() == wrong_source.resolve()
 
 
-def test_sync_overwrites_with_callback_approval(sample_project: Project, temp_target_dir: Path) -> None:
+def test_sync_overwrites_with_callback_approval(
+    sample_items: list[ManagedProjectItem], temp_project_dir: Path, temp_target_dir: Path
+) -> None:
     """Test that sync overwrites incorrect symlinks when callback approves.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
+        temp_project_dir: Temporary project directory fixture.
         temp_target_dir: Temporary target directory fixture.
     """
     # Create incorrect symlink
@@ -184,7 +190,7 @@ def test_sync_overwrites_with_callback_approval(sample_project: Project, temp_ta
     def overwrite_callback(target_path: str, expected_source: str) -> Action:
         return Action.OVERWRITE
 
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
     result = manager.sync(ask_callback=overwrite_callback)
 
     # All items should be created (file1.txt overwritten)
@@ -194,21 +200,21 @@ def test_sync_overwrites_with_callback_approval(sample_project: Project, temp_ta
     assert "subdir" in result.created
 
     # Verify file1.txt now points to correct source
-    assert (temp_target_dir / "file1.txt").resolve() == (sample_project.directory / "file1.txt").resolve()
+    assert (temp_target_dir / "file1.txt").resolve() == (temp_project_dir / "file1.txt").resolve()
 
 
 # Test Suite: SymlinkManager Check Behavior
 
 
-def test_check_reports_existing_symlinks(sample_project: Project, temp_target_dir: Path) -> None:
+def test_check_reports_existing_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
     """Test that check reports symlinks that exist.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         temp_target_dir: Temporary target directory fixture.
     """
     # Create symlinks
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
     manager.sync()
 
     # Check should report all symlinks as existing
@@ -221,14 +227,14 @@ def test_check_reports_existing_symlinks(sample_project: Project, temp_target_di
     assert len(result.symlink_missing) == 0
 
 
-def test_check_reports_missing_symlinks(sample_project: Project, temp_target_dir: Path) -> None:
+def test_check_reports_missing_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
     """Test that check reports symlinks that are missing.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
 
     # Check without creating symlinks
     result = manager.check()
@@ -243,11 +249,11 @@ def test_check_reports_missing_symlinks(sample_project: Project, temp_target_dir
 # Test Suite: SymlinkManager Git Exclude Behavior
 
 
-def test_check_reports_git_exclude_status(sample_project: Project, tmp_path: Path) -> None:
+def test_check_reports_git_exclude_status(sample_items: list[ManagedProjectItem], tmp_path: Path) -> None:
     """Test that check reports git exclude status correctly.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         tmp_path: Pytest temporary directory fixture.
     """
     # Create a git repo in target directory
@@ -262,7 +268,7 @@ def test_check_reports_git_exclude_status(sample_project: Project, tmp_path: Pat
     exclude_file = info_dir / "exclude"
     exclude_file.write_text("file1.txt\n")
 
-    manager = SymlinkManager(sample_project.items, target_dir)
+    manager = SymlinkManager(sample_items, target_dir)
     result = manager.check()
 
     # file1.txt should be in exclude_present
@@ -273,7 +279,7 @@ def test_check_reports_git_exclude_status(sample_project: Project, tmp_path: Pat
     assert "subdir" in result.exclude_missing
 
 
-def test_check_git_excludes_with_protocol(sample_project: Project, tmp_path: Path) -> None:
+def test_check_git_excludes_with_protocol(sample_items: list[ManagedProjectItem], tmp_path: Path) -> None:
     """Test that check_git_excludes protocol method correctly identifies extra entries.
 
     After refactoring, managers use check_git_excludes(all_valid_entries) to
@@ -281,7 +287,7 @@ def test_check_git_excludes_with_protocol(sample_project: Project, tmp_path: Pat
     names from ALL managers, preventing cross-manager false positives.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         tmp_path: Pytest temporary directory fixture.
     """
     # Create a git repo in target directory
@@ -299,7 +305,7 @@ def test_check_git_excludes_with_protocol(sample_project: Project, tmp_path: Pat
     # Simulate all_valid_entries from all managers (symlink + copy)
     all_valid_entries = {"file1.txt", "file2.txt", "subdir", "copy_file.txt"}
 
-    manager = SymlinkManager(sample_project.items, target_dir)
+    manager = SymlinkManager(sample_items, target_dir)
     result = manager.check_git_excludes(all_valid_entries)
 
     # All symlink items should be in present

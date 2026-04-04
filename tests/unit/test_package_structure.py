@@ -20,7 +20,6 @@ def test_all_modules_exist_in_package():
     required_modules = [
         "cli.py",
         "config.py",
-        "models.py",
         "formatters.py",
         "git_manager.py",
         "project_processor.py",
@@ -81,7 +80,6 @@ def test_built_wheel_contains_only_package():
                 "beyond_local_file/__init__.py",
                 "beyond_local_file/cli.py",
                 "beyond_local_file/config.py",
-                "beyond_local_file/models.py",
                 "beyond_local_file/formatters.py",
                 "beyond_local_file/git_manager.py",
                 "beyond_local_file/project_processor.py",

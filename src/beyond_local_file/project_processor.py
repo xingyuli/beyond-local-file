@@ -20,7 +20,6 @@ from .formatters import (
 from .model.config import ConfigProject
 from .model.processing import ManagedProjectItem, ProcessingUnit
 from .model.translator import translate_config_to_processing
-from .models import Project
 from .options import LinkStrategy, OutputFormat
 from .symlink_manager import Action, CheckResult, SymlinkManager
 
@@ -67,9 +66,9 @@ def load_config_projects(config: str, project_name: str | None = None) -> tuple[
 
 
 class CmdOperation(ABC):
-    """Base class for CLI operations executed per project/target pair.
+    """Base class for CLI operations executed per processing unit.
 
-    Subclasses implement :meth:`execute` to perform the actual work, and may
+    Subclasses implement :meth:`execute_unit` to perform the actual work, and may
     override :attr:`verbose_progress` to suppress the per-target progress line
     printed by :class:`ProjectProcessor` (useful when output is deferred, e.g.
     a table rendered after all projects are processed).
@@ -86,26 +85,8 @@ class CmdOperation(ABC):
         return True
 
     @abstractmethod
-    def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute the operation for a single project/target pair.
-
-        DEPRECATED: Use execute_unit() for new code. This method will be
-        removed after migration to the new model structure is complete.
-
-        Args:
-            project: The project to process.
-            target_path: The target directory to operate on.
-
-        Returns:
-            True to continue processing, False to abort.
-        """
-
     def execute_unit(self, unit: ProcessingUnit) -> bool:
         """Execute the operation for a single processing unit.
-
-        Default implementation converts ProcessingUnit to Project and calls
-        execute() for backward compatibility. Subclasses should override this
-        method to work directly with ProcessingUnit.
 
         Args:
             unit: The processing unit to execute.
@@ -113,15 +94,6 @@ class CmdOperation(ABC):
         Returns:
             True to continue processing, False to abort.
         """
-        # Convert ProcessingUnit to Project for backward compatibility
-        if unit.items is None:
-            # Sync everything: scan directory
-            project = Project.from_directory(unit.display_name, unit.managed_project_path)
-        else:
-            # Sync specified items: use items directly (ManagedProjectItem is now unified)
-            project = Project(name=unit.display_name, directory=unit.managed_project_path, items=unit.items)
-
-        return self.execute(project, unit.target_project_path)
 
 
 class ProjectProcessor:
@@ -219,32 +191,34 @@ class SyncOperation(CmdOperation):
         self.ask_callback = ask_callback
         self.conflict_callback = conflict_callback
 
-    def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute the sync operation for symlinks and copies.
+    def execute_unit(self, unit: ProcessingUnit) -> bool:
+        """Execute the sync operation for a single processing unit.
 
         Uses divide-and-conquer strategy: partition items by strategy,
         then delegate to appropriate managers.
 
         Args:
-            project: The project to sync.
-            target_path: The target directory.
+            unit: The processing unit to sync.
 
         Returns:
             True to continue, False if aborted.
         """
+        if not unit.items:
+            return True
+
         # PARTITION: Divide items by strategy
-        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
+        symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
+        copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
 
         # CONQUER: Delegate to appropriate managers
 
         # Handle symlink items
         if symlink_items:
-            manager = SymlinkManager(symlink_items, target_path)
+            manager = SymlinkManager(symlink_items, unit.target_project_path)
             result = manager.sync(self.ask_callback)
 
-            formatter = SyncResultFormatter(project, result)
-            formatter.format(project.name, target_path)
+            formatter = SyncResultFormatter(unit.display_name, unit.managed_project_path, result)
+            formatter.format(unit.display_name, unit.target_project_path)
 
             if result.aborted:
                 click.echo("Aborted by user")
@@ -252,9 +226,9 @@ class SyncOperation(CmdOperation):
 
         # Handle copy items
         if copy_items:
-            copy_mgr = CopyManager(copy_items, target_path, self.config_dir)
+            copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir)
             copy_result = copy_mgr.sync(self.conflict_callback)
-            CopyResultFormatter(copy_result).format(project.name, target_path)
+            CopyResultFormatter(copy_result).format(unit.display_name, unit.target_project_path)
 
         return True
 
@@ -286,26 +260,28 @@ class CheckOperation(CmdOperation):
         """Whether to print per-target progress lines during processing."""
         return self.output_format == OutputFormat.VERBOSE
 
-    def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute the check operation for a single project/target pair.
+    def execute_unit(self, unit: ProcessingUnit) -> bool:
+        """Execute the check operation for a single processing unit.
 
         Uses divide-and-conquer strategy: partition items by strategy,
         then delegate to appropriate managers.
 
         Args:
-            project: The project to check.
-            target_path: The target directory to check.
+            unit: The processing unit to check.
 
         Returns:
             Always True to continue processing.
         """
+        if not unit.items:
+            return True
+
         # PARTITION: Divide items by strategy
-        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
+        symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
+        copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
 
         # CONQUER: Create managers with partitioned items
-        symlink_mgr = SymlinkManager(symlink_items, target_path) if symlink_items else None
-        copy_mgr = CopyManager(copy_items, target_path, self.config_dir) if copy_items else None
+        symlink_mgr = SymlinkManager(symlink_items, unit.target_project_path) if symlink_items else None
+        copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir) if copy_items else None
 
         # Collect all valid entry names from ALL managers for git exclude checking
         all_valid_entries: set[str] = set()
@@ -335,14 +311,14 @@ class CheckOperation(CmdOperation):
         if self.output_format == OutputFormat.VERBOSE:
             if symlink_result:
                 formatter = CheckResultFormatter(symlink_result, self.show_extra)
-                formatter.format(project.name, target_path)
+                formatter.format(unit.display_name, unit.target_project_path)
             if copy_result:
-                CopyCheckResultFormatter(copy_result).format(project.name, target_path)
+                CopyCheckResultFormatter(copy_result).format(unit.display_name, unit.target_project_path)
         else:
             # For table format, we need a symlink_result even if empty
             if not symlink_result:
                 symlink_result = CheckResult()
-            self._rows.append(CheckRow(project.name, target_path, symlink_result, copy_result))
+            self._rows.append(CheckRow(unit.display_name, unit.target_project_path, symlink_result, copy_result))
 
         return True
 

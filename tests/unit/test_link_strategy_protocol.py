@@ -16,7 +16,6 @@ from beyond_local_file.link_strategy_protocol import (
     LinkStrategyManager,
 )
 from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.models import Project
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.symlink_manager import SymlinkManager
 
@@ -53,23 +52,22 @@ def temp_target_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_project(temp_project_dir: Path) -> Project:
-    """Create a sample project with symlink items.
+def sample_items(temp_project_dir: Path) -> list[ManagedProjectItem]:
+    """Create a sample list of managed project items.
 
     Args:
         temp_project_dir: Temporary project directory fixture.
 
     Returns:
-        Project instance with test items.
+        List of ManagedProjectItem instances.
     """
-    items = [
+    return [
         ManagedProjectItem(
             name="file1.txt",
             path=temp_project_dir / "file1.txt",
             strategy=LinkStrategy.SYMLINK,
         ),
     ]
-    return Project(name="test-project", directory=temp_project_dir, items=items)
 
 
 def test_protocol_defines_get_managed_items_method() -> None:
@@ -98,16 +96,16 @@ def test_protocol_defines_check_git_excludes_method() -> None:
 
 
 def test_symlink_manager_implements_protocol(
-    sample_project: Project,
+    sample_items: list[ManagedProjectItem],
     temp_target_dir: Path,
 ) -> None:
     """Test that SymlinkManager implements the LinkStrategyManager protocol.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
 
     # Verify manager has all protocol methods
     assert hasattr(manager, "get_managed_items")
@@ -162,16 +160,16 @@ def test_copy_manager_implements_protocol(
 
 
 def test_protocol_methods_return_unified_types(
-    sample_project: Project,
+    sample_items: list[ManagedProjectItem],
     temp_target_dir: Path,
 ) -> None:
     """Test that protocol methods return unified result types.
 
     Args:
-        sample_project: Sample project fixture.
+        sample_items: Sample managed project items fixture.
         temp_target_dir: Temporary target directory fixture.
     """
-    manager = SymlinkManager(sample_project.items, temp_target_dir)
+    manager = SymlinkManager(sample_items, temp_target_dir)
 
     # Test get_managed_items returns list
     items = manager.get_managed_items()

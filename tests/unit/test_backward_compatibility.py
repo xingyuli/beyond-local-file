@@ -12,7 +12,6 @@ from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
 from beyond_local_file.config import Config
-from beyond_local_file.models import Project
 from beyond_local_file.symlink_manager import SymlinkManager
 
 
@@ -128,11 +127,30 @@ def test_same_symlink_behavior():
         target_dir = td_path / "target"
         target_dir.mkdir()
 
-        # Create a Project instance
-        project = Project.from_directory("test-project", project_dir)
+        # Create managed project items
+        from beyond_local_file.model.processing import ManagedProjectItem  # noqa: PLC0415 -- avoid circular import
+        from beyond_local_file.options import LinkStrategy  # noqa: PLC0415 -- avoid circular import
+
+        items = [
+            ManagedProjectItem(
+                name="file1.txt",
+                path=project_dir / "file1.txt",
+                strategy=LinkStrategy.SYMLINK,
+            ),
+            ManagedProjectItem(
+                name="file2.txt",
+                path=project_dir / "file2.txt",
+                strategy=LinkStrategy.SYMLINK,
+            ),
+            ManagedProjectItem(
+                name="subdir",
+                path=project_dir / "subdir",
+                strategy=LinkStrategy.SYMLINK,
+            ),
+        ]
 
         # Create SymlinkManager and sync
-        manager = SymlinkManager(project.items, target_dir)
+        manager = SymlinkManager(items, target_dir)
         result = manager.sync()
 
         # Verify symlink creation behavior

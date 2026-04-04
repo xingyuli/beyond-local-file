@@ -11,7 +11,6 @@ from rich.console import Console
 from rich.table import Table
 
 from .copy_manager import CopyCheckResult, CopyResult
-from .models import Project
 from .symlink_manager import CheckResult, SyncResult
 
 
@@ -26,14 +25,16 @@ class ResultFormatter(Protocol):
 class SyncResultFormatter:
     """Formatter for sync operation results."""
 
-    def __init__(self, project: Project, result: SyncResult):
-        """Initialize formatter with project and result.
+    def __init__(self, project_name: str, project_directory: Path, result: SyncResult):
+        """Initialize formatter with project info and result.
 
         Args:
-            project: The project that was synced.
+            project_name: Name of the project that was synced.
+            project_directory: Directory path of the managed project.
             result: The sync operation result.
         """
-        self.project = project
+        self.project_name = project_name
+        self.project_directory = project_directory
         self.result = result
 
     def format(self, project_name: str, target_path: Path) -> None:
@@ -51,14 +52,14 @@ class SyncResultFormatter:
     def _format_already_correct(self, target_path: Path) -> None:
         """Format already correct symlinks."""
         for item in sorted(self.result.already_correct):
-            source_path = self.project.directory / item
+            source_path = self.project_directory / item
             link_path = target_path / item
             click.echo(f"Symlink already correct: {link_path} -> {source_path}")
 
     def _format_created(self, target_path: Path) -> None:
         """Format newly created symlinks."""
         for item in sorted(self.result.created):
-            source_path = self.project.directory / item
+            source_path = self.project_directory / item
             link_path = target_path / item
             click.echo(f"Created symlink: {link_path} -> {source_path}")
 

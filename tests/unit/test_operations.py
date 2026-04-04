@@ -9,8 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.models import Project
+from beyond_local_file.model.processing import ManagedProjectItem, ProcessingUnit
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.project_processor import CheckOperation, SyncOperation
 
@@ -63,14 +62,15 @@ def temp_config_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_project(temp_project_dir: Path) -> Project:
-    """Create a sample project with symlink items.
+def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit:
+    """Create a sample processing unit with symlink items.
 
     Args:
         temp_project_dir: Temporary project directory fixture.
+        temp_target_dir: Temporary target directory fixture.
 
     Returns:
-        Project instance with test items.
+        ProcessingUnit instance with test items.
     """
     items = [
         ManagedProjectItem(
@@ -84,44 +84,50 @@ def sample_project(temp_project_dir: Path) -> Project:
             strategy=LinkStrategy.SYMLINK,
         ),
     ]
-    return Project(name="test-project", directory=temp_project_dir, items=items)
+    return ProcessingUnit(
+        managed_project_name="test-project",
+        managed_project_path=temp_project_dir,
+        target_project_path=temp_target_dir,
+        items=items,
+        display_name="test-project",
+        mapping_index=0,
+        target_index=0,
+    )
 
 
 # Test Suite: SyncOperation Behavior
 
 
 def test_sync_operation_creates_symlinks_for_project(
-    sample_project: Project,
-    temp_target_dir: Path,
+    sample_unit: ProcessingUnit,
     temp_config_dir: Path,
 ) -> None:
     """Test that SyncOperation creates symlinks for all project items.
 
     Args:
-        sample_project: Sample project fixture.
-        temp_target_dir: Temporary target directory fixture.
+        sample_unit: Sample processing unit fixture.
         temp_config_dir: Temporary config directory fixture.
     """
     operation = SyncOperation(temp_config_dir)
-    success = operation.execute(sample_project, temp_target_dir)
+    success = operation.execute_unit(sample_unit)
 
     # Operation should succeed
     assert success
 
     # Verify symlinks were created
-    assert (temp_target_dir / "file1.txt").is_symlink()
-    assert (temp_target_dir / "file2.txt").is_symlink()
+    assert (sample_unit.target_project_path / "file1.txt").is_symlink()
+    assert (sample_unit.target_project_path / "file2.txt").is_symlink()
 
 
 def test_sync_operation_handles_git_exclude(
-    sample_project: Project,
+    temp_project_dir: Path,
     tmp_path: Path,
     temp_config_dir: Path,
 ) -> None:
     """Test that SyncOperation adds git exclude entries for synced items.
 
     Args:
-        sample_project: Sample project fixture.
+        temp_project_dir: Temporary project directory fixture.
         tmp_path: Pytest temporary directory fixture.
         temp_config_dir: Temporary config directory fixture.
     """
@@ -133,8 +139,30 @@ def test_sync_operation_handles_git_exclude(
     info_dir = git_dir / "info"
     info_dir.mkdir()
 
+    items = [
+        ManagedProjectItem(
+            name="file1.txt",
+            path=temp_project_dir / "file1.txt",
+            strategy=LinkStrategy.SYMLINK,
+        ),
+        ManagedProjectItem(
+            name="file2.txt",
+            path=temp_project_dir / "file2.txt",
+            strategy=LinkStrategy.SYMLINK,
+        ),
+    ]
+    unit = ProcessingUnit(
+        managed_project_name="test-project",
+        managed_project_path=temp_project_dir,
+        target_project_path=target_dir,
+        items=items,
+        display_name="test-project",
+        mapping_index=0,
+        target_index=0,
+    )
+
     operation = SyncOperation(temp_config_dir)
-    success = operation.execute(sample_project, target_dir)
+    success = operation.execute_unit(unit)
 
     # Operation should succeed
     assert success
@@ -152,22 +180,20 @@ def test_sync_operation_handles_git_exclude(
 
 
 def test_check_operation_reports_status(
-    sample_project: Project,
-    temp_target_dir: Path,
+    sample_unit: ProcessingUnit,
     temp_config_dir: Path,
 ) -> None:
     """Test that CheckOperation reports symlink status correctly.
 
     Args:
-        sample_project: Sample project fixture.
-        temp_target_dir: Temporary target directory fixture.
+        sample_unit: Sample processing unit fixture.
         temp_config_dir: Temporary config directory fixture.
     """
     # Create only one symlink (file1.txt)
-    (temp_target_dir / "file1.txt").symlink_to(sample_project.directory / "file1.txt")
+    (sample_unit.target_project_path / "file1.txt").symlink_to(sample_unit.managed_project_path / "file1.txt")
 
     operation = CheckOperation(temp_config_dir)
-    success = operation.execute(sample_project, temp_target_dir)
+    success = operation.execute_unit(sample_unit)
 
     # Operation should succeed
     assert success
@@ -217,7 +243,15 @@ def test_check_operation_with_mixed_strategies(
             strategy=LinkStrategy.COPY,
         ),
     ]
-    project = Project(name="mixed-project", directory=project_dir, items=items)
+    unit = ProcessingUnit(
+        managed_project_name="mixed-project",
+        managed_project_path=project_dir,
+        target_project_path=target_dir,
+        items=items,
+        display_name="mixed-project",
+        mapping_index=0,
+        target_index=0,
+    )
 
     # Create git exclude entries for both items
     exclude_file = info_dir / "exclude"
@@ -225,7 +259,7 @@ def test_check_operation_with_mixed_strategies(
 
     # Run check operation
     operation = CheckOperation(temp_config_dir)
-    success = operation.execute(project, target_dir)
+    success = operation.execute_unit(unit)
 
     # Operation should succeed
     assert success

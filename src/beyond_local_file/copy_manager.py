@@ -83,7 +83,7 @@ class CopyManager:
     Implements the LinkStrategyManager protocol.
 
     Attributes:
-        copy_items: Project items that use the copy strategy.
+        copy_items: Managed project items that use the copy strategy.
         target_path: Target directory where copies are placed.
         config_dir: Directory where the config file lives (for sync state storage).
         sync_state: Persistent sync state tracker.

@@ -5,8 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.models import Project
+from beyond_local_file.model.processing import ManagedProjectItem, ProcessingUnit
 from beyond_local_file.options import LinkStrategy
 from beyond_local_file.project_processor import CheckOperation, SyncOperation
 from beyond_local_file.symlink_manager import Action, SymlinkManager
@@ -32,11 +31,10 @@ def temp_target_dir(tmp_path):
 
 def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
     """Test that the callback receives both target path and expected source."""
-    # Create a project
+    # Create items
     items = [
         ManagedProjectItem(name="file1.txt", path=temp_project_dir / "file1.txt", strategy=LinkStrategy.SYMLINK),
     ]
-    project = Project(name="test-project", directory=temp_project_dir, items=items)
 
     # Create an existing file at target
     existing_file = temp_target_dir / "file1.txt"
@@ -46,7 +44,7 @@ def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
     mock_callback = Mock(return_value=Action.SKIP)
 
     # Run sync
-    manager = SymlinkManager(project.items, temp_target_dir)
+    manager = SymlinkManager(items, temp_target_dir)
     result = manager.sync(ask_callback=mock_callback)
 
     # Verify callback was called with both arguments
@@ -61,11 +59,10 @@ def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
 
 def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     """Test that overwrite action works correctly."""
-    # Create a project
+    # Create items
     items = [
         ManagedProjectItem(name="file1.txt", path=temp_project_dir / "file1.txt", strategy=LinkStrategy.SYMLINK),
     ]
-    project = Project(name="test-project", directory=temp_project_dir, items=items)
 
     # Create an existing file at target
     existing_file = temp_target_dir / "file1.txt"
@@ -75,7 +72,7 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     mock_callback = Mock(return_value=Action.OVERWRITE)
 
     # Run sync
-    manager = SymlinkManager(project.items, temp_target_dir)
+    manager = SymlinkManager(items, temp_target_dir)
     result = manager.sync(ask_callback=mock_callback)
 
     # Verify the symlink was created
@@ -113,7 +110,7 @@ def test_sync_with_mixed_strategies(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
-    # Create project with mixed strategies
+    # Create processing unit with mixed strategies
     items = [
         ManagedProjectItem(
             name="symlink1.txt",
@@ -136,11 +133,19 @@ def test_sync_with_mixed_strategies(tmp_path: Path) -> None:
             strategy=LinkStrategy.COPY,
         ),
     ]
-    project = Project(name="mixed-project", directory=project_dir, items=items)
+    unit = ProcessingUnit(
+        managed_project_name="mixed-project",
+        managed_project_path=project_dir,
+        target_project_path=target_dir,
+        items=items,
+        display_name="mixed-project",
+        mapping_index=0,
+        target_index=0,
+    )
 
     # Run sync operation (uses current architecture)
     operation = SyncOperation(config_dir)
-    success = operation.execute(project, target_dir)
+    success = operation.execute_unit(unit)
 
     # Verify operation succeeded
     assert success
@@ -189,7 +194,7 @@ def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
-    # Create project with mixed strategies
+    # Create processing unit with mixed strategies
     items = [
         ManagedProjectItem(
             name="symlink_file.txt",
@@ -202,11 +207,19 @@ def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
             strategy=LinkStrategy.COPY,
         ),
     ]
-    project = Project(name="mixed-project", directory=project_dir, items=items)
+    unit = ProcessingUnit(
+        managed_project_name="mixed-project",
+        managed_project_path=project_dir,
+        target_project_path=target_dir,
+        items=items,
+        display_name="mixed-project",
+        mapping_index=0,
+        target_index=0,
+    )
 
     # Sync first to create items and git exclude entries
     sync_op = SyncOperation(config_dir)
-    sync_op.execute(project, target_dir)
+    sync_op.execute_unit(unit)
 
     # Verify git exclude file has entries for both strategies
     exclude_file = info_dir / "exclude"
@@ -217,7 +230,7 @@ def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
 
     # Run check operation (uses current architecture with all_item_names hack)
     check_op = CheckOperation(config_dir)
-    success = check_op.execute(project, target_dir)
+    success = check_op.execute_unit(unit)
 
     # Verify operation succeeded
     assert success
