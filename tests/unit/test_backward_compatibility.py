@@ -55,18 +55,23 @@ def test_existing_config_files_work():
         cfg = Config(config_path)
         projects = cfg.get_projects()
 
-        # Verify both projects are loaded
-        assert "project-a" in projects
+        # Verify projects are loaded with sequence suffixes for multiple targets
+        # project-a has 2 targets, so it gets split into project-a#1 and project-a#2
+        assert "project-a#1" in projects
+        assert "project-a#2" in projects
+        # project-b has 1 target, so it keeps the original name
         assert "project-b" in projects
 
-        # Verify project-a has two targets
-        assert len(projects["project-a"].targets) == 2  # noqa: PLR2004 - test expects 2 targets
+        # Verify each project-a config has one target
+        assert len(projects["project-a#1"].targets) == 1
+        assert len(projects["project-a#2"].targets) == 1
 
         # Verify project-b has one target
         assert len(projects["project-b"].targets) == 1
 
         # Verify paths are resolved correctly
-        assert projects["project-a"].project_path == (td_path / "project-a").resolve()
+        assert projects["project-a#1"].project_path == (td_path / "project-a").resolve()
+        assert projects["project-a#2"].project_path == (td_path / "project-a").resolve()
         assert projects["project-b"].project_path == (td_path / "project-b").resolve()
 
 
@@ -186,7 +191,7 @@ def test_backward_compatible_config_format_variations():
         projects1 = cfg1.get_projects()
         assert len(projects1["project1"].targets) == 1
 
-        # Test 2: Multiple targets as list
+        # Test 2: Multiple targets as list - now creates separate configs with suffixes
         config2 = {"project2": [str(td_path / "target2"), str(td_path / "target3")]}
         config_path2 = td_path / "config2.yml"
         config_path2.write_text(yaml.dump(config2))
@@ -197,7 +202,12 @@ def test_backward_compatible_config_format_variations():
 
         cfg2 = Config(config_path2)
         projects2 = cfg2.get_projects()
-        assert len(projects2["project2"].targets) == 2  # noqa: PLR2004 - test expects 2 targets
+        # Multiple targets get split into separate configs with sequence suffixes
+        assert len(projects2) == 2  # noqa: PLR2004 - test expects 2 configs
+        assert "project2#1" in projects2
+        assert "project2#2" in projects2
+        assert len(projects2["project2#1"].targets) == 1
+        assert len(projects2["project2#2"].targets) == 1
 
         # Test 3: Mixed absolute and relative paths
         config3 = {
@@ -216,7 +226,9 @@ def test_backward_compatible_config_format_variations():
         cfg3 = Config(config_path3)
         projects3 = cfg3.get_projects()
         assert "project3" in projects3
-        assert "project4" in projects3
+        # project4 has multiple targets, so it gets split with suffixes
+        assert "project4#1" in projects3
+        assert "project4#2" in projects3
 
 
 def test_backward_compatible_cli_commands():

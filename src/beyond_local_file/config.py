@@ -98,7 +98,7 @@ class Config:
             Dictionary mapping project names to ProjectConfiguration objects
             containing the project path and target paths. When a list contains
             mixed mapping types, multiple ProjectConfiguration objects are created
-            with synthetic names (e.g., "project-a", "project-a#1", "project-a#2").
+            with synthetic names using 1-based sequence numbers (e.g., "project-a#1", "project-a#2", "project-a#3").
 
         Raises:
             ValueError: If the specified project_name is not in the config.
@@ -147,7 +147,8 @@ class Config:
     def _build_project_configs(self, name: str, value: str | list | dict) -> dict[str, ProjectConfiguration]:
         """Build ProjectConfiguration(s) from a raw config value.
 
-        Handles mixed format by splitting into multiple ProjectConfiguration objects.
+        When a project maps to multiple targets, creates separate ProjectConfiguration
+        objects with 1-based sequence suffixes (e.g., "project#1", "project#2").
 
         Args:
             name: The project name.
@@ -160,8 +161,38 @@ class Config:
         if self._is_mixed_format(value):
             return self._build_mixed_configs(name, value)
 
-        # Handle single configuration (all existing formats)
-        return {name: self._build_project_config(name, value)}
+        # Build single configuration
+        config = self._build_project_config(name, value)
+
+        # If multiple targets, split into separate configs with sequence suffixes
+        if len(config.targets) > 1:
+            return self._split_by_targets(name, config)
+
+        # Single target - return as-is without suffix
+        return {name: config}
+
+    def _split_by_targets(self, name: str, config: ProjectConfiguration) -> dict[str, ProjectConfiguration]:
+        """Split a configuration with multiple targets into separate configs.
+
+        Args:
+            name: The base project name.
+            config: ProjectConfiguration with multiple targets.
+
+        Returns:
+            Dictionary mapping synthetic names to ProjectConfiguration objects,
+            one per target with 1-based sequence suffixes.
+        """
+        configs = {}
+        for seq, target in enumerate(config.targets, start=1):
+            synthetic_name = f"{name}#{seq}"
+            configs[synthetic_name] = ProjectConfiguration(
+                name=synthetic_name,
+                project_path=config.project_path,
+                targets=[target],
+                subpaths=config.subpaths,
+                copy_paths=config.copy_paths,
+            )
+        return configs
 
     def _build_project_config(self, name: str, value: str | list[str] | dict) -> ProjectConfiguration:
         """Build a ProjectConfiguration from a raw config value.
@@ -195,6 +226,7 @@ class Config:
         """Build multiple ProjectConfiguration objects from a mixed format list.
 
         Splits a list containing both strings and dicts into separate configurations.
+        Uses 1-based sequence numbering (#{seq}) for all configurations when multiple exist.
 
         Args:
             name: The project name.
@@ -205,21 +237,21 @@ class Config:
         """
         configs = {}
         simple_targets = []
-        config_index = 0
+        seq = 1  # 1-based sequence number
 
         for item in value:
             if isinstance(item, str):
                 # Collect simple string targets
                 simple_targets.append(item)
             elif isinstance(item, dict) and "target" in item:
-                # Create a separate config for this dict entry
-                synthetic_name = f"{name}#{config_index}" if config_index > 0 else name
-                config_index += 1
+                # Create a separate config for this dict entry with 1-based sequence
+                synthetic_name = f"{name}#{seq}"
+                seq += 1
                 configs[synthetic_name] = self._build_project_config(synthetic_name, item)
 
         # If there are simple targets, create a config for them
         if simple_targets:
-            synthetic_name = f"{name}#{config_index}" if configs else name
+            synthetic_name = f"{name}#{seq}"
             configs[synthetic_name] = ProjectConfiguration(
                 name=synthetic_name,
                 project_path=self._resolve_project_path(name),

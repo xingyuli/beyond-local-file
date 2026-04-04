@@ -49,15 +49,15 @@ def test_mixed_format_basic():
         assert len(projects) == 2  # noqa: PLR2004 - test expects 2 configs
 
         # First config should be for the dict target with subpaths
-        assert "my-project" in projects
-        config1 = projects["my-project"]
+        assert "my-project#1" in projects
+        config1 = projects["my-project#1"]
         assert len(config1.targets) == 1
         assert config1.targets[0] == (td_path / "target2").resolve()
         assert config1.subpaths == [".kiro/hooks", ".vscode"]
 
         # Second config should be for the simple string target
-        assert "my-project#1" in projects
-        config2 = projects["my-project#1"]
+        assert "my-project#2" in projects
+        config2 = projects["my-project#2"]
         assert len(config2.targets) == 1
         assert config2.targets[0] == (td_path / "target1").resolve()
         assert config2.subpaths is None
@@ -97,14 +97,14 @@ def test_mixed_format_multiple_strings():
         assert len(projects) == 2  # noqa: PLR2004 - test expects 2 configs
 
         # First config for dict target
-        assert "project-a" in projects
-        config1 = projects["project-a"]
+        assert "project-a#1" in projects
+        config1 = projects["project-a#1"]
         assert len(config1.targets) == 1
         assert config1.subpaths == ["local-file/tasks/releases"]
 
         # Second config for simple string targets (combined)
-        assert "project-a#1" in projects
-        config2 = projects["project-a#1"]
+        assert "project-a#2" in projects
+        config2 = projects["project-a#2"]
         assert len(config2.targets) == 2  # noqa: PLR2004 - test expects 2 targets
         assert config2.subpaths is None
 
@@ -146,18 +146,18 @@ def test_mixed_format_multiple_dicts():
         assert len(projects) == 3  # noqa: PLR2004 - test expects 3 configs
 
         # First dict target
-        assert "beyond-local-file" in projects
-        config1 = projects["beyond-local-file"]
+        assert "beyond-local-file#1" in projects
+        config1 = projects["beyond-local-file#1"]
         assert config1.subpaths == ["local-file/tasks/releases"]
 
         # Second dict target
-        assert "beyond-local-file#1" in projects
-        config2 = projects["beyond-local-file#1"]
+        assert "beyond-local-file#2" in projects
+        config2 = projects["beyond-local-file#2"]
         assert config2.subpaths == [".kiro/hooks"]
 
         # String target
-        assert "beyond-local-file#2" in projects
-        config3 = projects["beyond-local-file#2"]
+        assert "beyond-local-file#3" in projects
+        config3 = projects["beyond-local-file#3"]
         assert config3.subpaths is None
 
 
@@ -196,14 +196,14 @@ def test_mixed_format_with_copy_strategy():
         assert len(projects) == 2  # noqa: PLR2004 - test expects 2 configs
 
         # Dict target with copy strategy
-        assert "my-app" in projects
-        config1 = projects["my-app"]
+        assert "my-app#1" in projects
+        config1 = projects["my-app#1"]
         assert config1.subpaths == [".kiro/hooks", ".kiro/steering/rules.md"]
         assert config1.copy_paths == {".kiro/steering/rules.md"}
 
         # String target
-        assert "my-app#1" in projects
-        config2 = projects["my-app#1"]
+        assert "my-app#2" in projects
+        config2 = projects["my-app#2"]
         assert config2.subpaths is None
         assert config2.copy_paths is None
 
@@ -225,7 +225,7 @@ def test_non_mixed_formats_unchanged():
         assert len(projects1) == 1
         assert "project1" in projects1
 
-        # Test simple list format (all strings)
+        # Test simple list format (all strings) - multiple targets get split with suffixes
         config2 = {"project2": [str(td_path / "target2"), str(td_path / "target3")]}
         config_path2 = td_path / "config2.yml"
         config_path2.write_text(yaml.dump(config2))
@@ -235,9 +235,12 @@ def test_non_mixed_formats_unchanged():
 
         cfg2 = Config(config_path2)
         projects2 = cfg2.get_projects()
-        assert len(projects2) == 1
-        assert "project2" in projects2
-        assert len(projects2["project2"].targets) == 2  # noqa: PLR2004 - test expects 2 targets
+        # Multiple targets get split into separate configs with sequence suffixes
+        assert len(projects2) == 2  # noqa: PLR2004 - test expects 2 configs
+        assert "project2#1" in projects2
+        assert "project2#2" in projects2
+        assert len(projects2["project2#1"].targets) == 1
+        assert len(projects2["project2#2"].targets) == 1
 
         # Test full dict format
         config3 = {
@@ -291,6 +294,6 @@ def test_mixed_format_project_name_filter():
 
         # Should only return configs for project-a
         assert len(projects) == 2  # noqa: PLR2004 - test expects 2 configs for project-a
-        assert "project-a" in projects
         assert "project-a#1" in projects
+        assert "project-a#2" in projects
         assert "project-b" not in projects

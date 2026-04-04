@@ -35,7 +35,7 @@ local-file/
 
 ## Agentic Directory (`local-file/agentic/`)
 
-Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`, and `summaries/` use `YYYYMMDD-HH-` prefix for chronological ordering.
+Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`, and `summaries/` use `YYYYMMDD-HH-` prefix for chronological ordering (GMT+8 timezone).
 
 ### analysis/
 
@@ -49,7 +49,7 @@ Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`
 - Dependency analysis
 - Architecture exploration
 
-**Naming:** `YYYYMMDD-HH-descriptive-title.md` (e.g., `20260326-18-codebase-structure-for-copy-feature.md`)
+**Naming:** `YYYYMMDD-HH-descriptive-title.md` using GMT+8 timezone (e.g., `20260326-18-codebase-structure-for-copy-feature.md`)
 
 **Structure:** Flat directory - no subdirectories
 
@@ -69,7 +69,7 @@ Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`
 - Implementation approach sketches
 - Architecture alternatives
 
-**Naming:** `YYYYMMDD-HH-descriptive-title.md` (e.g., `20260326-18-single-file-copy-proposal.md`)
+**Naming:** `YYYYMMDD-HH-descriptive-title.md` using GMT+8 timezone (e.g., `20260326-18-single-file-copy-proposal.md`)
 
 **Structure:** Flat directory - no subdirectories
 
@@ -104,7 +104,7 @@ Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`
 - `20260327-09-copy-feature-implementation.md`
 - `20260320-16-subpath-support-added.md`
 
-**Naming:** `YYYYMMDD-HH-descriptive-title.md`
+**Naming:** `YYYYMMDD-HH-descriptive-title.md` using GMT+8 timezone
 
 **Structure:** Flat directory - no subdirectories
 
