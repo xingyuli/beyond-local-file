@@ -10,7 +10,12 @@ import click
 
 from .copy_manager import CopyConflictAction
 from .options import OutputFormat
-from .project_processor import CheckOperation, ProjectProcessor, SyncOperation, load_config
+from .project_processor import (
+    CheckOperation,
+    ProjectProcessor,
+    SyncOperation,
+    load_config_projects,
+)
 from .symlink_manager import Action
 
 
@@ -123,14 +128,13 @@ def sync(ctx, project_name):
     in the config.
     """
     config = ctx.obj["config"]
-    result = load_config(config, project_name)
+    result = load_config_projects(config, project_name)
     if result is None:
         return
 
-    projects_data, config_dir = result
-    processor = ProjectProcessor(projects_data, config_dir)
+    config_projects, config_dir = result
     operation = SyncOperation(config_dir, ask_user_for_action, ask_user_for_conflict)
-    processor.process_all(operation)
+    ProjectProcessor.process_all_units(config_projects, operation)
 
 
 @link.command()
@@ -152,14 +156,13 @@ def check(ctx, project_name, extra_exclude, output_format):
     for each project and target location.
     """
     config = ctx.obj["config"]
-    result = load_config(config, project_name)
+    result = load_config_projects(config, project_name)
     if result is None:
         return
 
-    projects_data, config_dir = result
-    processor = ProjectProcessor(projects_data, config_dir)
+    config_projects, config_dir = result
     operation = CheckOperation(config_dir, extra_exclude, OutputFormat(output_format))
-    processor.process_all(operation)
+    ProjectProcessor.process_all_units(config_projects, operation)
     operation.render()
 
 
