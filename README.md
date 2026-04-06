@@ -1,6 +1,8 @@
 # Beyond Local File
 
-A command-line tool for synchronizing and managing local development files across multiple projects.
+![Beyond Local File](docs/assets/banner-960x540.png)
+
+Sync your local dev files across projects using symbolic links — without committing them to Git.
 
 ## Table of Contents
 
