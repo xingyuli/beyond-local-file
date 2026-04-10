@@ -11,7 +11,14 @@ from rich.console import Console
 from rich.table import Table
 
 from .copy_manager import CopyCheckResult, CopyResult
-from .link_strategy_protocol import CopyCreateDetails, GitExcludeAddResult, LinkCreateResult
+from .link_strategy_protocol import (
+    CopyCheckDetails,
+    CopyCreateDetails,
+    GitExcludeAddResult,
+    GitExcludeCheckResult,
+    LinkCheckResult,
+    LinkCreateResult,
+)
 from .symlink_manager import CheckResult, SyncResult
 
 
@@ -190,6 +197,110 @@ class LinkSyncFormatter:
 
         for item in sorted(self.link_result.details.reverse_copied):
             click.echo(f"Reverse synced: {item} (target -> managed)")
+
+
+class LinkCheckFormatter:
+    """Formatter for link check operation results (unified protocol).
+
+    Handles check output for both symlink and copy strategies uniformly.
+    """
+
+    def __init__(
+        self,
+        link_result: LinkCheckResult,
+        git_result: GitExcludeCheckResult | None = None,
+        show_extra: bool = False,
+    ):
+        """Initialize formatter with unified protocol results.
+
+        Args:
+            link_result: Result of link check operation.
+            git_result: Optional result of git exclude check.
+            show_extra: Whether to show extra exclude entries.
+        """
+        self.link_result = link_result
+        self.git_result = git_result
+        self.show_extra = show_extra
+
+    def format(self, project_name: str, target_path: Path) -> None:
+        """Format and output check result.
+
+        Args:
+            project_name: Name of the project.
+            target_path: Target path that was checked.
+        """
+        click.echo(f"\nChecking {project_name} -> {target_path}")
+        click.echo("=" * 60)
+        self._format_link_status()
+        self._format_copy_details()
+        self._format_exclude_status()
+
+    def _format_link_status(self) -> None:
+        """Format link status (exists/missing)."""
+        # Detect strategy from details type
+        if isinstance(self.link_result.details, CopyCheckDetails):
+            label = "Copy Status"
+        else:
+            label = "Symlink Status"
+
+        if self.link_result.missing:
+            click.echo(f"\n{label}:")
+            click.echo(f"  Exists: {len(self.link_result.exists)}")
+            for item in self.link_result.exists:
+                click.echo(f"    ✓ {item}")
+
+            click.echo(f"  Missing: {len(self.link_result.missing)}")
+            for item in self.link_result.missing:
+                click.echo(f"    ✗ {item}")
+        else:
+            click.echo(f"\n{label}: ✓")
+
+    def _format_copy_details(self) -> None:
+        """Format copy-specific sync status details."""
+        if not isinstance(self.link_result.details, CopyCheckDetails):
+            return
+
+        details = self.link_result.details
+
+        # Show detailed sync status for copy items
+        click.echo("\nCopy Sync Status:")
+        for item in details.in_sync:
+            click.echo(f"  ✓ {item} (in sync)")
+        for item in details.manually_synced:
+            click.echo(f"  ✓ {item} (manually synced)")
+        for item in details.managed_changed:
+            click.echo(f"  ⚠ {item} (managed changed)")
+        for item in details.target_changed:
+            click.echo(f"  ⚠ {item} (target changed)")
+        for item in details.both_changed:
+            click.echo(f"  ✗ {item} (conflict - both changed)")
+
+    def _format_exclude_status(self) -> None:
+        """Format Git exclude status section."""
+        if self.git_result is None:
+            click.echo("\nTarget is not a git repository")
+            return
+
+        has_exclude_data = (
+            self.git_result.present or self.git_result.missing or (self.show_extra and self.git_result.extra)
+        )
+
+        if not has_exclude_data:
+            click.echo("\nTarget is not a git repository")
+            return
+
+        if self.git_result.missing:
+            click.echo("\nGit Exclude Status:")
+            click.echo(f"  Missing entries: {len(self.git_result.missing)}")
+            for item in sorted(self.git_result.missing):
+                click.echo(f"    ✗ {item}")
+        else:
+            click.echo("\nGit Exclude Status: ✓")
+
+        if self.show_extra and self.git_result.extra:
+            click.echo(f"  Extra entries: {len(self.git_result.extra)}")
+            for item in sorted(self.git_result.extra):
+                click.echo(f"    ! {item}")
 
 
 class CheckResultFormatter:

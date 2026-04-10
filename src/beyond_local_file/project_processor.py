@@ -9,10 +9,9 @@ import click
 from .config import Config
 from .copy_manager import CopyCheckResult, CopyManager
 from .formatters import (
-    CheckResultFormatter,
     CheckRow,
     CheckTableFormatter,
-    CopyCheckResultFormatter,
+    LinkCheckFormatter,
     LinkSyncFormatter,
 )
 from .model.config import ConfigProject
@@ -274,31 +273,48 @@ class CheckOperation(CmdOperation):
         if copy_mgr:
             all_valid_entries.update(i.name for i in copy_mgr.get_managed_items())
 
-        # Check symlink items using protocol
-        symlink_result = None
-        if symlink_mgr:
-            symlink_result = symlink_mgr.check()
-
-            # Check git excludes using protocol with all_valid_entries
-            if symlink_mgr.git_manager.is_git_repo():
-                git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-                # Map protocol result back to CheckResult for backward compatibility
-                symlink_result.exclude_present = git_result.present
-                symlink_result.exclude_missing = git_result.missing
-                symlink_result.exclude_extra = git_result.extra
-
-        # Check copy items
-        copy_result: CopyCheckResult | None = None
-        if copy_mgr:
-            copy_result = copy_mgr.check()
-
         if self.output_format == OutputFormat.VERBOSE:
-            if symlink_result:
-                formatter = CheckResultFormatter(symlink_result, self.show_extra)
+            # Use unified protocol for verbose mode
+            if symlink_mgr:
+                link_result = symlink_mgr.check_links()
+
+                # Check git repo status before calling protocol method
+                git_result = None
+                if symlink_mgr.git_manager.is_git_repo():
+                    git_result = symlink_mgr.check_git_excludes(all_valid_entries)
+
+                formatter = LinkCheckFormatter(link_result, git_result, self.show_extra)
                 formatter.format(unit.display_name, unit.target_project_path)
-            if copy_result:
-                CopyCheckResultFormatter(copy_result).format(unit.display_name, unit.target_project_path)
+
+            if copy_mgr:
+                link_result = copy_mgr.check_links()
+
+                # Check git repo status before calling protocol method
+                git_result = None
+                if copy_mgr.git_manager.is_git_repo():
+                    git_result = copy_mgr.check_git_excludes(all_valid_entries)
+
+                formatter = LinkCheckFormatter(link_result, git_result, self.show_extra)
+                formatter.format(unit.display_name, unit.target_project_path)
         else:
+            # Table mode: use legacy check() for backward compatibility
+            symlink_result = None
+            if symlink_mgr:
+                symlink_result = symlink_mgr.check()
+
+                # Check git excludes using protocol with all_valid_entries
+                if symlink_mgr.git_manager.is_git_repo():
+                    git_result = symlink_mgr.check_git_excludes(all_valid_entries)
+                    # Map protocol result back to CheckResult for backward compatibility
+                    symlink_result.exclude_present = git_result.present
+                    symlink_result.exclude_missing = git_result.missing
+                    symlink_result.exclude_extra = git_result.extra
+
+            # Check copy items
+            copy_result: CopyCheckResult | None = None
+            if copy_mgr:
+                copy_result = copy_mgr.check()
+
             # For table format, we need a symlink_result even if empty
             if not symlink_result:
                 symlink_result = CheckResult()

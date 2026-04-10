@@ -218,7 +218,11 @@ class LinkStrategyManager(Protocol):
         ...
 
     def add_git_excludes(self) -> GitExcludeAddResult:
-        """Add git exclude entries for all managed items.
+        """Add git exclude entries for all managed items (protocol method).
+
+        PRECONDITION: This method is guaranteed to be called only when the target
+        directory is inside a git repository. Callers must check git repo status
+        before invoking this method.
 
         Returns:
             GitExcludeAddResult with added count and existing entries.
@@ -226,7 +230,11 @@ class LinkStrategyManager(Protocol):
         ...
 
     def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
-        """Check git exclude status for managed items.
+        """Check git exclude status for managed items (protocol method).
+
+        PRECONDITION: This method is guaranteed to be called only when the target
+        directory is inside a git repository. Callers must check git repo status
+        before invoking this method.
 
         Args:
             all_valid_entries: Set of ALL valid entry names from all managers.
