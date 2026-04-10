@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .copy_manager import CopyCheckResult, CopyResult
-from .link_strategy_protocol import GitExcludeAddResult, LinkCreateResult
+from .link_strategy_protocol import CopyCreateDetails, GitExcludeAddResult, LinkCreateResult
 from .symlink_manager import CheckResult, SyncResult
 
 
@@ -114,6 +114,7 @@ class LinkSyncFormatter:
         """
         self._format_already_correct(target_path)
         self._format_created(target_path)
+        self._format_reverse_copied(target_path)
         self._format_skipped(target_path)
         self._format_failed()
         self._format_git_entries()
@@ -124,25 +125,44 @@ class LinkSyncFormatter:
         for item in sorted(self.link_result.already_correct):
             source_path = self.project_directory / item
             link_path = target_path / item
-            click.echo(f"Symlink already correct: {link_path} -> {source_path}")
+
+            # Detect strategy from details
+            if isinstance(self.link_result.details, CopyCreateDetails):
+                click.echo(f"Copy already in sync: {item}")
+            else:
+                click.echo(f"Symlink already correct: {link_path} -> {source_path}")
 
     def _format_created(self, target_path: Path) -> None:
         """Format newly created links."""
         for item in sorted(self.link_result.created):
             source_path = self.project_directory / item
             link_path = target_path / item
-            click.echo(f"Created symlink: {link_path} -> {source_path}")
+
+            # Detect strategy from details
+            if isinstance(self.link_result.details, CopyCreateDetails):
+                click.echo(f"Copied: {item} -> {link_path}")
+            else:
+                click.echo(f"Created symlink: {link_path} -> {source_path}")
 
     def _format_skipped(self, target_path: Path) -> None:
         """Format skipped links."""
         for item in sorted(self.link_result.skipped):
             link_path = target_path / item
-            click.echo(f"Skipped: {link_path}")
+
+            # Detect strategy from details
+            if isinstance(self.link_result.details, CopyCreateDetails):
+                click.echo(f"Copy skipped: {item}")
+            else:
+                click.echo(f"Skipped: {link_path}")
 
     def _format_failed(self) -> None:
         """Format failed links."""
         for item in sorted(self.link_result.failed):
-            click.echo(f"Failed to create symlink: {item}")
+            # Detect strategy from details
+            if isinstance(self.link_result.details, CopyCreateDetails):
+                click.echo(f"Copy failed: {item}")
+            else:
+                click.echo(f"Failed to create symlink: {item}")
 
     def _format_git_entries(self) -> None:
         """Format Git exclude entries."""
@@ -162,6 +182,14 @@ class LinkSyncFormatter:
                 f"Operation aborted: {self.link_result.progress.completed_items}/"
                 f"{self.link_result.progress.total_items} items processed"
             )
+
+    def _format_reverse_copied(self, target_path: Path) -> None:
+        """Format reverse-copied items (copy strategy only)."""
+        if not isinstance(self.link_result.details, CopyCreateDetails):
+            return
+
+        for item in sorted(self.link_result.details.reverse_copied):
+            click.echo(f"Reverse synced: {item} (target -> managed)")
 
 
 class CheckResultFormatter:

@@ -13,7 +13,6 @@ from .formatters import (
     CheckRow,
     CheckTableFormatter,
     CopyCheckResultFormatter,
-    CopyResultFormatter,
     LinkSyncFormatter,
 )
 from .model.config import ConfigProject
@@ -204,8 +203,19 @@ class SyncOperation(CmdOperation):
         # Handle copy items
         if copy_items:
             copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir)
-            copy_result = copy_mgr.sync(self.conflict_callback)
-            CopyResultFormatter(copy_result).format(unit.display_name, unit.target_project_path)
+            link_result = copy_mgr.create_links(self.conflict_callback)
+            git_result = copy_mgr.add_git_excludes()
+
+            formatter = LinkSyncFormatter(
+                unit.display_name,
+                unit.managed_project_path,
+                link_result,
+                git_result,
+            )
+            formatter.format(unit.display_name, unit.target_project_path)
+
+            if link_result.progress.aborted:
+                return False
 
         return True
 

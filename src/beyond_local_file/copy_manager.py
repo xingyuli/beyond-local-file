@@ -17,6 +17,7 @@ from .link_strategy_protocol import (
     GitExcludeCheckResult,
     LinkCheckResult,
     LinkCreateResult,
+    OperationProgress,
 )
 from .model.processing import ManagedProjectItem
 from .options import LinkStrategy, SyncStatus
@@ -208,7 +209,7 @@ class CopyManager:
             conflict_callback: Optional callback for resolving copy conflicts.
 
         Returns:
-            LinkCreateResult containing details of the operation.
+            LinkCreateResult containing details of the operation with progress tracking.
         """
         # Use existing sync logic but map to unified result type
         copy_result = self.sync(conflict_callback)
@@ -216,12 +217,17 @@ class CopyManager:
         # Create strategy-specific details
         details = CopyCreateDetails(reverse_copied=copy_result.reverse_copied)
 
+        # Track progress - all items completed since sync() doesn't support abort yet
+        progress = OperationProgress(total_items=len(self.copy_items))
+        progress.completed_items = len(self.copy_items)
+
         return LinkCreateResult(
             created=copy_result.copied,
             already_correct=copy_result.in_sync,
             skipped=copy_result.skipped,
             failed=copy_result.failed,
             details=details,
+            progress=progress,
         )
 
     def check_links(self) -> LinkCheckResult:
@@ -256,16 +262,18 @@ class CopyManager:
         Returns:
             GitExcludeAddResult with added count and existing entries.
         """
-        result = GitExcludeAddResult()
+        item_names = {i.name for i in self.copy_items}
+        result = GitExcludeAddResult(progress=OperationProgress(total_items=len(item_names)))
 
         if not self.git_manager.is_git_repo():
+            result.progress.completed_items = result.progress.total_items
             return result
 
-        item_names = {i.name for i in self.copy_items}
         if item_names:
             added, existing = self.git_manager.write_entries(item_names)
             result.added = added
             result.existing = existing
+            result.progress.completed_items = result.progress.total_items
 
         return result
 
