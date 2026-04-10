@@ -7,7 +7,13 @@ from enum import Enum
 from pathlib import Path
 
 from .git_manager import GitExcludeManager
-from .link_strategy_protocol import GitExcludeAddResult, GitExcludeCheckResult, LinkCheckResult, LinkCreateResult
+from .link_strategy_protocol import (
+    GitExcludeAddResult,
+    GitExcludeCheckResult,
+    LinkCheckResult,
+    LinkCreateResult,
+    OperationProgress,
+)
 from .model.processing import ManagedProjectItem
 
 
@@ -197,18 +203,41 @@ class SymlinkManager:
                         and expected source path, and returns an Action.
 
         Returns:
-            LinkCreateResult containing details of the operation.
+            LinkCreateResult containing details of the operation with progress tracking.
         """
-        # Use existing sync logic but map to unified result type
-        sync_result = self.sync(ask_callback)
+        result = LinkCreateResult(progress=OperationProgress(total_items=len(self.symlink_items)))
 
-        return LinkCreateResult(
-            created=sync_result.created,
-            already_correct=sync_result.already_correct,
-            skipped=sync_result.skipped,
-            failed=sync_result.failed,
-            details=None,  # Symlinks don't have strategy-specific details
-        )
+        for item in self.symlink_items:
+            link_path = self.target_path / item.name
+
+            if self._is_link_correct(link_path, item.path):
+                result.already_correct.add(item.name)
+                result.progress.completed_items += 1
+                continue
+
+            if link_path.exists() or link_path.is_symlink():
+                action = self._handle_existing_path(link_path, item.path, ask_callback)
+                if action == Action.SKIP:
+                    result.skipped.add(item.name)
+                    result.progress.completed_items += 1
+                    continue
+                elif action == Action.ABORT:
+                    result.progress.aborted = True
+                    return result
+                elif action == Action.OVERWRITE:
+                    self._remove_path(link_path)
+
+            # Ensure parent directories exist for subpath items
+            link_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if self._create_symlink(item.path, link_path):
+                result.created.add(item.name)
+            else:
+                result.failed.add(item.name)
+
+            result.progress.completed_items += 1
+
+        return result
 
     def check_links(self) -> LinkCheckResult:
         """Check the status of links for all managed items (protocol method).
@@ -235,18 +264,21 @@ class SymlinkManager:
         """Add git exclude entries for all managed items (protocol method).
 
         Returns:
-            GitExcludeAddResult with added count and existing entries.
+            GitExcludeAddResult with added count, existing entries, and progress tracking.
         """
-        result = GitExcludeAddResult()
+        item_names = {i.name for i in self.symlink_items}
+        result = GitExcludeAddResult(progress=OperationProgress(total_items=len(item_names)))
 
         if not self.git_manager.is_git_repo():
+            # No git repo, nothing to do but mark as completed
+            result.progress.completed_items = result.progress.total_items
             return result
 
-        item_names = {i.name for i in self.symlink_items}
         if item_names:
             added, existing = self.git_manager.write_entries(item_names)
             result.added = added
             result.existing = existing
+            result.progress.completed_items = result.progress.total_items
 
         return result
 

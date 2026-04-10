@@ -8,6 +8,22 @@ handling of different linking strategies.
 from dataclasses import dataclass, field
 from typing import Protocol
 
+
+@dataclass
+class OperationProgress:
+    """Tracks progress of an operation.
+
+    Attributes:
+        total_items: Total number of items to process.
+        completed_items: Number of items successfully completed before abort/completion.
+        aborted: Whether the operation was interrupted by user (via ask_callback).
+    """
+
+    total_items: int
+    completed_items: int = 0
+    aborted: bool = False
+
+
 # Base result types with consistent naming
 
 
@@ -21,6 +37,7 @@ class LinkCreateResult:
         skipped: Items skipped by user choice.
         failed: Items that failed to create.
         details: Strategy-specific details (optional).
+        progress: Progress tracking for this operation.
     """
 
     created: set[str] = field(default_factory=set)
@@ -28,6 +45,7 @@ class LinkCreateResult:
     skipped: set[str] = field(default_factory=set)
     failed: set[str] = field(default_factory=set)
     details: "LinkCreateDetails | None" = None
+    progress: OperationProgress = field(default_factory=lambda: OperationProgress(total_items=0))
 
 
 @dataclass
@@ -52,10 +70,12 @@ class GitExcludeAddResult:
     Attributes:
         added: Number of entries added.
         existing: Set of entries that already existed.
+        progress: Progress tracking for this operation.
     """
 
     added: int = 0
     existing: set[str] = field(default_factory=set)
+    progress: OperationProgress = field(default_factory=lambda: OperationProgress(total_items=0))
 
 
 @dataclass

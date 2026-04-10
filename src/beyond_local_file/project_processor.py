@@ -14,7 +14,7 @@ from .formatters import (
     CheckTableFormatter,
     CopyCheckResultFormatter,
     CopyResultFormatter,
-    SyncResultFormatter,
+    LinkSyncFormatter,
 )
 from .model.config import ConfigProject
 from .model.processing import ProcessingUnit
@@ -187,13 +187,18 @@ class SyncOperation(CmdOperation):
         # Handle symlink items
         if symlink_items:
             manager = SymlinkManager(symlink_items, unit.target_project_path)
-            result = manager.sync(self.ask_callback)
+            link_result = manager.create_links(self.ask_callback)
+            git_result = manager.add_git_excludes()
 
-            formatter = SyncResultFormatter(unit.display_name, unit.managed_project_path, result)
+            formatter = LinkSyncFormatter(
+                unit.display_name,
+                unit.managed_project_path,
+                link_result,
+                git_result,
+            )
             formatter.format(unit.display_name, unit.target_project_path)
 
-            if result.aborted:
-                click.echo("Aborted by user")
+            if link_result.progress.aborted:
                 return False
 
         # Handle copy items
