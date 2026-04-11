@@ -111,6 +111,16 @@ Syncing project-b to /Users/username/workspace/project-b
   ⚠ Skipped: .vscode (already exists)
 ```
 
+### Progress Tracking
+
+If you abort an operation (e.g., choose "Abort" when prompted about conflicts), the tool displays progress:
+
+```
+Operation aborted: 5/10 items processed
+```
+
+This shows how many items were successfully processed before the interruption.
+
 ---
 
 ## `link check` — Verify Status

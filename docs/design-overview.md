@@ -239,14 +239,17 @@ When creating a new operation:
 
 | Component | File |
 |-----------|------|
+| Protocol & Result Types | `src/beyond_local_file/link_strategy_protocol.py` |
 | Config Models | `src/beyond_local_file/model/config.py` |
 | Processing Models | `src/beyond_local_file/model/processing.py` |
 | Translator | `src/beyond_local_file/model/translator.py` |
-| Protocol & Result Types | `src/beyond_local_file/link_strategy_protocol.py` |
 | SymlinkManager | `src/beyond_local_file/symlink_manager.py` |
 | CopyManager | `src/beyond_local_file/copy_manager.py` |
 | Operations | `src/beyond_local_file/project_processor.py` |
+| Formatters | `src/beyond_local_file/formatters.py` |
 | CLI | `src/beyond_local_file/cli.py` |
+
+**Note:** All result types (`LinkCreateResult`, `LinkCheckResult`, `GitExcludeAddResult`, `GitExcludeCheckResult`, `OperationProgress`) are defined in `link_strategy_protocol.py` as the single source of truth.
 
 ---
 

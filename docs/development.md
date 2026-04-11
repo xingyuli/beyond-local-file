@@ -127,20 +127,153 @@ beyond-local-file/
 ├── src/
 │   └── beyond_local_file/
 │       ├── __init__.py
-│       ├── __main__.py          # Entry point for python -m
-│       ├── cli.py               # CLI interface
-│       ├── config.py            # Configuration handling
-│       ├── symlink.py           # Symlink operations
-│       └── git_exclude.py       # Git exclude management
+│       ├── __main__.py              # Entry point for python -m
+│       ├── cli.py                   # CLI interface
+│       ├── config.py                # Configuration handling
+│       ├── options.py               # StrEnum definitions for CLI options
+│       ├── link_strategy_protocol.py # Protocol definitions and result types
+│       ├── symlink_manager.py       # Symlink strategy implementation
+│       ├── copy_manager.py          # Copy strategy implementation
+│       ├── sync_state.py            # Copy strategy state tracking
+│       ├── git_manager.py           # Git exclude management
+│       ├── formatters.py            # Output formatters
+│       ├── project_processor.py     # Operations and coordination
+│       └── model/
+│           ├── config.py            # Config models (YAML structure)
+│           ├── processing.py        # Processing models (execution)
+│           └── translator.py        # Config → Processing translation
 ├── tests/
-│   ├── unit/                    # Unit tests
-│   ├── property/                # Property-based tests
-│   └── conftest.py              # Pytest configuration
+│   ├── unit/                        # Unit tests
+│   ├── property/                    # Property-based tests
+│   └── conftest.py                  # Pytest configuration
 ├── docs/
-│   └── development.md           # This file
-├── pyproject.toml               # Project configuration
-└── README.md                    # User documentation
+│   └── development.md               # This file
+├── pyproject.toml                   # Project configuration
+└── README.md                        # User documentation
 ```
+
+## Implementing a New Link Strategy
+
+To add a new link strategy (e.g., hard links, junctions), implement the `LinkStrategyManager` protocol:
+
+### 1. Create Manager Class
+
+```python
+from beyond_local_file.link_strategy_protocol import (
+    LinkStrategyManager,
+    LinkCreateResult,
+    LinkCheckResult,
+    GitExcludeAddResult,
+    GitExcludeCheckResult,
+    OperationProgress,
+)
+
+class HardlinkManager:
+    """Manages hard link operations."""
+    
+    def __init__(self, items: list[ProjectItem], target_path: Path):
+        self.items = items
+        self.target_path = target_path
+        self.git_manager = GitExcludeManager(target_path)
+    
+    def get_managed_items(self) -> list[ProjectItem]:
+        """Return managed items."""
+        return self.items
+    
+    def create_links(self) -> LinkCreateResult:
+        """Create hard links for all items."""
+        result = LinkCreateResult(
+            progress=OperationProgress(total_items=len(self.items))
+        )
+        
+        for item in self.items:
+            # Implementation here
+            result.created.add(item.name)
+            result.progress.completed_items += 1
+        
+        return result
+    
+    def check_links(self) -> LinkCheckResult:
+        """Check hard link status."""
+        result = LinkCheckResult()
+        
+        for item in self.items:
+            # Implementation here
+            if link_exists:
+                result.exists.append(item.name)
+            else:
+                result.missing.append(item.name)
+        
+        return result
+    
+    def add_git_excludes(self) -> GitExcludeAddResult:
+        """Add git exclude entries.
+        
+        PRECONDITION: Caller has verified target is in a git repository.
+        """
+        entries = {item.name for item in self.items}
+        return self.git_manager.add_entries(entries)
+    
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
+        """Check git exclude status.
+        
+        PRECONDITION: Caller has verified target is in a git repository.
+        """
+        entries = {item.name for item in self.items}
+        return self.git_manager.check_entries(entries, all_valid_entries)
+```
+
+### 2. Key Requirements
+
+**Protocol Methods:**
+- `get_managed_items()` — Return list of managed items
+- `create_links()` — Create links, return `LinkCreateResult`
+- `check_links()` — Check status, return `LinkCheckResult`
+- `add_git_excludes()` — Add git excludes, return `GitExcludeAddResult`
+- `check_git_excludes(all_valid_entries)` — Check git excludes, return `GitExcludeCheckResult`
+
+**Progress Tracking:**
+- Initialize `OperationProgress` with `total_items`
+- Increment `completed_items` as work progresses
+- Set `aborted=True` if user interrupts
+
+**Git Repo Precondition:**
+- Operations check `git_manager.is_git_repo()` before calling git exclude methods
+- Managers document this as PRECONDITION in docstrings
+- Managers assume git repo exists when git methods are called
+
+**Result Types:**
+- All result types come from `link_strategy_protocol.py`
+- Use composition for strategy-specific details (optional)
+- Define detail classes implementing `LinkCreateDetails` or `LinkCheckDetails` protocols
+
+### 3. Strategy-Specific Details (Optional)
+
+If your strategy needs additional information in results:
+
+```python
+from beyond_local_file.link_strategy_protocol import LinkCreateDetails
+
+@dataclass
+class HardlinkCreateDetails:
+    """Hard link specific details."""
+    
+    inode_count: int = 0
+    
+    def get_summary(self) -> str:
+        return f"Inodes created: {self.inode_count}"
+
+# Use in create_links():
+result = LinkCreateResult(
+    created=created_items,
+    details=HardlinkCreateDetails(inode_count=5),
+    progress=OperationProgress(total_items=10, completed_items=10)
+)
+```
+
+### 4. Integration
+
+Update operations in `project_processor.py` to partition items for your strategy and create your manager.
 
 ## Coding Standards
 

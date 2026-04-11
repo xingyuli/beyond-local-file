@@ -181,6 +181,16 @@ For detailed examples, see [docs/configuration-reference.md](docs/configuration-
 | `blf link sync [PROJECT]` | Create symlinks or copies in target directories |
 | `blf link check [PROJECT]` | Check link status and Git excludes |
 
+### Progress Tracking
+
+When operations are interrupted (e.g., user chooses "Abort" during prompts), the tool displays progress information:
+
+```
+Operation aborted: 5/10 items processed
+```
+
+This helps you understand how much work was completed before the interruption.
+
 For full option details and usage examples, see [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Documentation

@@ -352,219 +352,61 @@ if result.details:
 
 ## Manager Implementations
 
-### SymlinkManager
+### Current Strategy Types
 
-**Responsibility**: Create and manage symbolic links
+The system currently supports two link strategies:
 
-**Constructor:**
-```python
-def __init__(self, symlink_items: list[ProjectItem], target_path: Path):
-    """Initialize with pre-filtered symlink items."""
-    self.symlink_items = symlink_items  # Trusts caller to filter
-    self.target_path = Path(target_path)
-    self.git_manager = GitExcludeManager(self.target_path)
-```
+| Strategy | Manager | Purpose | Details Type |
+|----------|---------|---------|--------------|
+| Symlink | `SymlinkManager` | Creates symbolic links | None (no strategy-specific details) |
+| Copy | `CopyManager` | Creates physical copies with bidirectional sync | `CopyCreateDetails`, `CopyCheckDetails` |
 
-**Protocol Implementation:**
-```python
-def create_links(self, ask_callback=None) -> LinkCreateResult:
-    """Create symlinks for all managed items."""
-    # Use existing sync() logic
-    sync_result = self.sync(ask_callback)
-    
-    # Map to unified result type
-    return LinkCreateResult(
-        created=sync_result.created,
-        already_correct=sync_result.already_correct,
-        skipped=sync_result.skipped,
-        failed=sync_result.failed,
-        details=None,  # Symlinks don't have strategy-specific details
-    )
+**Key Points:**
+- All managers implement the `LinkStrategyManager` protocol
+- Managers receive pre-filtered items from operations (divide-and-conquer)
+- Managers return unified result types (`LinkCreateResult`, `LinkCheckResult`)
+- Strategy-specific information is provided via optional `details` field
 
-def check_links(self) -> LinkCheckResult:
-    """Check status of symlinks."""
-    result = LinkCheckResult()
-    
-    for item in self.symlink_items:
-        link_path = self.target_path / item.name
-        if link_path.exists() or link_path.is_symlink():
-            result.exists.append(item.name)
-        else:
-            result.missing.append(item.name)
-    
-    result.details = None  # No strategy-specific details
-    return result
-```
-
-### CopyManager
-
-**Responsibility**: Create and manage physical file copies with bidirectional sync
-
-**Constructor:**
-```python
-def __init__(self, copy_items: list[ProjectItem], target_path: Path, config_dir: Path):
-    """Initialize with pre-filtered copy items."""
-    self.copy_items = copy_items  # Trusts caller to filter
-    self.target_path = target_path
-    self.config_dir = config_dir
-    self.sync_state = SyncState(config_dir)
-    self.sync_state.load()
-    self.git_manager = GitExcludeManager(target_path)
-```
-
-**Protocol Implementation:**
-```python
-def create_links(self, conflict_callback=None) -> LinkCreateResult:
-    """Create copies for all managed items."""
-    # Use existing sync() logic
-    copy_result = self.sync(conflict_callback)
-    
-    # Create strategy-specific details
-    details = CopyCreateDetails(reverse_copied=copy_result.reverse_copied)
-    
-    # Map to unified result type
-    return LinkCreateResult(
-        created=copy_result.copied,
-        already_correct=copy_result.in_sync,
-        skipped=copy_result.skipped,
-        failed=copy_result.failed,
-        details=details,  # Copy-specific details
-    )
-
-def check_links(self) -> LinkCheckResult:
-    """Check status of copies."""
-    # Use existing check() logic
-    copy_check = self.check()
-    
-    # Create strategy-specific details
-    details = CopyCheckDetails(
-        in_sync=copy_check.in_sync,
-        manually_synced=copy_check.manually_synced,
-        managed_changed=copy_check.managed_changed,
-        target_changed=copy_check.target_changed,
-        both_changed=copy_check.both_changed,
-    )
-    
-    # Map to unified result type
-    result = LinkCheckResult()
-    result.exists = copy_check.in_sync + copy_check.manually_synced
-    result.missing = copy_check.missing
-    result.details = details  # Copy-specific details
-    
-    return result
-```
+**For implementation details**, see the source code:
+- `src/beyond_local_file/symlink_manager.py`
+- `src/beyond_local_file/copy_manager.py`
+- `src/beyond_local_file/link_strategy_protocol.py`
 
 ---
 
 ## Operations Layer
 
-### SyncOperation
+### Overview
 
-**Responsibility**: Coordinate sync operations across all strategies
+Operations coordinate work across multiple strategy managers using the divide-and-conquer pattern:
 
-```python
-class SyncOperation(CmdOperation):
-    def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute sync using divide-and-conquer strategy."""
-        
-        # PARTITION: Divide items by strategy
-        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
-        
-        # CONQUER: Delegate to appropriate managers
-        
-        # Handle symlink items
-        if symlink_items:
-            manager = SymlinkManager(symlink_items, target_path)
-            result = manager.sync(self.ask_callback)
-            
-            # Format and display results
-            formatter = SyncResultFormatter(project, result)
-            formatter.format(project.name, target_path)
-            
-            if result.aborted:
-                return False
-        
-        # Handle copy items
-        if copy_items:
-            copy_mgr = CopyManager(copy_items, target_path, self.config_dir)
-            copy_result = copy_mgr.sync(self.conflict_callback)
-            
-            # Format and display results
-            CopyResultFormatter(copy_result).format(project.name, target_path)
-        
-        return True
-```
+1. **PARTITION**: Divide items by strategy
+2. **CONQUER**: Create managers and delegate to them
+3. **COMBINE**: Aggregate results (especially for git exclude checking)
 
-### CheckOperation
+### Key Responsibilities
 
-**Responsibility**: Coordinate check operations across all strategies
+**SyncOperation:**
+- Partition items by strategy
+- Create appropriate managers with partitioned items
+- Call `create_links()` on each manager
+- Format and display results
+- Handle abort signals
 
-```python
-class CheckOperation(CmdOperation):
-    def execute(self, project: Project, target_path: Path) -> bool:
-        """Execute check using divide-and-conquer strategy."""
-        
-        # PARTITION: Divide items by strategy
-        symlink_items = [i for i in project.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in project.items if i.strategy == LinkStrategy.COPY]
-        
-        # CONQUER: Create managers with partitioned items
-        symlink_mgr = SymlinkManager(symlink_items, target_path) if symlink_items else None
-        copy_mgr = CopyManager(copy_items, target_path, self.config_dir) if copy_items else None
-        
-        # COMBINE: Collect all valid entries for git exclude checking
-        all_valid_entries: set[str] = set()
-        if symlink_mgr:
-            all_valid_entries.update(i.name for i in symlink_mgr.get_managed_items())
-        if copy_mgr:
-            all_valid_entries.update(i.name for i in copy_mgr.get_managed_items())
-        
-        # Execute checks
-        if symlink_mgr:
-            symlink_result = symlink_mgr.check()
-            
-            # Check git excludes with aggregated entries
-            if symlink_mgr.git_manager.is_git_repo():
-                git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-                # Map to legacy result for backward compatibility
-                symlink_result.exclude_present = git_result.present
-                symlink_result.exclude_missing = git_result.missing
-                symlink_result.exclude_extra = git_result.extra
-        
-        if copy_mgr:
-            copy_result = copy_mgr.check()
-        
-        # Format and display results
-        # ...
-        
-        return True
-```
+**CheckOperation:**
+- Partition items by strategy
+- Create appropriate managers with partitioned items
+- Aggregate all valid entries for git exclude checking
+- Call `check_links()` and `check_git_excludes()` on each manager
+- Format and display results
 
 ### Git Exclude Aggregation
 
-**Why aggregate?**
+Git exclude entries should include ALL managed items (symlink + copy), not just one strategy's items. Operations collect all item names from all managers and pass this aggregated set to each manager's `check_git_excludes()` method.
 
-Git exclude entries should include ALL managed items (symlink + copy), not just one strategy's items. This prevents items from one strategy being reported as "extra" entries.
+**Why?** This prevents items from one strategy being incorrectly reported as "extra" entries.
 
-**How it works:**
-
-1. **Collect**: Get all item names from all managers
-2. **Pass**: Pass aggregated set to each manager's `check_git_excludes()`
-3. **Identify**: Each manager can correctly identify extra entries
-
-```python
-# Collect all valid entries from ALL managers
-all_valid_entries: set[str] = set()
-if symlink_mgr:
-    all_valid_entries.update(i.name for i in symlink_mgr.get_managed_items())
-if copy_mgr:
-    all_valid_entries.update(i.name for i in copy_mgr.get_managed_items())
-
-# Pass to each manager for checking
-git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-# Now git_result.extra only contains truly extra entries
-```
+**For implementation details**, see `src/beyond_local_file/project_processor.py`
 
 ---
 
@@ -572,20 +414,26 @@ git_result = symlink_mgr.check_git_excludes(all_valid_entries)
 
 ### Adding a New Strategy
 
-See the full example in the original architecture-design.md document. The key steps are:
+To add a new link strategy:
 
-1. Define the strategy enum
-2. Create strategy-specific details (if needed)
-3. Create the manager implementing LinkStrategyManager protocol
-4. Update operations to partition and delegate
+1. **Define the strategy enum value** in `options.py`
+2. **Create strategy-specific details** (if needed) implementing `LinkCreateDetails` and/or `LinkCheckDetails` protocols
+3. **Create the manager class** implementing `LinkStrategyManager` protocol
+4. **Update operations** in `project_processor.py` to partition and delegate to your new manager
 
 **That's it!** No changes to existing managers needed.
+
+**For detailed implementation guidance**, see `docs/development.md` section "Implementing a New Link Strategy"
 
 ---
 
 ## Code Templates
 
-### New Manager Template
+### Conceptual Templates
+
+These templates show the conceptual structure for extending the system. For complete, working examples, see the source code.
+
+### New Manager Structure
 
 ```python
 class NewStrategyManager:
@@ -594,100 +442,62 @@ class NewStrategyManager:
         self.target_path = target_path
         self.git_manager = GitExcludeManager(target_path)
     
-    def get_managed_items(self) -> list[ProjectItem]:
-        return self.items
-    
-    def create_links(self) -> LinkCreateResult:
-        result = LinkCreateResult()
-        # ... implementation
-        result.details = NewCreateDetails(...) if needed else None
-        return result
-    
-    def check_links(self) -> LinkCheckResult:
-        result = LinkCheckResult()
-        # ... implementation
-        result.details = NewCheckDetails(...) if needed else None
-        return result
-    
-    def add_git_excludes(self) -> GitExcludeAddResult:
-        result = GitExcludeAddResult()
-        if not self.git_manager.is_git_repo():
-            return result
-        item_names = {i.name for i in self.items}
-        if item_names:
-            added, existing = self.git_manager.write_entries(item_names)
-            result.added = added
-            result.existing = existing
-        return result
-    
-    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
-        result = GitExcludeCheckResult()
-        if not self.git_manager.is_git_repo():
-            result.missing = {i.name for i in self.items}
-            return result
-        exclude_entries = self.git_manager.read_entries()
-        item_names = {i.name for i in self.items}
-        result.present = item_names & exclude_entries
-        result.missing = item_names - exclude_entries
-        result.extra = exclude_entries - all_valid_entries
-        return result
+    # Implement all 5 protocol methods:
+    def get_managed_items(self) -> list[ProjectItem]: ...
+    def create_links(self) -> LinkCreateResult: ...
+    def check_links(self) -> LinkCheckResult: ...
+    def add_git_excludes(self) -> GitExcludeAddResult: ...
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult: ...
 ```
 
-### New Details Template
+### New Details Structure
 
 ```python
 @dataclass
 class NewCreateDetails:
     """Strategy-specific details for create operations."""
     field1: type1
-    field2: type2
     
     def get_summary(self) -> str:
-        return f"Summary: {self.field1}, {self.field2}"
+        return f"Summary: {self.field1}"
 
 @dataclass
 class NewCheckDetails:
     """Strategy-specific details for check operations."""
     field1: type1
-    field2: type2
     
     def get_summary(self) -> str:
-        return f"Summary: {self.field1}, {self.field2}"
+        return f"Summary: {self.field1}"
 ```
 
-### Operation Partition Template
+### Operation Partition Pattern
 
 ```python
-def execute(self, project: Project, target_path: Path) -> bool:
-    # PARTITION
-    strategy1_items = [i for i in project.items if i.strategy == Strategy.ONE]
-    strategy2_items = [i for i in project.items if i.strategy == Strategy.TWO]
-    
-    # CONQUER
-    if strategy1_items:
-        mgr = Strategy1Manager(strategy1_items, target_path)
-        result = mgr.create_links()
-        # ... process result
-    
-    if strategy2_items:
-        mgr = Strategy2Manager(strategy2_items, target_path)
-        result = mgr.create_links()
-        # ... process result
-    
-    return True
+# PARTITION
+strategy1_items = [i for i in project.items if i.strategy == Strategy.ONE]
+strategy2_items = [i for i in project.items if i.strategy == Strategy.TWO]
+
+# CONQUER
+if strategy1_items:
+    mgr = Strategy1Manager(strategy1_items, target_path)
+    result = mgr.create_links()
+
+if strategy2_items:
+    mgr = Strategy2Manager(strategy2_items, target_path)
+    result = mgr.create_links()
 ```
 
-### Git Exclude Aggregation Template
+### Git Exclude Aggregation Pattern
 
 ```python
-# AGGREGATE
+# AGGREGATE all valid entries from all managers
 all_valid_entries: set[str] = set()
 if manager1:
     all_valid_entries.update(i.name for i in manager1.get_managed_items())
 if manager2:
     all_valid_entries.update(i.name for i in manager2.get_managed_items())
 
-# PASS
+# PASS to each manager for checking
 if manager1:
     git_result = manager1.check_git_excludes(all_valid_entries)
 if manager2:
@@ -753,6 +563,7 @@ LinkCheckResult   # Verb + Result
 ## Testing Patterns
 
 ### Test Manager in Isolation
+
 ```python
 def test_manager():
     items = [ProjectItem(name="file.txt", strategy=MY_STRATEGY, ...)]
@@ -762,17 +573,20 @@ def test_manager():
 ```
 
 ### Test Protocol Compliance
+
 ```python
 def test_protocol_compliance():
     manager = MyManager(items, target_path)
-    assert hasattr(manager, "get_managed_items")
-    assert hasattr(manager, "create_links")
-    assert hasattr(manager, "check_links")
-    assert hasattr(manager, "add_git_excludes")
-    assert hasattr(manager, "check_git_excludes")
+    # Verify all protocol methods exist
+    assert callable(getattr(manager, "get_managed_items", None))
+    assert callable(getattr(manager, "create_links", None))
+    assert callable(getattr(manager, "check_links", None))
+    assert callable(getattr(manager, "add_git_excludes", None))
+    assert callable(getattr(manager, "check_git_excludes", None))
 ```
 
 ### Test Result Types
+
 ```python
 def test_result_types():
     result = manager.create_links()
@@ -780,6 +594,8 @@ def test_result_types():
     assert hasattr(result, "created")
     assert hasattr(result, "details")
 ```
+
+**For complete test examples**, see `tests/unit/test_link_strategy_protocol.py` and related test files.
 
 ---
 
