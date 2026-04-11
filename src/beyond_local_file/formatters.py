@@ -19,6 +19,7 @@ from .link_strategy_protocol import (
     LinkCheckResult,
     LinkCreateResult,
 )
+from .model.processing import ProcessingUnit
 from .symlink_manager import CheckResult, SyncResult
 
 
@@ -372,17 +373,29 @@ class CheckResultFormatter:
 class CheckRow:
     """A single row of check results for table rendering.
 
+    This class reorganizes raw protocol results into a reader-friendly format.
+
+    IMPORTANT: There is a hidden relationship between link strategies and table columns:
+    - symlink_link_result → "Symlink" column
+    - copy_link_result → "Copy" column
+    - git_result → "Exclude" column (shared across strategies)
+
+    This design is acceptable for now as we only have two strategies. If more strategies
+    are added in the future, consider a more flexible column mapping approach.
+
     Attributes:
         project_name: Name of the project.
         target_path: Target path that was checked.
-        result: The symlink check operation result.
-        copy_result: Optional copy check result (None when no copy items).
+        symlink_link_result: LinkCheckResult from symlink strategy (None if no symlink items).
+        copy_link_result: LinkCheckResult from copy strategy (None if no copy items).
+        git_result: Merged git exclude result (shared across strategies).
     """
 
     project_name: str
     target_path: Path
-    result: CheckResult
-    copy_result: CopyCheckResult | None = None
+    symlink_link_result: LinkCheckResult | None = None
+    copy_link_result: LinkCheckResult | None = None
+    git_result: GitExcludeCheckResult | None = None
 
 
 class CheckTableFormatter:
@@ -401,7 +414,8 @@ class CheckTableFormatter:
         """
         self.rows = rows
         self.show_extra = show_extra
-        self._has_copy = any(row.copy_result is not None for row in rows)
+        # Detect if any row has copy strategy
+        self._has_copy = any(row.copy_link_result is not None for row in rows)
 
     def render(self) -> None:
         """Render the table and optional extra-exclude section to stdout."""
@@ -416,11 +430,11 @@ class CheckTableFormatter:
         table.add_column("Target Path")
 
         for row in self.rows:
-            symlink_cell = self._symlink_cell(row.result)
-            exclude_cell = self._exclude_cell(row.result)
+            symlink_cell = self._symlink_cell(row.symlink_link_result)
+            exclude_cell = self._exclude_cell(row.git_result)
             cells = [row.project_name, symlink_cell, exclude_cell]
             if self._has_copy:
-                cells.append(self._copy_cell(row.copy_result))
+                cells.append(self._copy_cell(row.copy_link_result))
             cells.append(str(row.target_path))
             table.add_row(*cells)
 
@@ -429,38 +443,41 @@ class CheckTableFormatter:
         if self.show_extra:
             self._render_extra_entries(console)
 
-    def _symlink_cell(self, result: CheckResult) -> str:
+    def _symlink_cell(self, link_result: LinkCheckResult | None) -> str:
         """Build the symlink status cell text.
 
         Args:
-            result: The check result for this row.
+            link_result: The link check result for this row, or None if no symlink items.
 
         Returns:
             A short status string: ✓ when all symlinks exist, or ✗ (N missing) otherwise.
         """
-        if result.symlink_missing:
-            return f"[red]✗ ({len(result.symlink_missing)} missing)[/red]"
+        if link_result is None:
+            return "[dim]n/a[/dim]"
+        if link_result.missing:
+            return f"[red]✗ ({len(link_result.missing)} missing)[/red]"
         return "[green]✓[/green]"
 
-    def _exclude_cell(self, result: CheckResult) -> str:
+    def _exclude_cell(self, git_result: GitExcludeCheckResult | None) -> str:
         """Build the git exclude status cell text.
 
         Args:
-            result: The check result for this row.
+            git_result: The git exclude check result for this row, or None if not a git repo.
 
         Returns:
             A short status string indicating exclude health and extra entry count.
         """
-        has_exclude_data = (
-            result.exclude_present or result.exclude_missing or (self.show_extra and result.exclude_extra)
-        )
+        if git_result is None:
+            return "[dim]n/a[/dim]"
+
+        has_exclude_data = git_result.present or git_result.missing or (self.show_extra and git_result.extra)
         if not has_exclude_data:
             return "[dim]n/a[/dim]"
 
-        if result.exclude_missing:
-            return f"[red]✗ ({len(result.exclude_missing)} missing)[/red]"
+        if git_result.missing:
+            return f"[red]✗ ({len(git_result.missing)} missing)[/red]"
 
-        extra_count = len(result.exclude_extra) if self.show_extra and result.exclude_extra else 0
+        extra_count = len(git_result.extra) if self.show_extra and git_result.extra else 0
         if extra_count:
             return f"[green]✓[/green] [dim](+{extra_count})[/dim]"
         return "[green]✓[/green]"
@@ -471,7 +488,11 @@ class CheckTableFormatter:
         Args:
             console: Rich console to write output to.
         """
-        extras = [(row.project_name, sorted(row.result.exclude_extra)) for row in self.rows if row.result.exclude_extra]
+        extras = [
+            (row.project_name, sorted(row.git_result.extra))
+            for row in self.rows
+            if row.git_result and row.git_result.extra
+        ]
         if not extras:
             return
 
@@ -479,33 +500,39 @@ class CheckTableFormatter:
         for project_name, entries in extras:
             console.print(f"  {project_name}: {', '.join(entries)}")
 
-    def _copy_cell(self, copy_result: CopyCheckResult | None) -> str:
+    def _copy_cell(self, link_result: LinkCheckResult | None) -> str:
         """Build the copy sync status cell text.
 
         Args:
-            copy_result: The copy check result, or None if no copy items.
+            link_result: The link check result. If details is CopyCheckDetails,
+                        renders copy-specific status; otherwise returns n/a.
 
         Returns:
             A short status string for the Copy column.
         """
-        if copy_result is None:
+        if link_result is None:
             return "[dim]n/a[/dim]"
 
+        if not isinstance(link_result.details, CopyCheckDetails):
+            return "[dim]n/a[/dim]"
+
+        details = link_result.details
+
         problems = (
-            len(copy_result.managed_changed)
-            + len(copy_result.target_changed)
-            + len(copy_result.both_changed)
-            + len(copy_result.missing)
+            len(details.managed_changed)
+            + len(details.target_changed)
+            + len(details.both_changed)
+            + len(link_result.missing)
         )
-        manually_synced_count = len(copy_result.manually_synced)
+        manually_synced_count = len(details.manually_synced)
 
         if problems:
             parts: list[str] = []
-            if copy_result.missing:
-                parts.append(f"{len(copy_result.missing)} missing")
-            if copy_result.both_changed:
-                parts.append(f"{len(copy_result.both_changed)} conflict")
-            out_of_sync = len(copy_result.managed_changed) + len(copy_result.target_changed)
+            if link_result.missing:
+                parts.append(f"{len(link_result.missing)} missing")
+            if details.both_changed:
+                parts.append(f"{len(details.both_changed)} conflict")
+            out_of_sync = len(details.managed_changed) + len(details.target_changed)
             if out_of_sync:
                 parts.append(f"{out_of_sync} out of sync")
             return f"[red]✗ ({', '.join(parts)})[/red]"
@@ -593,3 +620,95 @@ class CopyCheckResultFormatter:
             click.echo(f"  ✗ {item} (copied, conflict - both changed)")
         for item in self.result.missing:
             click.echo(f"  ✗ {item} (copy missing)")
+
+
+@dataclass
+class ProcessingUnitResults:
+    """Raw results from a single ProcessingUnit.
+
+    Attributes:
+        unit: The processing unit that was checked.
+        symlink_link_result: LinkCheckResult from SymlinkManager (None if no symlink items).
+        symlink_git_result: GitExcludeCheckResult from SymlinkManager (None if no git repo or no symlink items).
+        copy_link_result: LinkCheckResult from CopyManager (None if no copy items).
+        copy_git_result: GitExcludeCheckResult from CopyManager (None if no git repo or no copy items).
+    """
+
+    unit: ProcessingUnit
+    symlink_link_result: LinkCheckResult | None = None
+    symlink_git_result: GitExcludeCheckResult | None = None
+    copy_link_result: LinkCheckResult | None = None
+    copy_git_result: GitExcludeCheckResult | None = None
+
+
+class CheckTableRenderer:
+    """Transforms raw protocol results into reader-friendly table rows.
+
+    This class encapsulates the logic for reorganizing results from multiple
+    ProcessingUnits into CheckRow objects suitable for table rendering.
+
+    The transformation handles:
+    - Merging symlink and copy results for the same target
+    - Combining git exclude results from both strategies
+    - Creating empty results for missing strategies
+    """
+
+    def __init__(self, results: list[ProcessingUnitResults]):
+        """Initialize renderer with raw results.
+
+        Args:
+            results: List of raw results from all ProcessingUnits.
+        """
+        self.results = results
+
+    def transform(self) -> list[CheckRow]:
+        """Transform raw results into CheckRow objects for table rendering.
+
+        Returns:
+            List of CheckRow objects, one per (project, target) pair.
+        """
+        rows = []
+        for result in self.results:
+            # Merge git exclude results from both strategies
+            git_result = self._merge_git_results(result.symlink_git_result, result.copy_git_result)
+
+            row = CheckRow(
+                project_name=result.unit.display_name,
+                target_path=result.unit.target_project_path,
+                symlink_link_result=result.symlink_link_result,
+                copy_link_result=result.copy_link_result,
+                git_result=git_result,
+            )
+            rows.append(row)
+
+        return rows
+
+    def _merge_git_results(
+        self,
+        symlink_result: GitExcludeCheckResult | None,
+        copy_result: GitExcludeCheckResult | None,
+    ) -> GitExcludeCheckResult | None:
+        """Merge git exclude results from symlink and copy strategies.
+
+        Args:
+            symlink_result: Git exclude result from symlink strategy.
+            copy_result: Git exclude result from copy strategy.
+
+        Returns:
+            Merged git exclude result, or None if both are None.
+        """
+        if symlink_result is None and copy_result is None:
+            return None
+
+        if symlink_result is None:
+            return copy_result
+
+        if copy_result is None:
+            return symlink_result
+
+        # Both results exist - merge them
+        return GitExcludeCheckResult(
+            present=symlink_result.present | copy_result.present,
+            missing=symlink_result.missing | copy_result.missing,
+            extra=symlink_result.extra | copy_result.extra,
+        )

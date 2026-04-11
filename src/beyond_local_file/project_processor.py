@@ -7,18 +7,19 @@ from pathlib import Path
 import click
 
 from .config import Config
-from .copy_manager import CopyCheckResult, CopyManager
+from .copy_manager import CopyManager
 from .formatters import (
-    CheckRow,
     CheckTableFormatter,
+    CheckTableRenderer,
     LinkCheckFormatter,
     LinkSyncFormatter,
+    ProcessingUnitResults,
 )
 from .model.config import ConfigProject
 from .model.processing import ProcessingUnit
 from .model.translator import translate_config_to_processing
 from .options import LinkStrategy, OutputFormat
-from .symlink_manager import Action, CheckResult, SymlinkManager
+from .symlink_manager import Action, SymlinkManager
 
 
 def get_absolute_path(path: str) -> str:
@@ -239,7 +240,7 @@ class CheckOperation(CmdOperation):
         self.config_dir = config_dir
         self.show_extra = show_extra
         self.output_format = output_format
-        self._rows: list[CheckRow] = []
+        self._results: list[ProcessingUnitResults] = []
 
     @property
     def verbose_progress(self) -> bool:
@@ -297,28 +298,35 @@ class CheckOperation(CmdOperation):
                 formatter = LinkCheckFormatter(link_result, git_result, self.show_extra)
                 formatter.format(unit.display_name, unit.target_project_path)
         else:
-            # Table mode: use legacy check() for backward compatibility
-            symlink_result = None
+            # Table mode: use unified protocol
+            symlink_link_result = None
+            symlink_git_result = None
             if symlink_mgr:
-                symlink_result = symlink_mgr.check()
+                symlink_link_result = symlink_mgr.check_links()
 
                 # Check git excludes using protocol with all_valid_entries
                 if symlink_mgr.git_manager.is_git_repo():
-                    git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-                    # Map protocol result back to CheckResult for backward compatibility
-                    symlink_result.exclude_present = git_result.present
-                    symlink_result.exclude_missing = git_result.missing
-                    symlink_result.exclude_extra = git_result.extra
+                    symlink_git_result = symlink_mgr.check_git_excludes(all_valid_entries)
 
-            # Check copy items
-            copy_result: CopyCheckResult | None = None
+            copy_link_result = None
+            copy_git_result = None
             if copy_mgr:
-                copy_result = copy_mgr.check()
+                copy_link_result = copy_mgr.check_links()
 
-            # For table format, we need a symlink_result even if empty
-            if not symlink_result:
-                symlink_result = CheckResult()
-            self._rows.append(CheckRow(unit.display_name, unit.target_project_path, symlink_result, copy_result))
+                # Check git excludes using protocol with all_valid_entries
+                if copy_mgr.git_manager.is_git_repo():
+                    copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
+
+            # Collect raw results
+            self._results.append(
+                ProcessingUnitResults(
+                    unit=unit,
+                    symlink_link_result=symlink_link_result,
+                    symlink_git_result=symlink_git_result,
+                    copy_link_result=copy_link_result,
+                    copy_git_result=copy_git_result,
+                )
+            )
 
         return True
 
@@ -327,5 +335,8 @@ class CheckOperation(CmdOperation):
 
         No-op when ``output_format`` is ``"verbose"`` since output is already printed.
         """
-        if self.output_format != OutputFormat.VERBOSE and self._rows:
-            CheckTableFormatter(self._rows, self.show_extra).render()
+        if self.output_format != OutputFormat.VERBOSE and self._results:
+            # Transform raw results into table rows
+            renderer = CheckTableRenderer(self._results)
+            rows = renderer.transform()
+            CheckTableFormatter(rows, self.show_extra).render()
