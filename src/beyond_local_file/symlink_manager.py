@@ -2,7 +2,6 @@
 
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -23,54 +22,6 @@ class Action(Enum):
     SKIP = 1
     OVERWRITE = 2
     ABORT = 3
-
-
-@dataclass
-class SyncResult:
-    """Result of a sync operation.
-
-    Note: This is a legacy result type kept for backward compatibility with formatters.
-    Will be removed after CheckTableFormatter migration is complete.
-
-    Attributes:
-        created: Set of item names for which symlinks were newly created.
-        already_correct: Set of item names where symlinks already existed and were correct.
-        skipped: Set of item names that were skipped due to user choice.
-        failed: Set of item names for which symlink creation failed.
-        git_added: Number of entries added to .git/info/exclude.
-        git_existing: Set of entries that were already in .git/info/exclude.
-        aborted: True if the operation was aborted by user.
-    """
-
-    created: set[str] = field(default_factory=set)
-    already_correct: set[str] = field(default_factory=set)
-    skipped: set[str] = field(default_factory=set)
-    failed: set[str] = field(default_factory=set)
-    git_added: int = 0
-    git_existing: set[str] = field(default_factory=set)
-    aborted: bool = False
-
-
-@dataclass
-class CheckResult:
-    """Result of a check operation.
-
-    Note: This is a legacy result type kept for backward compatibility with formatters.
-    Will be removed after CheckTableFormatter migration is complete.
-
-    Attributes:
-        symlink_exists: List of item names that have existing symlinks.
-        symlink_missing: List of item names that are missing symlinks.
-        exclude_present: Set of items that are correctly in .git/info/exclude.
-        exclude_missing: Set of items that should be but are not in .git/info/exclude.
-        exclude_extra: Set of entries in .git/info/exclude that don't correspond to project items.
-    """
-
-    symlink_exists: list[str] = field(default_factory=list)
-    symlink_missing: list[str] = field(default_factory=list)
-    exclude_present: set[str] = field(default_factory=set)
-    exclude_missing: set[str] = field(default_factory=set)
-    exclude_extra: set[str] = field(default_factory=set)
 
 
 class SymlinkManager:

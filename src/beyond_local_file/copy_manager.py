@@ -6,7 +6,6 @@ with hash-based change detection and conflict resolution.
 
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from .git_manager import GitExcludeManager
@@ -30,56 +29,6 @@ class CopyConflictAction:
     MANAGED = "managed"
     TARGET = "target"
     SKIP = "skip"
-
-
-@dataclass
-class CopyResult:
-    """Result of a copy-sync operation for a single project/target pair.
-
-    Note: This is a legacy result type kept for backward compatibility with formatters.
-    Will be removed after CheckTableFormatter migration is complete.
-
-    Attributes:
-        copied: Items freshly copied from managed to target.
-        reverse_copied: Items synced from target back to managed.
-        in_sync: Items already in sync (no action needed).
-        skipped: Items skipped by user choice.
-        failed: Items that failed to copy.
-        git_added: Number of entries added to .git/info/exclude.
-        git_existing: Set of entries that were already in .git/info/exclude.
-    """
-
-    copied: set[str] = field(default_factory=set)
-    reverse_copied: set[str] = field(default_factory=set)
-    in_sync: set[str] = field(default_factory=set)
-    skipped: set[str] = field(default_factory=set)
-    failed: set[str] = field(default_factory=set)
-    git_added: int = 0
-    git_existing: set[str] = field(default_factory=set)
-
-
-@dataclass
-class CopyCheckResult:
-    """Result of checking copy-sync status for a single project/target pair.
-
-    Note: This is a legacy result type kept for backward compatibility with formatters.
-    Will be removed after CheckTableFormatter migration is complete.
-
-    Attributes:
-        in_sync: Items where managed and target are identical and match recorded state.
-        manually_synced: Items where managed and target are identical but differ from recorded state.
-        managed_changed: Items where only the managed file changed.
-        target_changed: Items where only the target file changed.
-        both_changed: Items where both sides changed (conflict).
-        missing: Items where the target copy does not exist.
-    """
-
-    in_sync: list[str] = field(default_factory=list)
-    manually_synced: list[str] = field(default_factory=list)
-    managed_changed: list[str] = field(default_factory=list)
-    target_changed: list[str] = field(default_factory=list)
-    both_changed: list[str] = field(default_factory=list)
-    missing: list[str] = field(default_factory=list)
 
 
 class CopyManager:
