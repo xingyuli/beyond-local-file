@@ -151,7 +151,7 @@ def test_same_symlink_behavior():
 
         # Create SymlinkManager and sync
         manager = SymlinkManager(items, target_dir)
-        result = manager.sync()
+        result = manager.create_links()
 
         # Verify symlink creation behavior
         # All items should be created (no existing symlinks)
@@ -163,7 +163,7 @@ def test_same_symlink_behavior():
         # Verify no items were skipped or failed
         assert len(result.skipped) == 0
         assert len(result.failed) == 0
-        assert not result.aborted
+        assert not result.progress.aborted
 
         # Verify symlinks exist and point to correct sources
         assert (target_dir / "file1.txt").is_symlink()
@@ -175,14 +175,14 @@ def test_same_symlink_behavior():
         assert (target_dir / "subdir").resolve() == (project_dir / "subdir").resolve()
 
         # Run sync again - all symlinks should be already_correct
-        result2 = manager.sync()
+        result2 = manager.create_links()
         assert len(result2.already_correct) == 3  # noqa: PLR2004 - test expects 3 items
         assert len(result2.created) == 0
 
         # Run check to verify status
-        check_result = manager.check()
-        assert len(check_result.symlink_exists) == 3  # noqa: PLR2004 - test expects 3 items
-        assert len(check_result.symlink_missing) == 0
+        check_result = manager.check_links()
+        assert len(check_result.exists) == 3  # noqa: PLR2004 - test expects 3 items
+        assert len(check_result.missing) == 0
 
 
 def test_backward_compatible_config_format_variations():

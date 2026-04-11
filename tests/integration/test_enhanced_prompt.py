@@ -45,7 +45,7 @@ def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
 
     # Run sync
     manager = SymlinkManager(items, temp_target_dir)
-    result = manager.sync(ask_callback=mock_callback)
+    result = manager.create_links(ask_callback=mock_callback)
 
     # Verify callback was called with both arguments
     assert mock_callback.call_count == 1
@@ -73,7 +73,7 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
 
     # Run sync
     manager = SymlinkManager(items, temp_target_dir)
-    result = manager.sync(ask_callback=mock_callback)
+    result = manager.create_links(ask_callback=mock_callback)
 
     # Verify the symlink was created
     assert len(result.created) == 1

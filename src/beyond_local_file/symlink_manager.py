@@ -29,6 +29,9 @@ class Action(Enum):
 class SyncResult:
     """Result of a sync operation.
 
+    Note: This is a legacy result type kept for backward compatibility with formatters.
+    Will be removed after CheckTableFormatter migration is complete.
+
     Attributes:
         created: Set of item names for which symlinks were newly created.
         already_correct: Set of item names where symlinks already existed and were correct.
@@ -51,6 +54,9 @@ class SyncResult:
 @dataclass
 class CheckResult:
     """Result of a check operation.
+
+    Note: This is a legacy result type kept for backward compatibility with formatters.
+    Will be removed after CheckTableFormatter migration is complete.
 
     Attributes:
         symlink_exists: List of item names that have existing symlinks.
@@ -92,98 +98,6 @@ class SymlinkManager:
         self.symlink_items = symlink_items
         self.target_path = Path(target_path)
         self.git_manager = GitExcludeManager(self.target_path)
-
-    def sync(self, ask_callback: Callable[[str, str], Action] | None = None) -> SyncResult:
-        """Synchronize symlinks from project to target directory.
-
-        Creates symlinks for all project items in the target directory.
-        If a symlink already exists and points to the correct source, it is
-        left unchanged. If an incorrect symlink or regular file/directory
-        exists, the callback is invoked to determine the action to take.
-
-        For subpath items (names containing path separators), intermediate
-        parent directories are created automatically in the target.
-
-        Args:
-            ask_callback: Optional callback function that takes a path string
-                        and expected source path, and returns an Action.
-                        If not provided, existing paths are skipped by default.
-
-        Returns:
-            SyncResult containing details of the operation.
-        """
-        result = SyncResult()
-
-        for item in self.symlink_items:
-            link_path = self.target_path / item.name
-
-            if self._is_link_correct(link_path, item.path):
-                result.already_correct.add(item.name)
-                continue
-
-            if link_path.exists() or link_path.is_symlink():
-                action = self._handle_existing_path(link_path, item.path, ask_callback)
-                if action == Action.SKIP:
-                    result.skipped.add(item.name)
-                    continue
-                elif action == Action.ABORT:
-                    result.aborted = True
-                    return result
-                elif action == Action.OVERWRITE:
-                    self._remove_path(link_path)
-
-            # Ensure parent directories exist for subpath items
-            link_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if not self._create_symlink(item.path, link_path):
-                result.failed.add(item.name)
-                continue
-            result.created.add(item.name)
-
-        if self.git_manager.is_git_repo():
-            all_items = result.created | result.already_correct
-            if all_items:
-                added, existing = self.git_manager.write_entries(all_items)
-                result.git_added = added
-                result.git_existing = existing
-
-        return result
-
-    def check(self, all_item_names: set[str] | None = None) -> CheckResult:
-        """Check the status of symlinks and Git exclude configuration.
-
-        Inspects the target directory to determine which symlinks exist,
-        which are missing, and the state of the Git exclude file.
-
-        Args:
-            all_item_names: Optional set of all project item names (symlink + copy).
-                          Used to properly identify extra exclude entries.
-                          If None, only symlink items are considered.
-
-        Returns:
-            CheckResult containing the status of symlinks and exclude entries.
-        """
-        result = CheckResult()
-
-        for item in self.symlink_items:
-            link_path = self.target_path / item.name
-
-            if link_path.exists() or link_path.is_symlink():
-                result.symlink_exists.append(item.name)
-            else:
-                result.symlink_missing.append(item.name)
-
-        if self.git_manager.is_git_repo():
-            exclude_entries = self.git_manager.read_entries()
-            # Use all_item_names if provided (includes both symlink and copy items)
-            # Otherwise fall back to just symlink items
-            item_names = all_item_names if all_item_names is not None else {i.name for i in self.symlink_items}
-
-            result.exclude_present = item_names & exclude_entries
-            result.exclude_missing = item_names - exclude_entries
-            result.exclude_extra = exclude_entries - item_names
-
-        return result
 
     # Protocol methods (LinkStrategyManager interface)
 
@@ -263,16 +177,15 @@ class SymlinkManager:
     def add_git_excludes(self) -> GitExcludeAddResult:
         """Add git exclude entries for all managed items (protocol method).
 
+        PRECONDITION: This method is guaranteed to be called only when the target
+        directory is inside a git repository. Callers must check git repo status
+        before invoking this method.
+
         Returns:
             GitExcludeAddResult with added count, existing entries, and progress tracking.
         """
         item_names = {i.name for i in self.symlink_items}
         result = GitExcludeAddResult(progress=OperationProgress(total_items=len(item_names)))
-
-        if not self.git_manager.is_git_repo():
-            # No git repo, nothing to do but mark as completed
-            result.progress.completed_items = result.progress.total_items
-            return result
 
         if item_names:
             added, existing = self.git_manager.write_entries(item_names)
@@ -285,6 +198,10 @@ class SymlinkManager:
     def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
         """Check git exclude status for managed items (protocol method).
 
+        PRECONDITION: This method is guaranteed to be called only when the target
+        directory is inside a git repository. Callers must check git repo status
+        before invoking this method.
+
         Args:
             all_valid_entries: Set of ALL valid entry names from all managers.
                              Used to identify extra/stale entries.
@@ -293,11 +210,6 @@ class SymlinkManager:
             GitExcludeCheckResult with present, missing, extra entries.
         """
         result = GitExcludeCheckResult()
-
-        if not self.git_manager.is_git_repo():
-            item_names = {i.name for i in self.symlink_items}
-            result.missing = item_names
-            return result
 
         exclude_entries = self.git_manager.read_entries()
         item_names = {i.name for i in self.symlink_items}

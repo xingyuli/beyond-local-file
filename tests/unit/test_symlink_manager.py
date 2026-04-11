@@ -83,7 +83,7 @@ def sample_items(temp_project_dir: Path) -> list[ManagedProjectItem]:
 def test_sync_creates_symlinks_for_all_items(
     sample_items: list[ManagedProjectItem], temp_project_dir: Path, temp_target_dir: Path
 ) -> None:
-    """Test that sync creates symlinks for all project items.
+    """Test that create_links creates symlinks for all project items.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -91,7 +91,7 @@ def test_sync_creates_symlinks_for_all_items(
         temp_target_dir: Temporary target directory fixture.
     """
     manager = SymlinkManager(sample_items, temp_target_dir)
-    result = manager.sync()
+    result = manager.create_links()
 
     # All items should be created
     assert len(result.created) == 3  # noqa: PLR2004 - test expects 3 items
@@ -103,7 +103,7 @@ def test_sync_creates_symlinks_for_all_items(
     assert len(result.already_correct) == 0
     assert len(result.skipped) == 0
     assert len(result.failed) == 0
-    assert not result.aborted
+    assert not result.progress.aborted
 
     # Verify symlinks exist and point to correct sources
     assert (temp_target_dir / "file1.txt").is_symlink()
@@ -116,7 +116,7 @@ def test_sync_creates_symlinks_for_all_items(
 
 
 def test_sync_skips_existing_correct_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
-    """Test that sync skips symlinks that already exist and are correct.
+    """Test that create_links skips symlinks that already exist and are correct.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -125,11 +125,11 @@ def test_sync_skips_existing_correct_symlinks(sample_items: list[ManagedProjectI
     manager = SymlinkManager(sample_items, temp_target_dir)
 
     # First sync creates symlinks
-    result1 = manager.sync()
+    result1 = manager.create_links()
     assert len(result1.created) == 3  # noqa: PLR2004 - test expects 3 items
 
     # Second sync should skip all items (already correct)
-    result2 = manager.sync()
+    result2 = manager.create_links()
     assert len(result2.already_correct) == 3  # noqa: PLR2004 - test expects 3 items
     assert "file1.txt" in result2.already_correct
     assert "file2.txt" in result2.already_correct
@@ -141,7 +141,7 @@ def test_sync_skips_existing_correct_symlinks(sample_items: list[ManagedProjectI
 
 
 def test_sync_detects_incorrect_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
-    """Test that sync detects symlinks pointing to wrong sources.
+    """Test that create_links detects symlinks pointing to wrong sources.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -157,7 +157,7 @@ def test_sync_detects_incorrect_symlinks(sample_items: list[ManagedProjectItem],
         return Action.SKIP
 
     manager = SymlinkManager(sample_items, temp_target_dir)
-    result = manager.sync(ask_callback=skip_callback)
+    result = manager.create_links(ask_callback=skip_callback)
 
     # file1.txt should be skipped (incorrect symlink)
     assert "file1.txt" in result.skipped
@@ -172,7 +172,7 @@ def test_sync_detects_incorrect_symlinks(sample_items: list[ManagedProjectItem],
 def test_sync_overwrites_with_callback_approval(
     sample_items: list[ManagedProjectItem], temp_project_dir: Path, temp_target_dir: Path
 ) -> None:
-    """Test that sync overwrites incorrect symlinks when callback approves.
+    """Test that create_links overwrites incorrect symlinks when callback approves.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -189,7 +189,7 @@ def test_sync_overwrites_with_callback_approval(
         return Action.OVERWRITE
 
     manager = SymlinkManager(sample_items, temp_target_dir)
-    result = manager.sync(ask_callback=overwrite_callback)
+    result = manager.create_links(ask_callback=overwrite_callback)
 
     # All items should be created (file1.txt overwritten)
     assert len(result.created) == 3  # noqa: PLR2004 - test expects 3 items
@@ -205,7 +205,7 @@ def test_sync_overwrites_with_callback_approval(
 
 
 def test_check_reports_existing_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
-    """Test that check reports symlinks that exist.
+    """Test that check_links reports symlinks that exist.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -213,20 +213,20 @@ def test_check_reports_existing_symlinks(sample_items: list[ManagedProjectItem],
     """
     # Create symlinks
     manager = SymlinkManager(sample_items, temp_target_dir)
-    manager.sync()
+    manager.create_links()
 
     # Check should report all symlinks as existing
-    result = manager.check()
-    assert len(result.symlink_exists) == 3  # noqa: PLR2004 - test expects 3 items
-    assert "file1.txt" in result.symlink_exists
-    assert "file2.txt" in result.symlink_exists
-    assert "subdir" in result.symlink_exists
+    result = manager.check_links()
+    assert len(result.exists) == 3  # noqa: PLR2004 - test expects 3 items
+    assert "file1.txt" in result.exists
+    assert "file2.txt" in result.exists
+    assert "subdir" in result.exists
 
-    assert len(result.symlink_missing) == 0
+    assert len(result.missing) == 0
 
 
 def test_check_reports_missing_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
-    """Test that check reports symlinks that are missing.
+    """Test that check_links reports symlinks that are missing.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -235,20 +235,20 @@ def test_check_reports_missing_symlinks(sample_items: list[ManagedProjectItem], 
     manager = SymlinkManager(sample_items, temp_target_dir)
 
     # Check without creating symlinks
-    result = manager.check()
-    assert len(result.symlink_missing) == 3  # noqa: PLR2004 - test expects 3 items
-    assert "file1.txt" in result.symlink_missing
-    assert "file2.txt" in result.symlink_missing
-    assert "subdir" in result.symlink_missing
+    result = manager.check_links()
+    assert len(result.missing) == 3  # noqa: PLR2004 - test expects 3 items
+    assert "file1.txt" in result.missing
+    assert "file2.txt" in result.missing
+    assert "subdir" in result.missing
 
-    assert len(result.symlink_exists) == 0
+    assert len(result.exists) == 0
 
 
 # Test Suite: SymlinkManager Git Exclude Behavior
 
 
 def test_check_reports_git_exclude_status(sample_items: list[ManagedProjectItem], tmp_path: Path) -> None:
-    """Test that check reports git exclude status correctly.
+    """Test that check_git_excludes reports git exclude status correctly.
 
     Args:
         sample_items: Sample managed project items fixture.
@@ -266,15 +266,18 @@ def test_check_reports_git_exclude_status(sample_items: list[ManagedProjectItem]
     exclude_file = info_dir / "exclude"
     exclude_file.write_text("file1.txt\n")
 
+    # Simulate all_valid_entries from all managers
+    all_valid_entries = {"file1.txt", "file2.txt", "subdir"}
+
     manager = SymlinkManager(sample_items, target_dir)
-    result = manager.check()
+    result = manager.check_git_excludes(all_valid_entries)
 
-    # file1.txt should be in exclude_present
-    assert "file1.txt" in result.exclude_present
+    # file1.txt should be in present
+    assert "file1.txt" in result.present
 
-    # file2.txt and subdir should be in exclude_missing
-    assert "file2.txt" in result.exclude_missing
-    assert "subdir" in result.exclude_missing
+    # file2.txt and subdir should be in missing
+    assert "file2.txt" in result.missing
+    assert "subdir" in result.missing
 
 
 def test_check_git_excludes_with_protocol(sample_items: list[ManagedProjectItem], tmp_path: Path) -> None:

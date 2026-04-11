@@ -187,7 +187,11 @@ class SyncOperation(CmdOperation):
         if symlink_items:
             manager = SymlinkManager(symlink_items, unit.target_project_path)
             link_result = manager.create_links(self.ask_callback)
-            git_result = manager.add_git_excludes()
+
+            # Only add git excludes if target is a git repo
+            git_result = None
+            if manager.git_manager.is_git_repo():
+                git_result = manager.add_git_excludes()
 
             formatter = LinkSyncFormatter(
                 unit.display_name,
@@ -204,7 +208,11 @@ class SyncOperation(CmdOperation):
         if copy_items:
             copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir)
             link_result = copy_mgr.create_links(self.conflict_callback)
-            git_result = copy_mgr.add_git_excludes()
+
+            # Only add git excludes if target is a git repo
+            git_result = None
+            if copy_mgr.git_manager.is_git_repo():
+                git_result = copy_mgr.add_git_excludes()
 
             formatter = LinkSyncFormatter(
                 unit.display_name,
