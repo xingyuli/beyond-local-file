@@ -16,19 +16,27 @@ Sync your local dev files across projects using symbolic links — without commi
 - [Important Notes](#important-notes)
 - [Platform Support](#platform-support)
 - [Contributing](#contributing)
+- [How the author uses it](#how-the-author-uses-it)
 - [License](#license)
 
 ## What is this?
 
-In real-world development, you often need to share local development files (such as development
-configurations, test scripts, HTTP client test files, etc.) across multiple projects, but you
-don't want to commit these files to Git repositories. `beyond-local-file` uses symbolic links
-to allow you to:
+In real-world development, local files accumulate that are genuinely useful but shouldn't be
+committed to Git: HTTP client files with private environment variables, AI agent hooks and
+steering documents, task runner configs referencing local paths, debug logs, scratch specs.
+You want them in your project directory — your editor, your AI tools, your task runner all
+expect them there — but not in the repository.
 
-- Centrally manage local development files
-- Use these files across multiple target projects
-- Automatically add symbolic links to Git ignore lists
-- Check synchronization status
+`beyond-local-file` manages these files centrally and projects them into your target projects
+via symbolic links (or physical copies where symlinks aren't supported). It also automatically
+adds those links to each project's Git exclude list, so Git never sees them.
+
+A few concrete things it handles that are hard to do with a shell script:
+
+- Syncing an entire directory subtree (e.g., `.kiro/hooks/`) into multiple projects at once
+- Copying specific files physically instead of symlinking, for tools that don't follow symlinks
+- Detecting when a physical copy is out of sync with the source, with conflict detection
+- Checking status across all managed projects at a glance (`blf link check`)
 
 ## 🎬 Quick Demo
 
@@ -221,6 +229,24 @@ Windows requires Developer Mode (Windows 10/11) or Administrator privileges. See
 ## Contributing
 
 Contributions are welcome! See [docs/development.md](docs/development.md) for development setup and guidelines.
+
+## How the author uses it
+
+I maintain two managed-project repos with `beyond-local-file` — one for personal GitHub
+projects (`viclau-local-files`, a private repo), one for company work. They're completely
+independent, each with its own `config.yml`, and the tool doesn't need to know about either.
+
+The company-scoped repo's most involved config entry syncs an entire AI-assisted development
+environment into a backend project: Kiro hooks for code review, requirement breakdown, and
+weekly report generation; `.qoder` agent definitions, rules, and skills; `.vscode` settings;
+a `Taskfile.yml` with build and deploy tasks; and a structured `local-file/` directory that
+AI agents read and write into during development. Two of the Kiro steering documents are
+synced with `copy: true` instead of as symlinks, because Kiro reads those files directly and
+doesn't follow symbolic links — one config option, no manual copy workflow.
+
+The personal repo has a single entry: `beyond-local-file` itself. The tool manages its own
+development environment — a local task tracker, per-release archived changelogs, and an
+agentic workspace for drafts and analysis — none of it committed to the main repo.
 
 ## License
 
