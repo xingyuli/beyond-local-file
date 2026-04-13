@@ -180,22 +180,30 @@ class LinkCheckFormatter:
         self._format_exclude_status()
 
     def _format_link_status(self) -> None:
-        """Format link status (exists/missing)."""
+        """Format link status (exists/missing/incorrect)."""
         # Detect strategy from details type
         if isinstance(self.link_result.details, CopyCheckDetails):
             label = "Copy Status"
         else:
             label = "Symlink Status"
 
-        if self.link_result.missing:
+        has_issues = self.link_result.missing or self.link_result.incorrect
+
+        if has_issues:
             click.echo(f"\n{label}:")
             click.echo(f"  Exists: {len(self.link_result.exists)}")
             for item in self.link_result.exists:
                 click.echo(f"    ✓ {item}")
 
-            click.echo(f"  Missing: {len(self.link_result.missing)}")
-            for item in self.link_result.missing:
-                click.echo(f"    ✗ {item}")
+            if self.link_result.incorrect:
+                click.echo(f"  Incorrect: {len(self.link_result.incorrect)}")
+                for item in self.link_result.incorrect:
+                    click.echo(f"    ⚠ {item} (points to wrong source)")
+
+            if self.link_result.missing:
+                click.echo(f"  Missing: {len(self.link_result.missing)}")
+                for item in self.link_result.missing:
+                    click.echo(f"    ✗ {item}")
         else:
             click.echo(f"\n{label}: ✓")
 
@@ -328,12 +336,22 @@ class CheckTableFormatter:
             link_result: The link check result for this row, or None if no symlink items.
 
         Returns:
-            A short status string: ✓ when all symlinks exist, or ✗ (N missing) otherwise.
+            A short status string: ✓ when all symlinks exist and are correct,
+            ⚠ when some are incorrect, or ✗ when some are missing.
         """
         if link_result is None:
             return "[dim]n/a[/dim]"
+
+        issues = []
         if link_result.missing:
-            return f"[red]✗ ({len(link_result.missing)} missing)[/red]"
+            issues.append(f"{len(link_result.missing)} missing")
+        if link_result.incorrect:
+            issues.append(f"{len(link_result.incorrect)} incorrect")
+
+        if issues:
+            status = "[red]✗[/red]" if link_result.missing else "[yellow]⚠[/yellow]"
+            return f"{status} ({', '.join(issues)})"
+
         return "[green]✓[/green]"
 
     def _exclude_cell(self, git_result: GitExcludeCheckResult | None) -> str:

@@ -55,11 +55,13 @@ class LinkCheckResult:
     Attributes:
         exists: Items where link exists and is correct.
         missing: Items where link is missing.
+        incorrect: Items where link exists but points to wrong source.
         details: Strategy-specific details (optional).
     """
 
     exists: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
+    incorrect: list[str] = field(default_factory=list)
     details: "LinkCheckDetails | None" = None
 
 

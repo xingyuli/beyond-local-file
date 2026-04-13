@@ -191,6 +191,7 @@ def test_protocol_methods_return_unified_types(
     assert isinstance(check_result, LinkCheckResult)
     assert hasattr(check_result, "exists")
     assert hasattr(check_result, "missing")
+    assert hasattr(check_result, "incorrect")
     assert hasattr(check_result, "details")
 
     # Test add_git_excludes returns GitExcludeAddResult

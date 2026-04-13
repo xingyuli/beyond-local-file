@@ -242,6 +242,35 @@ def test_check_reports_missing_symlinks(sample_items: list[ManagedProjectItem], 
     assert "subdir" in result.missing
 
     assert len(result.exists) == 0
+    assert len(result.incorrect) == 0
+
+
+def test_check_reports_incorrect_symlinks(sample_items: list[ManagedProjectItem], temp_target_dir: Path) -> None:
+    """Test that check_links reports symlinks pointing to wrong sources.
+
+    Args:
+        sample_items: Sample managed project items fixture.
+        temp_target_dir: Temporary target directory fixture.
+    """
+    # Create incorrect symlinks (pointing to wrong sources)
+    wrong_source = temp_target_dir / "wrong_source"
+    wrong_source.mkdir()
+    (temp_target_dir / "file1.txt").symlink_to(wrong_source)
+
+    manager = SymlinkManager(sample_items, temp_target_dir)
+    result = manager.check_links()
+
+    # file1.txt should be reported as incorrect
+    assert len(result.incorrect) == 1
+    assert "file1.txt" in result.incorrect
+
+    # Other items should be missing
+    assert len(result.missing) == 2  # noqa: PLR2004 - test expects 2 items
+    assert "file2.txt" in result.missing
+    assert "subdir" in result.missing
+
+    # No items should be in exists
+    assert len(result.exists) == 0
 
 
 # Test Suite: SymlinkManager Git Exclude Behavior

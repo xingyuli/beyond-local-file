@@ -107,18 +107,26 @@ class SymlinkManager:
     def check_links(self) -> LinkCheckResult:
         """Check the status of links for all managed items (protocol method).
 
+        Verifies that symlinks exist and point to the correct source path.
+
         Returns:
-            LinkCheckResult containing the status of symlinks.
+            LinkCheckResult containing the status of symlinks:
+            - exists: Symlinks that exist and point to correct source
+            - incorrect: Symlinks that exist but point to wrong source
+            - missing: Symlinks that don't exist
         """
         result = LinkCheckResult()
 
         for item in self.symlink_items:
             link_path = self.target_path / item.name
 
-            if link_path.exists() or link_path.is_symlink():
+            if not link_path.exists() and not link_path.is_symlink():
+                result.missing.append(item.name)
+            elif self._is_link_correct(link_path, item.path):
                 result.exists.append(item.name)
             else:
-                result.missing.append(item.name)
+                # Link exists but points to wrong source
+                result.incorrect.append(item.name)
 
         # Symlinks don't have strategy-specific details
         result.details = None

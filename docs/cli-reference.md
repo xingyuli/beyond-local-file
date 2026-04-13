@@ -170,7 +170,9 @@ blf link check
 **Status indicators:**
 - `✓` — All items correct
 - `✓ (+N)` — All correct, N extra exclude entries
-- `✗ (N)` — N items missing or incorrect
+- `⚠ (N incorrect)` — N items exist but point to wrong source (symlinks only)
+- `✗ (N missing)` — N items missing
+- `✗ (N missing, M incorrect)` — N items missing and M items incorrect
 
 #### Table Format with Extra Excludes
 
@@ -207,6 +209,7 @@ Symlinks:
   ✓ .kiro/hooks
   ✓ .vscode/settings.json
   ✗ docker-compose.yml (missing)
+  ⚠ .env (points to wrong source)
 
 Copies:
   ✓ .kiro/steering/rules.md (in sync)
@@ -215,6 +218,7 @@ Git excludes:
   ✓ .kiro/hooks
   ✓ .vscode/settings.json
   ✓ docker-compose.yml
+  ✓ .env
   ✓ .kiro/steering/rules.md
 
 ---
@@ -228,6 +232,14 @@ Git excludes:
   ✓ .kiro/hooks
   ⚠ Extra: old-file.txt
 ```
+
+### Symlink Status Indicators
+
+| Status | Description |
+|--------|-------------|
+| `✓` | Symlink exists and points to correct source |
+| `⚠ (points to wrong source)` | Symlink exists but points to incorrect source |
+| `✗ (missing)` | Symlink doesn't exist |
 
 ### Copy Status Indicators
 
