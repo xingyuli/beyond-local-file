@@ -112,13 +112,6 @@ def link():
     pass
 
 
-# Backward compatibility: keep 'symlink' as an alias for 'link'
-@cli.group("symlink", hidden=True)
-def symlink():
-    """Symlink management commands (alias for 'link')."""
-    pass
-
-
 @link.command()
 @click.argument("project_name", required=False)
 @click.pass_context
@@ -166,11 +159,6 @@ def check(ctx, project_name, extra_exclude, output_format):
     operation = CheckOperation(config_dir, extra_exclude, OutputFormat(output_format))
     ProjectProcessor.process_all_units(config_projects, operation)
     operation.render()
-
-
-# Register the same commands under the 'symlink' alias
-symlink.add_command(sync, "sync")
-symlink.add_command(check, "check")
 
 
 if __name__ == "__main__":

@@ -27,13 +27,6 @@ def test_link_group_exists():
     assert "Link management commands" in result.output
 
 
-def test_symlink_alias_exists():
-    """Test that the symlink alias still works for backward compatibility."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["symlink", "--help"])
-    assert result.exit_code == 0
-
-
 def test_link_sync_command_exists():
     """Test that 'beyond-local-file link sync' command exists."""
     runner = CliRunner()
@@ -143,19 +136,3 @@ def test_error_message_with_custom_config_not_found() -> None:
 
         assert "Config file not found" in result.output
         assert "nonexistent.yml" in result.output
-
-
-def test_symlink_alias_sync_works():
-    """Test that 'symlink sync' alias still works."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["symlink", "sync", "--help"])
-    assert result.exit_code == 0
-    assert "Synchronize links" in result.output
-
-
-def test_symlink_alias_check_works():
-    """Test that 'symlink check' alias still works."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["symlink", "check", "--help"])
-    assert result.exit_code == 0
-    assert "Check link status" in result.output

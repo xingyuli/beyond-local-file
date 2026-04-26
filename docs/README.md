@@ -54,7 +54,7 @@ New to beyond-local-file? Start here:
 | Install the tool | [Installation](../README.md#installation) |
 | Create first config | [Quick Start](../README.md#quick-start) |
 | Sync specific files only | [Configuration Reference](configuration-reference.md#format-3-selective-subpaths) |
-| Check symlink status | [CLI Reference](cli-reference.md#symlink-check--verify-status) |
+| Check link status | [CLI Reference](cli-reference.md#link-check--verify-status) |
 | Enable Windows support | [Windows Support](windows-support.md#requirements) |
 | Run tests | [Development Guide](development.md#running-tests) |
 
