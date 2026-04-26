@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from . import __version__
 from .copy_manager import CopyConflictAction
 from .options import OutputFormat
 from .project_processor import (
@@ -91,6 +92,7 @@ def ask_user_for_conflict(managed_file: Path, target_file: Path) -> str:
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="beyond-local-file")
 @click.option(
     "-c",
     "--config",

@@ -5,6 +5,12 @@ directories from managed projects to target locations using symlinks, with
 automatic git exclude management.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("beyond-local-file")
+except PackageNotFoundError:
+    # Package is not installed, fallback for development
+    __version__ = "0.0.0.dev0"
 
 __all__ = ["__version__"]
