@@ -18,11 +18,13 @@ beyond-local-file is designed to work across all major operating systems.
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **macOS** | ✅ Fully Supported | No special configuration needed |
-| **Linux** | ✅ Fully Supported | No special configuration needed |
-| **Windows 10/11** | ✅ Supported | Requires Developer Mode or Admin privileges |
-| **Windows 7/8** | ⚠️ Limited Support | Requires Administrator privileges |
-| **WSL** | ✅ Fully Supported | Works like native Linux |
+| **macOS** | ✅ Tested & Supported | No special configuration needed |
+| **Linux** | ✅ Tested & Supported | No special configuration needed |
+| **Windows 10/11** | ⚠️ Implemented, Not Tested | Should work with Developer Mode or Admin privileges |
+| **Windows 7/8** | ⚠️ Implemented, Not Tested | Should work with Administrator privileges |
+| **WSL** | ✅ Should Work | Works like native Linux |
+
+**Note:** Windows support is implemented but has not been tested yet. The code uses Python's standard `pathlib` for symlink creation, which should work on Windows with proper permissions. Feedback from Windows users is welcome!
 
 ## Quick Start by Platform
 
@@ -104,14 +106,17 @@ project-d: ../workspace/project-d
 
 ## Testing
 
-The project includes comprehensive tests that run on all platforms:
+The project includes comprehensive tests:
 
 ```bash
 # Run tests
 uv run pytest
 
-# All 33 tests should pass on macOS, Linux, and Windows
+# All tests pass on macOS and Linux
+# Windows testing status: Not yet tested, feedback welcome
 ```
+
+**Windows Testing Status:** The codebase uses Python's standard library (`pathlib`) for cross-platform compatibility, and Windows-specific symlink handling is implemented. However, it has not been tested on actual Windows systems yet. If you're a Windows user, please try it out and report any issues!
 
 ## Documentation
 

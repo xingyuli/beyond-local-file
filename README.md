@@ -7,6 +7,7 @@ Sync your local dev files across projects using symbolic links — without commi
 ## Table of Contents
 
 - [What is this?](#what-is-this)
+- [Why not GNU Stow or chezmoi?](#why-not-gnu-stow-or-chezmoi)
 - [Architecture: Tool and Data Separation](#architecture-tool-and-data-separation)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -43,6 +44,20 @@ A few concrete things it handles that are hard to do with a shell script:
 ![Demo](demo/demo.gif)
 
 *Watch beyond-local-file in action: install from GitHub, sync files, create symlinks, and manage Git excludes automatically.*
+
+## Why not GNU Stow or chezmoi?
+
+**GNU Stow** and **chezmoi** are excellent tools for dotfiles management — organizing your personal configuration files (`.bashrc`, `.vimrc`, `.gitconfig`) across machines.
+
+- **Stow** uses a package-based approach with CLI parameters to create symlinks from a stow directory to `$HOME`.
+- **chezmoi** is a comprehensive dotfiles manager with templating, encryption, password manager integration, and Git-based sync across machines.
+
+**beyond-local-file** is designed for a different use case: per-project development files that shouldn't be committed to Git. Instead of managing `$HOME` dotfiles, it syncs local dev files (HTTP client configs, AI hooks, task runner configs) across multiple projects using a centralized `config.yml`. It handles Git excludes automatically and supports physical copies for tools that don't follow symlinks.
+
+**Use Stow/chezmoi for:** Personal dotfiles in `$HOME`  
+**Use beyond-local-file for:** Local dev files across multiple projects with different layouts
+
+For a detailed comparison with use case examples, see [docs/alternatives-comparison.md](docs/alternatives-comparison.md).
 
 ## Architecture: Tool and Data Separation
 
@@ -223,8 +238,9 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ## Platform Support
 
-Works on macOS, Linux, and Windows. See [docs/platform-support.md](docs/platform-support.md) for details.
-Windows requires Developer Mode (Windows 10/11) or Administrator privileges. See [docs/windows-support.md](docs/windows-support.md) for setup instructions.
+Tested and works on macOS and Linux. Windows support is implemented but not yet tested. See [docs/platform-support.md](docs/platform-support.md) for details.
+
+Windows should work with Developer Mode (Windows 10/11) or Administrator privileges for symlink creation. See [docs/windows-support.md](docs/windows-support.md) for setup instructions. Feedback from Windows users is welcome.
 
 ## Contributing
 

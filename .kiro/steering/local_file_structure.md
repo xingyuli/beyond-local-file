@@ -15,6 +15,9 @@ local-file/
 │   ├── drafts/          # Informal plans, drafts, proposals (timestamped, flat)
 │   ├── specs/           # Formal specification files (no timestamps, flat)
 │   └── summaries/       # Task completion summaries (timestamped, flat)
+├── initiatives/          # Strategic work items (not in changelog/release cycle)
+│   ├── README.md        # Documentation
+│   └── *.md             # Initiative files (e.g., share-and-impact.md)
 └── tasks/               # Task tracking system
     ├── index.md         # Main hub linking to all task groups
     ├── manual/          # User-created tasks
@@ -107,6 +110,94 @@ Kiro-generated content organized by purpose. All files in `analysis/`, `drafts/`
 **Naming:** `YYYYMMDD-HH-descriptive-title.md` using GMT+8 timezone
 
 **Structure:** Flat directory - no subdirectories
+
+---
+
+## Initiatives Directory (`local-file/initiatives/`)
+
+Strategic work items and coordinated efforts that don't directly belong in the changelog or release cycle.
+
+**For complete initiative format specification, see:** `local-file/agentic/specs/initiative-definition-spec.md`
+
+This section provides a quick reference. The formal spec contains detailed guidelines on initiative structure, action item tracking, naming conventions, workflow, and best practices.
+
+**Purpose:** Track promotional activities, infrastructure setup, meta-project work, and multi-step initiatives.
+
+**What goes here:**
+- Promotional activities (PyPI publishing, community sharing)
+- Infrastructure setup (CI/CD, GitHub Actions)
+- Meta-project work (documentation overhauls, branding)
+- Multi-step initiatives spanning multiple actions
+
+**What doesn't go here:**
+- Feature development → `local-file/tasks/manual/`
+- Bug fixes → `local-file/tasks/manual/`
+- Code quality improvements → `local-file/tasks/manual/`
+- Auto-review findings → `local-file/tasks/auto-review/`
+
+### Initiative File Format
+
+Each initiative file follows this structure:
+
+**Header (Required):**
+```markdown
+# Initiative Title
+
+**Goal:** One-sentence description of what this initiative aims to achieve.
+**Status:** Planning | In Progress | Completed | On Hold
+**Created:** YYYY-MM-DD
+**Completed:** YYYY-MM-DD (only if status is Completed)
+```
+
+**Overview Section (Required):**
+Brief description of the initiative, its purpose, and expected impact.
+
+**Action Items Table (Required):**
+```markdown
+| # | Action | Status | Related Task/Resource | Notes |
+|---|--------|--------|----------------------|-------|
+| 1 | [Action description] | Not Started | [Link to task](../tasks/manual/task.md) | Optional context |
+| 2 | [Action description] | In Progress | [External link](https://...) | Optional context |
+| 3 | [Action description] | Completed | — | Completed YYYY-MM-DD |
+```
+
+The Action Items table is the centerpiece - it provides at-a-glance status tracking with:
+- Sequential numbering for easy reference
+- Clear action descriptions
+- Status tracking (Not Started, In Progress, Completed, Blocked, Skipped)
+- Links to related tasks or external resources
+- Optional notes for context, completion dates, or blockers
+
+**Detailed Sections (Optional):**
+For complex actions requiring more explanation, add detailed sections after the Action Items table with prerequisites, steps, resources, and notes.
+
+**Success Criteria (Recommended):**
+Define measurable outcomes and specific deliverables that indicate initiative completion.
+
+### Linking Between Initiatives and Tasks
+
+**From Initiative to Task:**
+```markdown
+| 2 | Add --version option | Not Started | [Task](../tasks/manual/add-version-option.md) | Required before PyPI |
+```
+
+**From Task to Initiative:**
+```markdown
+**Part of Initiative:** [Share & Prove Impact](../../initiatives/share-and-impact.md)
+```
+
+This creates bidirectional links showing how strategic goals connect to concrete work.
+
+### Naming Conventions
+
+- Use descriptive, goal-oriented names in kebab-case
+- Avoid dates in filenames (initiatives are timeless)
+- Examples: `share-and-impact.md`, `ci-cd-automation.md`, `documentation-overhaul.md`
+
+**Structure:** Flat directory with markdown files describing goals, action items with status tracking, and context.
+
+**Examples:**
+- `share-and-impact.md` — Promoting the project through PyPI, README improvements, community engagement
 
 ---
 

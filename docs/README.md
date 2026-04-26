@@ -7,13 +7,15 @@ Welcome to the beyond-local-file documentation!
 New to beyond-local-file? Start here:
 
 1. **[Main README](../README.md)** - Overview, installation, and quick start
-2. **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
-3. **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
+2. **[Alternatives Comparison](alternatives-comparison.md)** - How beyond-local-file compares to GNU Stow and chezmoi
+3. **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
+4. **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
 
 ## User Guides
 
 ### Core Documentation
 
+- **[Alternatives Comparison](alternatives-comparison.md)** - Detailed comparison with GNU Stow and chezmoi
 - **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
 - **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
 - **[Config Format Clarification](config-format-clarification.md)** - Understanding configuration vs architecture
@@ -38,6 +40,7 @@ New to beyond-local-file? Start here:
 ### I want to...
 
 - **Get started quickly** → [Quick Start](../README.md#quick-start)
+- **Compare with alternatives** → [Alternatives Comparison](alternatives-comparison.md)
 - **Understand configuration** → [Configuration Reference](configuration-reference.md)
 - **Learn all commands** → [CLI Reference](cli-reference.md)
 - **Use on Windows** → [Windows Support](windows-support.md)
@@ -62,6 +65,7 @@ docs/
 ├── README.md                          # This file - documentation hub
 │
 ├── User Guides
+│   ├── alternatives-comparison.md     # Comparison with GNU Stow and chezmoi
 │   ├── configuration-reference.md     # Complete configuration documentation
 │   ├── cli-reference.md               # Complete CLI documentation
 │   ├── config-format-clarification.md # Config vs architecture concepts

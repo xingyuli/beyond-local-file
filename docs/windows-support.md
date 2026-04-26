@@ -1,5 +1,7 @@
 # Windows Support
 
+**Testing Status:** Windows support is implemented but has not been tested on actual Windows systems yet. The code uses Python's standard `pathlib` library for cross-platform compatibility. If you're a Windows user, please try it out and report any issues!
+
 ## Table of Contents
 
 - [Symbolic Link Support on Windows](#symbolic-link-support-on-windows)
@@ -171,7 +173,9 @@ $env:Path += ";$env:USERPROFILE\.local\bin"
 
 ## Testing on Windows
 
-To verify everything works:
+**Current Status:** Not yet tested on actual Windows systems. The implementation uses Python's standard `pathlib.Path.symlink_to()` which should work on Windows with proper permissions, but real-world testing is needed.
+
+**If you're a Windows user, please help test:**
 
 ```powershell
 # 1. Create a test directory
@@ -198,6 +202,12 @@ blf link sync
 dir ..\target
 # Should show: test.txt -> C:\Users\YourName\test-beyond-local-file\my-files\project-a\test.txt
 ```
+
+**Please report results** (success or failure) by [opening an issue](https://github.com/xingyuli/beyond-local-file/issues) with:
+- Windows version
+- Python version
+- Whether Developer Mode is enabled
+- Any error messages
 
 ## Known Limitations on Windows
 
