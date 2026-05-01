@@ -1,6 +1,6 @@
 [project]
 name = "beyond-local-file"
-version = "0.2.1"
+version = "0.2.2"
 description = "A CLI tool for managing local development files across multiple projects using symlinks"
 readme = "README.md"
 requires-python = ">=3.13"

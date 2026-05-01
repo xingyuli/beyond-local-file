@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-05-01
+
+### Added
+- **Add --version option** — Added a `--version` global option to display the current version of the tool. Users can now quickly check their installed version with `blf --version`, which is especially important for PyPI installations where version verification is a standard expectation.
+
+### Fixed
+- **Fix symlink check to verify source path** — The `blf link check` command now verifies that symlinks point to the correct source path, not just that they exist. Previously, symlinks pointing to wrong sources would show as correct (✓) during check but trigger prompts during sync, creating confusion. Now incorrect symlinks are properly detected and reported during check operations.
+
+### Changed
+- **Refactor config and processing models** — Separated configuration models from processing models to eliminate workarounds in config loading. The config layer now purely reflects YAML grammar structure, while a new translation layer converts configurations into processing units. This eliminates synthetic project name suffixes at config load time and provides clearer semantics.
+- **Unified protocol migration** — Completed comprehensive migration to unified protocol architecture across all operations. Introduced `OperationProgress` for tracking partial completion, created unified formatters (`LinkSyncFormatter`, `LinkCheckFormatter`) that handle both symlink and copy strategies, and established `link_strategy_protocol.py` as the single source of truth for all result types. Removed all legacy result types and formatters.
+
+### Documentation
+- **Enhance README with usage examples** — Added concrete usage examples and a detailed "How the author uses it" section showing real-world applications. The README now demonstrates practical use cases like syncing HTTP client files, AI agent hooks, and entire development environments across projects.
+- **Add "Why not just use X?" section** — Added a dedicated section comparing `beyond-local-file` with alternatives like GNU Stow, chezmoi, and shell scripts. This proactive comparison helps users quickly understand the tool's specific niche versus dotfiles management.
+- **Update documentation for unified protocol** — Updated all project documentation to reflect the unified protocol architecture, including comprehensive coverage of protocol types, design patterns, and implementation guidance.
+
+### Removed
+- **Remove legacy symlink subcommand** — Removed the hidden `symlink` subcommand alias that was kept for backward compatibility. Only the `link` command is now available (`blf link sync`, `blf link check`), simplifying the CLI codebase.
+
+[0.2.2]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.2.2
+
 ## [0.2.1] - 2026-04-05
 
 ### Fixed
