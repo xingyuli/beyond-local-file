@@ -87,24 +87,37 @@ For a detailed comparison with use case examples, see [docs/alternatives-compari
 
 ## Installation
 
-### Recommended: `uv tool install`
+### Recommended: `uv tool install` from PyPI
 
 ```bash
-uv tool install git+https://github.com/xingyuli/beyond-local-file.git
+uv tool install beyond-local-file
+
+# Update to latest version
+uv tool install --upgrade beyond-local-file
+```
+
+### Alternative: `pipx` from PyPI
+
+```bash
+pipx install beyond-local-file
 
 # Update
-uv tool install --force git+https://github.com/xingyuli/beyond-local-file.git
+pipx upgrade beyond-local-file
 ```
 
-### Ephemeral: `uvx`
+### Ephemeral: `uvx` (no installation)
 
 ```bash
-uvx --from git+https://github.com/xingyuli/beyond-local-file.git beyond-local-file --help
+uvx beyond-local-file --help
 ```
 
-### `pipx`
+### Install from GitHub (development version)
 
 ```bash
+# Using uv
+uv tool install git+https://github.com/xingyuli/beyond-local-file.git
+
+# Using pipx
 pipx install git+https://github.com/xingyuli/beyond-local-file.git
 ```
 
