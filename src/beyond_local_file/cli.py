@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from . import __version__
+from .constants import DEFAULT_CONFIG_FILE
 from .copy_manager import CopyConflictAction
 from .options import OutputFormat
 from .project_processor import (
@@ -96,7 +97,7 @@ def ask_user_for_conflict(managed_file: Path, target_file: Path) -> str:
 @click.option(
     "-c",
     "--config",
-    default="config.yml",
+    default=DEFAULT_CONFIG_FILE,
     help="Path to config file",
 )
 @click.pass_context
@@ -125,7 +126,7 @@ def sync(ctx, project_name):
     config = ctx.obj["config"]
     result = load_config_projects(config, project_name)
     if result is None:
-        return
+        ctx.exit(1)
 
     config_projects, config_dir = result
     operation = SyncOperation(config_dir, ask_user_for_action, ask_user_for_conflict)
@@ -153,7 +154,7 @@ def check(ctx, project_name, extra_exclude, output_format):
     config = ctx.obj["config"]
     result = load_config_projects(config, project_name)
     if result is None:
-        return
+        ctx.exit(1)
 
     config_projects, config_dir = result
     operation = CheckOperation(config_dir, extra_exclude, OutputFormat(output_format))

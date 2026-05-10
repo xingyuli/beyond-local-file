@@ -8,6 +8,12 @@ import yaml
 from .model.config import ConfigProject, Mapping
 
 
+class ConfigError(Exception):
+    """Error related to configuration loading or validation."""
+
+    pass
+
+
 class Config:
     """Manages configuration loaded from a YAML file.
 

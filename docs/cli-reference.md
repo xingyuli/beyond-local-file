@@ -294,6 +294,38 @@ blf --config custom.yml link check my-project --extra-exclude --format verbose
 
 The CLI reads configuration from `config.yml` in the current directory (or path specified with `-c`).
 
+### Config File Resolution Order
+
+The tool resolves the config file in this order:
+
+1. **`-c / --config` flag** — explicit path always wins
+2. **`~/.blfrc`** — if present and contains a `config_file` field
+3. **`config.yml`** in the current directory — default fallback
+
+### `~/.blfrc` — Centralized Config Pointer
+
+Create `~/.blfrc` to avoid specifying `--config` on every invocation, or to combine multiple config files (e.g., personal and company projects):
+
+```yaml
+# Single config file
+config_file: ~/my-dev-files/config.yml
+
+# OR multiple config files (personal + company)
+config_file:
+  - ~/personal/config.yml
+  - ~/company/config.yml
+```
+
+**Path formats supported:** absolute (`/path/to/config.yml`), tilde (`~/path/to/config.yml`), or relative to home directory (`path/to/config.yml`).
+
+**Disabling temporarily:** Comment out `config_file` to fall back to `config.yml` in CWD — no need to rename or delete the file:
+
+```yaml
+# config_file: ~/my-dev-files/config.yml  # temporarily disabled
+```
+
+**Multiple config files:** Each managed project must appear in exactly one config file (identified by its absolute path). Duplicate managed project paths across files are an error.
+
 See [Configuration Reference](configuration-reference.md) for complete format documentation.
 
 ---

@@ -210,6 +210,22 @@ project-d:
 
 For detailed examples, see [docs/configuration-reference.md](docs/configuration-reference.md).
 
+### Config File Location
+
+By default the tool looks for `config.yml` in the current directory. You can override this with `--config`, or create `~/.blfrc` to set a persistent default:
+
+```yaml
+# ~/.blfrc — point to your managed-files config
+config_file: ~/my-dev-files/config.yml
+
+# Or combine personal and company configs
+config_file:
+  - ~/personal/config.yml
+  - ~/company/config.yml
+```
+
+See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order) in the CLI reference for full details.
+
 ## Available Commands
 
 | Command | Description |
