@@ -6,8 +6,8 @@ from unittest.mock import Mock
 import pytest
 
 from beyond_local_file.model.processing import ManagedProjectItem, ProcessingUnit
+from beyond_local_file.operations import CheckOperation, SyncOperation
 from beyond_local_file.options import LinkStrategy
-from beyond_local_file.project_processor import CheckOperation, SyncOperation
 from beyond_local_file.symlink_manager import Action, SymlinkManager
 
 

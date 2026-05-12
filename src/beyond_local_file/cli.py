@@ -11,13 +11,9 @@ import click
 from . import __version__
 from .constants import DEFAULT_CONFIG_FILE
 from .copy_manager import CopyConflictAction
+from .operations import CheckOperation, SyncOperation
 from .options import OutputFormat
-from .project_processor import (
-    CheckOperation,
-    ProjectProcessor,
-    SyncOperation,
-    load_config_projects,
-)
+from .project_processor import ProjectProcessor, load_config_projects
 from .symlink_manager import Action
 
 

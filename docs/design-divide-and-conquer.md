@@ -406,7 +406,7 @@ Git exclude entries should include ALL managed items (symlink + copy), not just 
 
 **Why?** This prevents items from one strategy being incorrectly reported as "extra" entries.
 
-**For implementation details**, see `src/beyond_local_file/project_processor.py`
+**For implementation details**, see `src/beyond_local_file/operations/link_sync.py` and `src/beyond_local_file/operations/link_check.py`
 
 ---
 
@@ -419,7 +419,7 @@ To add a new link strategy:
 1. **Define the strategy enum value** in `options.py`
 2. **Create strategy-specific details** (if needed) implementing `LinkCreateDetails` and/or `LinkCheckDetails` protocols
 3. **Create the manager class** implementing `LinkStrategyManager` protocol
-4. **Update operations** in `project_processor.py` to partition and delegate to your new manager
+4. **Update operations** in `src/beyond_local_file/operations/` — add a new module for your subcommand, or extend an existing one to partition and delegate to your new manager.
 
 **That's it!** No changes to existing managers needed.
 

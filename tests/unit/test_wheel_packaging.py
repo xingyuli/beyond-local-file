@@ -11,7 +11,6 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-
 # Canonical list of all modules that must be present in the wheel.
 # Update this list whenever a module is added or removed from the package.
 REQUIRED_WHEEL_MODULES = [
@@ -21,7 +20,6 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/config.py",
     "beyond_local_file/constants.py",
     "beyond_local_file/copy_manager.py",
-    "beyond_local_file/formatters.py",
     "beyond_local_file/git_manager.py",
     "beyond_local_file/link_strategy_protocol.py",
     "beyond_local_file/options.py",
@@ -33,6 +31,11 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/model/config.py",
     "beyond_local_file/model/processing.py",
     "beyond_local_file/model/translator.py",
+    # operations subpackage
+    "beyond_local_file/operations/__init__.py",
+    "beyond_local_file/operations/base.py",
+    "beyond_local_file/operations/link_check.py",
+    "beyond_local_file/operations/link_sync.py",
 ]
 
 # Directories that must never appear in the wheel.
@@ -76,7 +79,7 @@ def test_built_wheel_contains_only_package() -> None:
 
             # 1. All required modules must be present.
             missing = [m for m in REQUIRED_WHEEL_MODULES if m not in file_list]
-            assert not missing, f"Modules missing from wheel:\n" + "\n".join(f"  - {m}" for m in missing)
+            assert not missing, "Modules missing from wheel:\n" + "\n".join(f"  - {m}" for m in missing)
 
             # 2. No unexpected root-level .py files.
             root_py_files = [

@@ -1,7 +1,11 @@
-"""Project processing utilities for CLI commands."""
+"""Project processing utilities for CLI commands.
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable
+This module handles config loading, path resolution, and project orchestration.
+Operation logic lives in the ``operations`` package — one module per subcommand.
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
 
 import click
@@ -10,31 +14,54 @@ import yaml
 from .blfrc import BlfrcError, resolve_config_from_blfrc
 from .config import Config, ConfigError
 from .constants import DEFAULT_CONFIG_FILE
-from .copy_manager import CopyManager
-from .formatters import (
-    CheckTableFormatter,
-    CheckTableRenderer,
-    LinkCheckFormatter,
-    LinkSyncFormatter,
-    ProcessingUnitResults,
-)
 from .model.config import ConfigProject
-from .model.processing import ProcessingUnit
 from .model.translator import translate_config_to_processing
-from .options import LinkStrategy, OutputFormat
-from .symlink_manager import Action, SymlinkManager
+from .operations import CmdOperation
 
 
-def get_absolute_path(path: str) -> str:
-    """Resolve a path to its absolute form.
+class ProjectProcessor:
+    """Orchestrates processing of all projects for a given CLI operation.
 
-    Args:
-        path: A file or directory path.
-
-    Returns:
-        Absolute path as a string.
+    Iterates over all processing units derived from the config and delegates
+    execution to the provided :class:`~beyond_local_file.operations.CmdOperation`.
     """
-    return str(Path(path).resolve())
+
+    @staticmethod
+    def process_all_units(
+        config_projects: dict[str, ConfigProject],
+        operation: CmdOperation,
+        skip_invalid: bool = True,
+    ) -> bool:
+        """Process all projects using new model structure with translation layer.
+
+        Args:
+            config_projects: Dictionary of ConfigProject instances.
+            operation: The operation to execute for each processing unit.
+            skip_invalid: Whether to skip invalid projects or stop processing.
+
+        Returns:
+            True if all operations completed, False if aborted.
+        """
+        processing_units = translate_config_to_processing(config_projects)
+
+        for unit in processing_units:
+            if not unit.managed_project_path.exists():
+                click.echo(f"Project directory does not exist: {unit.managed_project_path}")
+                if not skip_invalid:
+                    return False
+                continue
+
+            if not unit.target_project_path.exists():
+                click.echo(f"Target directory does not exist: {unit.target_project_path}")
+                continue
+
+            if operation.verbose_progress:
+                click.echo(f"\nProcessing {unit.display_name} -> {unit.target_project_path}")
+
+            if not operation.execute_unit(unit):
+                return False
+
+        return True
 
 
 def load_config_projects(config: str, project_name: str | None = None) -> tuple[dict[str, ConfigProject], Path] | None:
@@ -48,18 +75,16 @@ def load_config_projects(config: str, project_name: str | None = None) -> tuple[
     Args:
         config: Path to the YAML configuration file from --config flag.
         project_name: Optional project name to filter. If provided, only
-                    returns configuration for that project.
+            returns configuration for that project.
 
     Returns:
         Tuple of (ConfigProject dict, config directory path).
         Returns None if loading failed.
     """
-    # Determine which config file(s) to load
     config_paths = _resolve_config_paths_with_blfrc(config)
     if config_paths is None:
         return None
 
-    # Load config(s)
     if len(config_paths) == 1:
         return _load_single_config(config_paths[0], project_name)
     return _load_and_combine_configs(config_paths, project_name)
@@ -74,15 +99,13 @@ def _resolve_config_paths_with_blfrc(config: str) -> list[Path] | None:
     Returns:
         List of config file paths to load, or None if config not found.
     """
-    # Step 1: Check if explicit --config was provided (not the default)
     if config != DEFAULT_CONFIG_FILE:
-        config_path = Path(get_absolute_path(config))
+        config_path = Path(_get_absolute_path(config))
         if not config_path.exists():
             click.echo(f"Config file not found: {config_path}")
             return None
         return [config_path]
 
-    # Step 2: Try to resolve from ~/.blfrc
     try:
         blfrc_configs = resolve_config_from_blfrc()
         if blfrc_configs:
@@ -91,8 +114,7 @@ def _resolve_config_paths_with_blfrc(config: str) -> list[Path] | None:
         click.echo(f"Error: {e}")
         return None
 
-    # Step 3: Fall back to default config.yml in current directory
-    config_path = Path(get_absolute_path(config))
+    config_path = Path(_get_absolute_path(config))
     if not config_path.exists():
         click.echo(f"Config file not found: {config_path}")
         return None
@@ -141,11 +163,8 @@ def _load_and_combine_configs(
         Returns None if loading failed.
     """
     try:
-        # Load each config independently so project paths resolve correctly.
-        # Key by managed_project_path (absolute) to avoid name collisions when
-        # the same project name appears in configs with different managed locations.
         combined_projects: dict[str, ConfigProject] = {}
-        managed_project_sources: dict[Path, Path] = {}  # {managed_path: config_file}
+        managed_project_sources: dict[Path, Path] = {}
 
         for path in config_paths:
             cfg = Config(path)
@@ -155,7 +174,6 @@ def _load_and_combine_configs(
             for proj in projects.values():
                 managed_path = proj.managed_project_path
 
-                # Conflict: same managed project absolute path in multiple configs
                 if managed_path in managed_project_sources:
                     existing = managed_project_sources[managed_path]
                     raise ConfigError(
@@ -163,10 +181,8 @@ def _load_and_combine_configs(
                     )
 
                 managed_project_sources[managed_path] = path
-                # Use the absolute managed path as key to avoid name collisions
                 combined_projects[str(managed_path)] = proj
 
-        # Apply project_name filter after combining
         if project_name:
             matches = {k: v for k, v in combined_projects.items() if v.managed_project_name == project_name}
             if not matches:
@@ -184,288 +200,17 @@ def _load_and_combine_configs(
         return None
 
 
-class CmdOperation(ABC):
-    """Base class for CLI operations executed per processing unit.
+def get_absolute_path(path: str) -> str:
+    """Resolve a path to its absolute form.
 
-    Subclasses implement :meth:`execute_unit` to perform the actual work, and may
-    override :attr:`verbose_progress` to suppress the per-target progress line
-    printed by :class:`ProjectProcessor` (useful when output is deferred, e.g.
-    a table rendered after all projects are processed).
+    Args:
+        path: A file or directory path.
+
+    Returns:
+        Absolute path as a string.
     """
-
-    @property
-    def verbose_progress(self) -> bool:
-        """Whether to print per-target progress lines during processing.
-
-        Returns:
-            True by default; subclasses may override to return False when
-            progress output should be suppressed (e.g. deferred table rendering).
-        """
-        return True
-
-    @abstractmethod
-    def execute_unit(self, unit: ProcessingUnit) -> bool:
-        """Execute the operation for a single processing unit.
-
-        Args:
-            unit: The processing unit to execute.
-
-        Returns:
-            True to continue processing, False to abort.
-        """
+    return str(Path(path).resolve())
 
 
-class ProjectProcessor:
-    """Processes projects for sync and check operations.
-
-    This class provides static methods for processing projects using the new
-    model structure with translation layer.
-    """
-
-    @staticmethod
-    def process_all_units(
-        config_projects: dict[str, ConfigProject],
-        operation: CmdOperation,
-        skip_invalid: bool = True,
-    ) -> bool:
-        """Process all projects using new model structure with translation layer.
-
-        Args:
-            config_projects: Dictionary of ConfigProject instances.
-            operation: The operation to execute for each processing unit.
-            skip_invalid: Whether to skip invalid projects or stop processing.
-
-        Returns:
-            True if all operations completed, False if aborted.
-        """
-        # Translate config to processing units (items are already expanded)
-        processing_units = translate_config_to_processing(config_projects)
-
-        # Execute each processing unit
-        for unit in processing_units:
-            # Validate managed project path
-            if not unit.managed_project_path.exists():
-                click.echo(f"Project directory does not exist: {unit.managed_project_path}")
-                if not skip_invalid:
-                    return False
-                continue
-
-            # Validate target path
-            if not unit.target_project_path.exists():
-                click.echo(f"Target directory does not exist: {unit.target_project_path}")
-                continue
-
-            # Print progress
-            if operation.verbose_progress:
-                click.echo(f"\nProcessing {unit.display_name} -> {unit.target_project_path}")
-
-            # Execute operation
-            if not operation.execute_unit(unit):
-                return False
-
-        return True
-
-
-class SyncOperation(CmdOperation):
-    """Encapsulates the sync operation logic for both symlinks and copies."""
-
-    def __init__(
-        self,
-        config_dir: Path,
-        ask_callback: Callable[[str, str], Action] | None = None,
-        conflict_callback: Callable[[Path, Path], str] | None = None,
-    ):
-        """Initialize the sync operation.
-
-        Args:
-            config_dir: Directory where the config file lives.
-            ask_callback: Optional callback for handling existing symlink paths.
-            conflict_callback: Optional callback for resolving copy conflicts.
-        """
-        self.config_dir = config_dir
-        self.ask_callback = ask_callback
-        self.conflict_callback = conflict_callback
-
-    def execute_unit(self, unit: ProcessingUnit) -> bool:
-        """Execute the sync operation for a single processing unit.
-
-        Uses divide-and-conquer strategy: partition items by strategy,
-        then delegate to appropriate managers.
-
-        Args:
-            unit: The processing unit to sync.
-
-        Returns:
-            True to continue, False if aborted.
-        """
-        # PARTITION: Divide items by strategy
-        symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
-
-        # CONQUER: Delegate to appropriate managers
-
-        # Handle symlink items
-        if symlink_items:
-            manager = SymlinkManager(symlink_items, unit.target_project_path)
-            link_result = manager.create_links(self.ask_callback)
-
-            # Only add git excludes if target is a git repo
-            git_result = None
-            if manager.git_manager.is_git_repo():
-                git_result = manager.add_git_excludes()
-
-            formatter = LinkSyncFormatter(
-                unit.display_name,
-                unit.managed_project_path,
-                link_result,
-                git_result,
-            )
-            formatter.format(unit.display_name, unit.target_project_path)
-
-            if link_result.progress.aborted:
-                return False
-
-        # Handle copy items
-        if copy_items:
-            copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir)
-            link_result = copy_mgr.create_links(self.conflict_callback)
-
-            # Only add git excludes if target is a git repo
-            git_result = None
-            if copy_mgr.git_manager.is_git_repo():
-                git_result = copy_mgr.add_git_excludes()
-
-            formatter = LinkSyncFormatter(
-                unit.display_name,
-                unit.managed_project_path,
-                link_result,
-                git_result,
-            )
-            formatter.format(unit.display_name, unit.target_project_path)
-
-            if link_result.progress.aborted:
-                return False
-
-        return True
-
-
-class CheckOperation(CmdOperation):
-    """Encapsulates the check operation logic for symlinks and copies.
-
-    Supports two output formats:
-    - ``"table"`` (default): collects all results and renders a compact Rich table
-      after all projects are processed via :meth:`render`.
-    - ``"verbose"``: prints detailed per-project output immediately during processing.
-    """
-
-    def __init__(self, config_dir: Path, show_extra: bool = False, output_format: OutputFormat = OutputFormat.TABLE):
-        """Initialize the check operation.
-
-        Args:
-            config_dir: Directory where the config file lives.
-            show_extra: Whether to show extra exclude entries.
-            output_format: Output format — ``OutputFormat.TABLE`` (default) or ``OutputFormat.VERBOSE``.
-        """
-        self.config_dir = config_dir
-        self.show_extra = show_extra
-        self.output_format = output_format
-        self._results: list[ProcessingUnitResults] = []
-
-    @property
-    def verbose_progress(self) -> bool:
-        """Whether to print per-target progress lines during processing."""
-        return self.output_format == OutputFormat.VERBOSE
-
-    def execute_unit(self, unit: ProcessingUnit) -> bool:
-        """Execute the check operation for a single processing unit.
-
-        Uses divide-and-conquer strategy: partition items by strategy,
-        then delegate to appropriate managers.
-
-        Args:
-            unit: The processing unit to check.
-
-        Returns:
-            Always True to continue processing.
-        """
-        # PARTITION: Divide items by strategy
-        symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
-
-        # CONQUER: Create managers with partitioned items
-        symlink_mgr = SymlinkManager(symlink_items, unit.target_project_path) if symlink_items else None
-        copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir) if copy_items else None
-
-        # Collect all valid entry names from ALL managers for git exclude checking
-        all_valid_entries: set[str] = set()
-        if symlink_mgr:
-            all_valid_entries.update(i.name for i in symlink_mgr.get_managed_items())
-        if copy_mgr:
-            all_valid_entries.update(i.name for i in copy_mgr.get_managed_items())
-
-        if self.output_format == OutputFormat.VERBOSE:
-            # Use unified protocol for verbose mode
-            if symlink_mgr:
-                link_result = symlink_mgr.check_links()
-
-                # Check git repo status before calling protocol method
-                git_result = None
-                if symlink_mgr.git_manager.is_git_repo():
-                    git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-
-                formatter = LinkCheckFormatter(link_result, git_result, self.show_extra)
-                formatter.format(unit.display_name, unit.target_project_path)
-
-            if copy_mgr:
-                link_result = copy_mgr.check_links()
-
-                # Check git repo status before calling protocol method
-                git_result = None
-                if copy_mgr.git_manager.is_git_repo():
-                    git_result = copy_mgr.check_git_excludes(all_valid_entries)
-
-                formatter = LinkCheckFormatter(link_result, git_result, self.show_extra)
-                formatter.format(unit.display_name, unit.target_project_path)
-        else:
-            # Table mode: use unified protocol
-            symlink_link_result = None
-            symlink_git_result = None
-            if symlink_mgr:
-                symlink_link_result = symlink_mgr.check_links()
-
-                # Check git excludes using protocol with all_valid_entries
-                if symlink_mgr.git_manager.is_git_repo():
-                    symlink_git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-
-            copy_link_result = None
-            copy_git_result = None
-            if copy_mgr:
-                copy_link_result = copy_mgr.check_links()
-
-                # Check git excludes using protocol with all_valid_entries
-                if copy_mgr.git_manager.is_git_repo():
-                    copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
-
-            # Collect raw results
-            self._results.append(
-                ProcessingUnitResults(
-                    unit=unit,
-                    symlink_link_result=symlink_link_result,
-                    symlink_git_result=symlink_git_result,
-                    copy_link_result=copy_link_result,
-                    copy_git_result=copy_git_result,
-                )
-            )
-
-        return True
-
-    def render(self) -> None:
-        """Render collected results as a table.
-
-        No-op when ``output_format`` is ``"verbose"`` since output is already printed.
-        """
-        if self.output_format != OutputFormat.VERBOSE and self._results:
-            # Transform raw results into table rows
-            renderer = CheckTableRenderer(self._results)
-            rows = renderer.transform()
-            CheckTableFormatter(rows, self.show_extra).render()
+def _get_absolute_path(path: str) -> str:
+    return get_absolute_path(path)

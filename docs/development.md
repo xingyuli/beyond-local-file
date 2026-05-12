@@ -136,8 +136,11 @@ beyond-local-file/
 │       ├── copy_manager.py          # Copy strategy implementation
 │       ├── sync_state.py            # Copy strategy state tracking
 │       ├── git_manager.py           # Git exclude management
-│       ├── formatters.py            # Output formatters
-│       ├── project_processor.py     # Operations and coordination
+│       ├── project_processor.py     # Config loading and ProjectProcessor orchestrator
+│       ├── operations/
+│       │   ├── base.py              # CmdOperation ABC
+│       │   ├── link_sync.py         # SyncOperation + LinkSyncFormatter
+│       │   └── link_check.py        # CheckOperation + check formatters
 │       └── model/
 │           ├── config.py            # Config models (YAML structure)
 │           ├── processing.py        # Processing models (execution)
@@ -273,7 +276,7 @@ result = LinkCreateResult(
 
 ### 4. Integration
 
-Update operations in `project_processor.py` to partition items for your strategy and create your manager.
+Update operations in `src/beyond_local_file/operations/` to partition items for your strategy and create your manager. Add a new module (e.g., `link_hardlink.py`) if your strategy introduces a new subcommand, or extend an existing operation module if it fits an existing command.
 
 ## Coding Standards
 

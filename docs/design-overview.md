@@ -108,10 +108,11 @@ The beyond-local-file system manages different link strategies (symlink, copy, e
 - Expand M mappings × N targets
 - Generate display names with suffixes
 
-**Operations Layer** (`project_processor.py`)
+**Operations Layer** (`project_processor.py`, `operations/`)
 - Partition items by strategy
 - Create and coordinate managers
 - Aggregate results
+- Format and display output (per-subcommand formatters in `operations/`)
 
 **Manager Layer** (`symlink_manager.py`, `copy_manager.py`)
 - Execute strategy-specific operations
@@ -245,8 +246,10 @@ When creating a new operation:
 | Translator | `src/beyond_local_file/model/translator.py` |
 | SymlinkManager | `src/beyond_local_file/symlink_manager.py` |
 | CopyManager | `src/beyond_local_file/copy_manager.py` |
-| Operations | `src/beyond_local_file/project_processor.py` |
-| Formatters | `src/beyond_local_file/formatters.py` |
+| Orchestration & Config Loading | `src/beyond_local_file/project_processor.py` |
+| Operation Base Class | `src/beyond_local_file/operations/base.py` |
+| link sync (operation + formatter) | `src/beyond_local_file/operations/link_sync.py` |
+| link check (operation + formatters) | `src/beyond_local_file/operations/link_check.py` |
 | CLI | `src/beyond_local_file/cli.py` |
 
 **Note:** All result types (`LinkCreateResult`, `LinkCheckResult`, `GitExcludeAddResult`, `GitExcludeCheckResult`, `OperationProgress`) are defined in `link_strategy_protocol.py` as the single source of truth.
