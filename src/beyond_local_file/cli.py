@@ -9,7 +9,6 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .constants import DEFAULT_CONFIG_FILE
 from .copy_manager import CopyConflictAction
 from .operations import CheckOperation, SyncOperation
 from .options import OutputFormat
@@ -93,7 +92,7 @@ def ask_user_for_conflict(managed_file: Path, target_file: Path) -> str:
 @click.option(
     "-c",
     "--config",
-    default=DEFAULT_CONFIG_FILE,
+    default=None,
     help="Path to config file",
 )
 @click.pass_context

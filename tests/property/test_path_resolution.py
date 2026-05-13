@@ -13,7 +13,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from beyond_local_file.config import Config
-from beyond_local_file.project_processor import get_absolute_path
+from beyond_local_file.project_processor import _get_absolute_path
 
 
 # Feature: uvx-installable-tool, Property 1: Config File Path Resolution
@@ -63,7 +63,7 @@ def test_config_file_path_resolved_relative_to_cwd(
             os.chdir(test_cwd)
 
             # Resolve the config path using the tool's function
-            resolved_path = get_absolute_path(relative_config_path)
+            resolved_path = _get_absolute_path(relative_config_path)
 
             # Expected path: CWD + relative_config_path
             expected_path = (test_cwd / relative_config_path).resolve()

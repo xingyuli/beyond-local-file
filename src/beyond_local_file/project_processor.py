@@ -64,7 +64,9 @@ class ProjectProcessor:
         return True
 
 
-def load_config_projects(config: str, project_name: str | None = None) -> tuple[dict[str, ConfigProject], Path] | None:
+def load_config_projects(
+    config: str | None, project_name: str | None = None
+) -> tuple[dict[str, ConfigProject], Path] | None:
     """Load configuration using new model structure with .blfrc support.
 
     Config resolution order:
@@ -73,7 +75,8 @@ def load_config_projects(config: str, project_name: str | None = None) -> tuple[
     3. Default to config.yml in current directory
 
     Args:
-        config: Path to the YAML configuration file from --config flag.
+        config: Path to the YAML configuration file from --config flag,
+            or None if the flag was not provided.
         project_name: Optional project name to filter. If provided, only
             returns configuration for that project.
 
@@ -81,44 +84,50 @@ def load_config_projects(config: str, project_name: str | None = None) -> tuple[
         Tuple of (ConfigProject dict, config directory path).
         Returns None if loading failed.
     """
-    config_paths = _resolve_config_paths_with_blfrc(config)
-    if config_paths is None:
-        return None
+    # 1. Explicit --config flag
+    if config is not None:
+        return _load_config_from_path(config, project_name)
 
-    if len(config_paths) == 1:
-        return _load_single_config(config_paths[0], project_name)
-    return _load_and_combine_configs(config_paths, project_name)
-
-
-def _resolve_config_paths_with_blfrc(config: str) -> list[Path] | None:
-    """Resolve config file paths using .blfrc or default.
-
-    Args:
-        config: Config path from --config flag.
-
-    Returns:
-        List of config file paths to load, or None if config not found.
-    """
-    if config != DEFAULT_CONFIG_FILE:
-        config_path = Path(_get_absolute_path(config))
-        if not config_path.exists():
-            click.echo(f"Config file not found: {config_path}")
-            return None
-        return [config_path]
-
+    # 2. ~/.blfrc
     try:
-        blfrc_configs = resolve_config_from_blfrc()
-        if blfrc_configs:
-            return blfrc_configs
+        blfrc_paths = resolve_config_from_blfrc()
     except BlfrcError as e:
         click.echo(f"Error: {e}")
         return None
 
+    if blfrc_paths:
+        if len(blfrc_paths) == 1:
+            return _load_single_config(blfrc_paths[0], project_name)
+        return _load_and_combine_configs(blfrc_paths, project_name)
+
+    # 3. Default config.yml in current directory
+    return _load_config_from_path(DEFAULT_CONFIG_FILE, project_name, show_hint=True)
+
+
+def _load_config_from_path(
+    config: str, project_name: str | None, *, show_hint: bool = False
+) -> tuple[dict[str, ConfigProject], Path] | None:
+    """Resolve a config path string, check existence, and load it.
+
+    Args:
+        config: Path string to the YAML configuration file.
+        project_name: Optional project name to filter.
+        show_hint: When True, append a usage hint to the "not found" error
+            message. Set by callers that fall back to the default path so
+            users know how to specify a config explicitly.
+
+    Returns:
+        Tuple of (ConfigProject dict, config directory path).
+        Returns None if the file does not exist or loading failed.
+    """
     config_path = Path(_get_absolute_path(config))
     if not config_path.exists():
-        click.echo(f"Config file not found: {config_path}")
+        msg = f"Config file not found: {config_path}"
+        if show_hint:
+            msg += "\nHint: use --config <path> or add 'config_file' to ~/.blfrc"
+        click.echo(msg)
         return None
-    return [config_path]
+    return _load_single_config(config_path, project_name)
 
 
 def _load_single_config(
@@ -197,7 +206,7 @@ def _load_and_combine_configs(
         return None
 
 
-def get_absolute_path(path: str) -> str:
+def _get_absolute_path(path: str) -> str:
     """Resolve a path to its absolute form.
 
     Args:
@@ -207,7 +216,3 @@ def get_absolute_path(path: str) -> str:
         Absolute path as a string.
     """
     return str(Path(path).resolve())
-
-
-def _get_absolute_path(path: str) -> str:
-    return get_absolute_path(path)
