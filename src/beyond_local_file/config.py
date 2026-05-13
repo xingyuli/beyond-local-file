@@ -7,6 +7,9 @@ import yaml
 
 from .model.config import ConfigProject, Mapping
 
+_KEY_TARGET = "target"
+_KEY_SUBPATH = "subpath"
+
 
 class ConfigError(Exception):
     """Error related to configuration loading or validation."""
@@ -198,7 +201,7 @@ class Config:
             )
 
         # Single dict mapping: project-name: {target: /target, subpath: [...]}
-        if isinstance(value, dict) and "target" in value:
+        if isinstance(value, dict) and _KEY_TARGET in value:
             mapping = self._parse_dict_mapping(value)
             return ConfigProject(
                 managed_project_name=name,
@@ -212,7 +215,7 @@ class Config:
             for item in value:
                 if isinstance(item, str):
                     mappings.append(self._parse_string_mapping(item))
-                elif isinstance(item, dict) and "target" in item:
+                elif isinstance(item, dict) and _KEY_TARGET in item:
                     mappings.append(self._parse_dict_mapping(item))
             return ConfigProject(
                 managed_project_name=name,
@@ -249,8 +252,8 @@ class Config:
         Returns:
             Mapping with targets, subpaths, and copy_paths.
         """
-        targets = self._normalize_targets(mapping_dict["target"])
-        raw_subpaths = mapping_dict.get("subpath")
+        targets = self._normalize_targets(mapping_dict[_KEY_TARGET])
+        raw_subpaths = mapping_dict.get(_KEY_SUBPATH)
         subpaths, copy_paths = self._parse_subpaths(raw_subpaths)
 
         return Mapping(
