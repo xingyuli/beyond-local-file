@@ -9,8 +9,6 @@ import yaml
 class BlfrcError(Exception):
     """Error related to .blfrc file processing."""
 
-    pass
-
 
 def get_home_directory() -> Path:
     """Get home directory, respecting BLF_HOME env var for testing.
@@ -75,7 +73,7 @@ def _load_blfrc_file(blfrc_path: Path) -> dict | None:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
         raise BlfrcError(f"Invalid YAML in {blfrc_path}: {e}") from e
-    except Exception as e:
+    except OSError as e:
         raise BlfrcError(f"Error reading {blfrc_path}: {e}") from e
 
     # If data is None or not a dict, treat as empty
