@@ -192,11 +192,8 @@ def _load_and_combine_configs(
 
         config_dir = config_paths[0].parent
         return combined_projects, config_dir
-    except (ConfigError, ValueError) as e:
+    except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(f"Error: {e}")
-        return None
-    except Exception as e:
-        click.echo(str(e))
         return None
 
 
