@@ -71,11 +71,11 @@ def test_existing_config_files_work():
         assert config_projects["project-b"].managed_project_path == (td_path / "project-b").resolve()
 
 
-def test_same_output_format():
-    """Test that the tool produces the same output format as before.
+def test_verbose_output_format():
+    """Test that the tool produces the expected verbose output format.
 
-    This test verifies that the CLI output format remains consistent
-    with the previous version, ensuring users see familiar messages.
+    This test verifies that the CLI output in verbose mode contains
+    the expected elements, ensuring users see familiar messages.
     """
     runner = CliRunner()
 
