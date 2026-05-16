@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from hypothesis import settings
+from click.testing import CliRunner
 
 
 @pytest.fixture
@@ -16,6 +17,27 @@ def temp_dir():
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
+
+
+@pytest.fixture
+def isolated_home(tmp_path, monkeypatch):
+    """Create an isolated home directory with no .blfrc, bypassing the real ~/.blfrc.
+
+    Sets the BLF_HOME environment variable to a temporary directory so that
+    ``resolve_config_from_blfrc()`` finds no .blfrc file and falls through to
+    the default ``config.yml`` discovery logic.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        dict: Environment variables dict suitable for passing to ``CliRunner.invoke``.
+    """
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("BLF_HOME", str(home_dir))
+    return {"BLF_HOME": str(home_dir)}
 
 
 @pytest.fixture

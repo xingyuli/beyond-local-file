@@ -88,11 +88,12 @@ def test_check_accepts_extra_exclude_option():
     assert "Show extra entries" in result.output
 
 
-def test_default_config_file_discovery(temp_dir: Path) -> None:
+def test_default_config_file_discovery(temp_dir: Path, isolated_home) -> None:
     """Test that tool finds config.yml in current directory without --config.
 
     Args:
         temp_dir: Temporary directory fixture (unused in this test).
+        isolated_home: Env dict that bypasses the real ~/.blfrc.
     """
     runner = CliRunner()
 
@@ -109,18 +110,18 @@ def test_default_config_file_discovery(temp_dir: Path) -> None:
         config_path = td_path / "config.yml"
         config_path.write_text("test-project: target\n")
 
-        result = runner.invoke(cli, ["link", "check"])
+        result = runner.invoke(cli, ["link", "check"], env=isolated_home)
 
         assert result.exit_code == 0
         assert "test-project" in result.output
 
 
-def test_error_message_when_config_not_found() -> None:
+def test_error_message_when_config_not_found(isolated_home) -> None:
     """Test that tool displays error message when config file is not found."""
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        result = runner.invoke(cli, ["link", "check"])
+        result = runner.invoke(cli, ["link", "check"], env=isolated_home)
 
         assert "Config file not found" in result.output
         assert "config.yml" in result.output

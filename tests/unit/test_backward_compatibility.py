@@ -71,7 +71,7 @@ def test_existing_config_files_work():
         assert config_projects["project-b"].managed_project_path == (td_path / "project-b").resolve()
 
 
-def test_verbose_output_format():
+def test_verbose_output_format(isolated_home):
     """Test that the tool produces the expected verbose output format.
 
     This test verifies that the CLI output in verbose mode contains
@@ -95,7 +95,7 @@ def test_verbose_output_format():
         config_path.write_text(f"test-project: {target_dir}\n")
 
         # Run check command in verbose mode and verify output format
-        result = runner.invoke(cli, ["link", "check", "--format", "verbose"])
+        result = runner.invoke(cli, ["link", "check", "--format", "verbose"], env=isolated_home)
 
         # Verify expected output elements
         assert result.exit_code == 0
