@@ -18,6 +18,7 @@ New to beyond-local-file? Start here:
 - **[Alternatives Comparison](alternatives-comparison.md)** - Detailed comparison with GNU Stow and chezmoi
 - **[Configuration Reference](configuration-reference.md)** - Complete configuration documentation
 - **[CLI Reference](cli-reference.md)** - Complete command-line interface documentation
+- **[Shell Completion](shell-completion.md)** - Tab completion setup for bash, zsh, and fish
 - **[Config Format Clarification](config-format-clarification.md)** - Understanding configuration vs architecture
 - **[Design Overview](design-overview.md)** - Architecture overview and design principles
 
@@ -40,6 +41,7 @@ New to beyond-local-file? Start here:
 ### I want to...
 
 - **Get started quickly** → [Quick Start](../README.md#quick-start)
+- **Set up tab completion** → [Shell Completion](shell-completion.md)
 - **Compare with alternatives** → [Alternatives Comparison](alternatives-comparison.md)
 - **Understand configuration** → [Configuration Reference](configuration-reference.md)
 - **Learn all commands** → [CLI Reference](cli-reference.md)
@@ -55,6 +57,7 @@ New to beyond-local-file? Start here:
 | Create first config | [Quick Start](../README.md#quick-start) |
 | Sync specific files only | [Configuration Reference](configuration-reference.md#format-3-selective-subpaths) |
 | Check link status | [CLI Reference](cli-reference.md#link-check--verify-status) |
+| Set up tab completion | [Shell Completion](shell-completion.md) |
 | Enable Windows support | [Windows Support](windows-support.md#requirements) |
 | Run tests | [Development Guide](development.md#running-tests) |
 
@@ -68,6 +71,7 @@ docs/
 │   ├── alternatives-comparison.md     # Comparison with GNU Stow and chezmoi
 │   ├── configuration-reference.md     # Complete configuration documentation
 │   ├── cli-reference.md               # Complete CLI documentation
+│   ├── shell-completion.md            # Tab completion setup
 │   ├── config-format-clarification.md # Config vs architecture concepts
 │   ├── platform-support.md            # Cross-platform guide
 │   └── windows-support.md             # Windows-specific guide

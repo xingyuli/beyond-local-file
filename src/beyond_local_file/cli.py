@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from . import __version__
+from .completion import complete_project_names
 from .copy_manager import CopyConflictAction
 from .operations import CheckOperation, SyncOperation
 from .options import OutputFormat
@@ -109,7 +110,7 @@ def link():
 
 
 @link.command()
-@click.argument("project_name", required=False)
+@click.argument("project_name", required=False, shell_complete=complete_project_names)
 @click.pass_context
 def sync(ctx, project_name):
     """Synchronize links from project directory to target locations.
@@ -129,7 +130,7 @@ def sync(ctx, project_name):
 
 
 @link.command()
-@click.argument("project_name", required=False)
+@click.argument("project_name", required=False, shell_complete=complete_project_names)
 @click.option("--extra-exclude", is_flag=True, help="Show extra entries in git exclude file")
 @click.option(
     "--format",

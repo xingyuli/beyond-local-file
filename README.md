@@ -105,12 +105,6 @@ pipx install beyond-local-file
 pipx upgrade beyond-local-file
 ```
 
-### Ephemeral: `uvx` (no installation)
-
-```bash
-uvx beyond-local-file --help
-```
-
 ### Install from GitHub (development version)
 
 ```bash
@@ -252,6 +246,7 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 - **[Documentation Hub](docs/README.md)** - Complete documentation index
 - **[Configuration Reference](docs/configuration-reference.md)** - Complete configuration documentation
 - **[CLI Reference](docs/cli-reference.md)** - Complete command-line interface documentation
+- **[Shell Completion](docs/shell-completion.md)** - Tab completion setup for bash, zsh, and fish
 - **[Config Format Guide](docs/config-format-clarification.md)** - Understanding configuration
 - **[Architecture Design](docs/architecture-design.md)** - Internal architecture
 - **[Platform Support](docs/platform-support.md)** - Cross-platform compatibility

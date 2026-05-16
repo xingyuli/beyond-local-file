@@ -64,6 +64,22 @@ blf_dev link sync
 - Clean output without build messages
 - Works from any directory
 
+### Installing Locally as a Tool (for testing installed behavior)
+
+To test features that depend on the tool being properly installed — such as shell completion — install your local version as a `uv` tool:
+
+```bash
+uv tool install --editable /path/to/beyond-local-file
+```
+
+The `--editable` flag means the installed binary runs your current source code directly, so changes are reflected immediately without reinstalling. This behaves identically to `uv tool install beyond-local-file` from PyPI, just pointing at your local repo.
+
+To uninstall when done:
+
+```bash
+uv tool uninstall beyond-local-file
+```
+
 ## Running Tests
 
 ```bash
