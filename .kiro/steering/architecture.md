@@ -20,10 +20,11 @@ src/beyond_local_file/
 ├── copy_manager.py              # CopyManager — implements LinkStrategyManager protocol
 ├── sync_state.py                # Copy strategy state tracking
 ├── operations/
-│   ├── __init__.py              # Re-exports CmdOperation, SyncOperation, CheckOperation
+│   ├── __init__.py              # Re-exports CmdOperation, SyncOperation, CheckOperation, run_upgrade
 │   ├── base.py                  # CmdOperation ABC
 │   ├── link_sync.py             # SyncOperation + LinkSyncFormatter
-│   └── link_check.py            # CheckOperation + LinkCheckFormatter + table formatters
+│   ├── link_check.py            # CheckOperation + LinkCheckFormatter + table formatters
+│   └── upgrade.py               # run_upgrade — install method detection and self-upgrade logic
 └── model/
     ├── config.py                # Config models (YAML structure)
     ├── processing.py            # Processing models (execution structure)

@@ -94,6 +94,8 @@ uv tool install beyond-local-file
 
 # Update to latest version
 uv tool install --upgrade beyond-local-file
+# Or use the built-in upgrade command (auto-detects install method)
+blf upgrade
 ```
 
 ### Alternative: `pipx` from PyPI
@@ -103,8 +105,9 @@ pipx install beyond-local-file
 
 # Update
 pipx upgrade beyond-local-file
+# Or use the built-in upgrade command (auto-detects install method)
+blf upgrade
 ```
-
 ### Install from GitHub (development version)
 
 ```bash
@@ -226,6 +229,7 @@ See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order)
 |---------|-------------|
 | `blf link sync [PROJECT]` | Create symlinks or copies in target directories |
 | `blf link check [PROJECT]` | Check link status and Git excludes |
+| `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
 
 ### Progress Tracking
 

@@ -278,6 +278,64 @@ blf -c custom.yml link check
 blf --config custom.yml link check my-project --extra-exclude --format verbose
 ```
 
+## `upgrade` — Self-Upgrade
+
+Upgrade beyond-local-file to the latest version. Automatically detects whether the tool was
+installed via `uv tool` or `pipx` and runs the appropriate upgrade command.
+
+### Syntax
+
+```bash
+blf upgrade [OPTIONS]
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--dry-run` | Flag | Off | Show the upgrade command without executing it |
+
+### Detection Logic
+
+The command inspects the active Python interpreter path (`sys.executable`) to determine the
+install method:
+
+| Detected path pattern | Install method | Upgrade command run |
+|-----------------------|----------------|---------------------|
+| `…/uv/tools/beyond-local-file/…` | `uv tool` | `uv tool install --upgrade beyond-local-file` |
+| `…/pipx/venvs/beyond-local-file/…` | `pipx` | `pipx upgrade beyond-local-file` |
+| Anything else | unknown | Prints manual instructions and exits 1 |
+
+### Examples
+
+```bash
+# Upgrade to latest version
+blf upgrade
+
+# Preview what would be run (no changes made)
+blf upgrade --dry-run
+```
+
+### Output
+
+```
+Detected install method: uv tool
+Running: uv tool install --upgrade beyond-local-file
+```
+
+When the install method cannot be determined:
+
+```
+Cannot determine install method.
+sys.executable: /path/to/python
+
+Upgrade manually using the command that matches how you installed the tool:
+
+  uv tool install --upgrade beyond-local-file
+  pipx upgrade beyond-local-file
+  uv tool install --upgrade git+https://github.com/xingyuli/beyond-local-file.git
+```
+
 ---
 
 ## Exit Codes

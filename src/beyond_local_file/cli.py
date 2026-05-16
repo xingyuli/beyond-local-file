@@ -11,7 +11,7 @@ import click
 from . import __version__
 from .completion import complete_project_names
 from .copy_manager import CopyConflictAction
-from .operations import CheckOperation, SyncOperation
+from .operations import CheckOperation, SyncOperation, run_upgrade
 from .options import OutputFormat
 from .project_processor import ProjectProcessor, load_config_projects
 from .symlink_manager import Action
@@ -156,6 +156,20 @@ def check(ctx, project_name, extra_exclude, output_format):
     operation = CheckOperation(config_dir, extra_exclude, OutputFormat(output_format))
     ProjectProcessor.process_all_units(config_projects, operation)
     operation.render()
+
+
+@cli.command()
+@click.option("--dry-run", is_flag=True, help="Show the upgrade command without executing it.")
+@click.pass_context
+def upgrade(ctx, dry_run):
+    """Upgrade beyond-local-file to the latest version.
+
+    Detects whether the tool was installed via ``uv tool`` or ``pipx`` and
+    runs the appropriate upgrade command automatically. Use ``--dry-run`` to
+    preview the command without executing it.
+    """
+    exit_code = run_upgrade(dry_run=dry_run)
+    ctx.exit(exit_code)
 
 
 if __name__ == "__main__":

@@ -101,9 +101,7 @@ def test_check_operation_reports_status(
         temp_config_dir: Temporary config directory fixture.
     """
     # Create only one symlink so there is a mix of exists/missing
-    (sample_unit.target_project_path / "file1.txt").symlink_to(
-        sample_unit.managed_project_path / "file1.txt"
-    )
+    (sample_unit.target_project_path / "file1.txt").symlink_to(sample_unit.managed_project_path / "file1.txt")
 
     operation = CheckOperation(temp_config_dir)
     success = operation.execute_unit(sample_unit)

@@ -36,6 +36,7 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/operations/base.py",
     "beyond_local_file/operations/link_check.py",
     "beyond_local_file/operations/link_sync.py",
+    "beyond_local_file/operations/upgrade.py",
 ]
 
 # Directories that must never appear in the wheel.
@@ -85,18 +86,13 @@ def test_built_wheel_contains_only_package() -> None:
             root_py_files = [
                 f
                 for f in file_list
-                if f.endswith(".py")
-                and "/" not in f.rstrip("/")
-                and not f.startswith("beyond_local_file/")
+                if f.endswith(".py") and "/" not in f.rstrip("/") and not f.startswith("beyond_local_file/")
             ]
-            assert not root_py_files, (
-                f"Wheel contains unexpected root-level .py files: {root_py_files}"
-            )
+            assert not root_py_files, f"Wheel contains unexpected root-level .py files: {root_py_files}"
 
             # 3. No managed project directories bundled in.
             for excluded_dir in EXCLUDED_DIRS:
                 leaked = [f for f in file_list if f.startswith(excluded_dir)]
                 assert not leaked, (
-                    f"Wheel must not contain managed project directory "
-                    f"'{excluded_dir}', but found: {leaked}"
+                    f"Wheel must not contain managed project directory '{excluded_dir}', but found: {leaked}"
                 )

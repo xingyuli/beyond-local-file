@@ -165,9 +165,7 @@ class SyncOperation(CmdOperation):
             if manager.git_manager.is_git_repo():
                 git_result = manager.add_git_excludes()
 
-            LinkSyncFormatter(unit.managed_project_path, link_result, git_result).print(
-                unit.target_project_path
-            )
+            LinkSyncFormatter(unit.managed_project_path, link_result, git_result).print(unit.target_project_path)
 
             if link_result.progress.aborted:
                 return False
@@ -180,9 +178,7 @@ class SyncOperation(CmdOperation):
             if copy_mgr.git_manager.is_git_repo():
                 git_result = copy_mgr.add_git_excludes()
 
-            LinkSyncFormatter(unit.managed_project_path, link_result, git_result).print(
-                unit.target_project_path
-            )
+            LinkSyncFormatter(unit.managed_project_path, link_result, git_result).print(unit.target_project_path)
 
             if link_result.progress.aborted:
                 return False
