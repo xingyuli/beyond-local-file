@@ -13,9 +13,9 @@ from ..link_strategy_protocol import (
     GitExcludeAddResult,
     LinkCreateResult,
 )
-from ..model.processing import ProcessingUnit
-from ..options import LinkStrategy
-from ..symlink_manager import Action, SymlinkManager
+from ..model.processing import LinkStrategy, ProcessingUnit
+from ..options import ConflictResolution, CopyConflictResolution
+from ..symlink_manager import SymlinkManager
 from .base import CmdOperation
 
 # ---------------------------------------------------------------------------
@@ -128,8 +128,8 @@ class SyncOperation(CmdOperation):
     def __init__(
         self,
         config_dir: Path,
-        ask_callback: Callable[[str, str], Action] | None = None,
-        conflict_callback: Callable[[Path, Path], str] | None = None,
+        ask_callback: Callable[[str, str], ConflictResolution] | None = None,
+        conflict_callback: Callable[[Path, Path], CopyConflictResolution] | None = None,
     ) -> None:
         """Initialize the sync operation.
 

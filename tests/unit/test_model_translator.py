@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from beyond_local_file.model import ConfigProject, Mapping, translate_config_to_processing
-from beyond_local_file.options import LinkStrategy
+from beyond_local_file.model.processing import LinkStrategy
 
 
 @pytest.fixture

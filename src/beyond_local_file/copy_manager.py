@@ -18,17 +18,9 @@ from .link_strategy_protocol import (
     LinkCreateResult,
     OperationProgress,
 )
-from .model.processing import ManagedProjectItem
-from .options import LinkStrategy, SyncStatus
-from .sync_state import SyncState
-
-
-class CopyConflictAction:
-    """Actions available when a bidirectional conflict is detected."""
-
-    MANAGED = "managed"
-    TARGET = "target"
-    SKIP = "skip"
+from .model.processing import LinkStrategy, ManagedProjectItem
+from .options import CopyConflictResolution
+from .sync_state import SyncState, SyncStatus
 
 
 class CopyManager:
@@ -71,7 +63,9 @@ class CopyManager:
         """
         return self.copy_items
 
-    def create_links(self, conflict_callback: Callable[[Path, Path], str] | None = None) -> LinkCreateResult:  # noqa: PLR0912 -- inlined sync logic from removed sync() method
+    def create_links(  # noqa: PLR0912 -- inlined sync logic from removed sync() method
+        self, conflict_callback: Callable[[Path, Path], CopyConflictResolution] | None = None
+    ) -> LinkCreateResult:
         """Create links for all managed items (protocol method).
 
         Synchronizes copied files using bidirectional change detection.
@@ -84,9 +78,8 @@ class CopyManager:
 
         Args:
             conflict_callback: Called on bidirectional conflict. Receives
-                (managed_path, target_path) and returns one of
-                CopyConflictAction.MANAGED, TARGET, or SKIP.
-                Defaults to skip when not provided.
+                (managed_path, target_path) and returns a CopyConflictResolution.
+                Defaults to SKIP when not provided.
 
         Returns:
             LinkCreateResult containing details of the operation with progress tracking.
@@ -112,14 +105,16 @@ class CopyManager:
 
             if status == SyncStatus.BOTH_CHANGED:
                 # Resolve conflict via user callback
-                action = conflict_callback(managed_file, target_file) if conflict_callback else CopyConflictAction.SKIP
+                action = (
+                    conflict_callback(managed_file, target_file) if conflict_callback else CopyConflictResolution.SKIP
+                )
 
-                if action == CopyConflictAction.MANAGED:
+                if action == CopyConflictResolution.MANAGED:
                     if self._copy_and_record(managed_file, target_file, managed_file, target_file):
                         result.created.add(item.name)
                     else:
                         result.failed.add(item.name)
-                elif action == CopyConflictAction.TARGET:
+                elif action == CopyConflictResolution.TARGET:
                     if self._copy_and_record(target_file, managed_file, managed_file, target_file):
                         reverse_copied.add(item.name)
                     else:

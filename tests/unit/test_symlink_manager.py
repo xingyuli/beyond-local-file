@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.options import LinkStrategy
-from beyond_local_file.symlink_manager import Action, SymlinkManager
+from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem
+from beyond_local_file.options import ConflictResolution
+from beyond_local_file.symlink_manager import SymlinkManager
 
 
 @pytest.fixture
@@ -153,8 +153,8 @@ def test_sync_detects_incorrect_symlinks(sample_items: list[ManagedProjectItem],
     (temp_target_dir / "file1.txt").symlink_to(wrong_source)
 
     # Callback that returns SKIP
-    def skip_callback(target_path: str, expected_source: str) -> Action:
-        return Action.SKIP
+    def skip_callback(target_path: str, expected_source: str) -> ConflictResolution:
+        return ConflictResolution.SKIP
 
     manager = SymlinkManager(sample_items, temp_target_dir)
     result = manager.create_links(ask_callback=skip_callback)
@@ -185,8 +185,8 @@ def test_sync_overwrites_with_callback_approval(
     (temp_target_dir / "file1.txt").symlink_to(wrong_source)
 
     # Callback that returns OVERWRITE
-    def overwrite_callback(target_path: str, expected_source: str) -> Action:
-        return Action.OVERWRITE
+    def overwrite_callback(target_path: str, expected_source: str) -> ConflictResolution:
+        return ConflictResolution.OVERWRITE
 
     manager = SymlinkManager(sample_items, temp_target_dir)
     result = manager.create_links(ask_callback=overwrite_callback)

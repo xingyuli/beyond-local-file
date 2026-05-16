@@ -5,10 +5,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from beyond_local_file.model.processing import ManagedProjectItem, ProcessingUnit
+from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 from beyond_local_file.operations import CheckOperation, SyncOperation
-from beyond_local_file.options import LinkStrategy
-from beyond_local_file.symlink_manager import Action, SymlinkManager
+from beyond_local_file.options import ConflictResolution
+from beyond_local_file.symlink_manager import SymlinkManager
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def test_callback_receives_both_paths(temp_project_dir, temp_target_dir):
     existing_file.write_text("existing content")
 
     # Create a mock callback to capture arguments
-    mock_callback = Mock(return_value=Action.SKIP)
+    mock_callback = Mock(return_value=ConflictResolution.SKIP)
 
     # Run sync
     manager = SymlinkManager(items, temp_target_dir)
@@ -69,7 +69,7 @@ def test_callback_with_overwrite_action(temp_project_dir, temp_target_dir):
     existing_file.write_text("existing content")
 
     # Create a callback that returns OVERWRITE
-    mock_callback = Mock(return_value=Action.OVERWRITE)
+    mock_callback = Mock(return_value=ConflictResolution.OVERWRITE)
 
     # Run sync
     manager = SymlinkManager(items, temp_target_dir)

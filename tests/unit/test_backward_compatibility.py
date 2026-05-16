@@ -128,8 +128,10 @@ def test_same_symlink_behavior():
         target_dir.mkdir()
 
         # Create managed project items
-        from beyond_local_file.model.processing import ManagedProjectItem  # noqa: PLC0415 -- avoid circular import
-        from beyond_local_file.options import LinkStrategy  # noqa: PLC0415 -- avoid circular import
+        from beyond_local_file.model.processing import (  # noqa: PLC0415 -- avoid circular import
+            LinkStrategy,
+            ManagedProjectItem,
+        )
 
         items = [
             ManagedProjectItem(

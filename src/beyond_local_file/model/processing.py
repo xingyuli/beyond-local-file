@@ -5,9 +5,23 @@ Each ProcessingUnit represents one specific (project, mapping, target) combinati
 """
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
-from ..options import LinkStrategy
+
+class LinkStrategy(StrEnum):
+    """Strategy for linking a project item to the target.
+
+    Derived from the YAML config (``copy: true`` → COPY, otherwise SYMLINK).
+    Never exposed as a CLI option.
+
+    Attributes:
+        SYMLINK: Create a symbolic link (default).
+        COPY: Create a physical file copy.
+    """
+
+    SYMLINK = "symlink"
+    COPY = "copy"
 
 
 @dataclass

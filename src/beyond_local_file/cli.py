@@ -10,14 +10,12 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
-from .copy_manager import CopyConflictAction
 from .operations import CheckOperation, SyncOperation, run_upgrade
-from .options import OutputFormat
+from .options import ConflictResolution, CopyConflictResolution, OutputFormat
 from .project_processor import ProjectProcessor, load_config_projects
-from .symlink_manager import Action
 
 
-def ask_user_for_action(target_path: str, expected_source: str | None = None) -> Action:
+def ask_user_for_action(target_path: str, expected_source: str | None = None) -> ConflictResolution:
     """Prompt user for action when a path already exists.
 
     Args:
@@ -27,9 +25,9 @@ def ask_user_for_action(target_path: str, expected_source: str | None = None) ->
     Returns:
         The user's chosen action: SKIP, OVERWRITE, or ABORT.
     """
-    options = ", ".join(f"{a.value}-{a.name.lower()}" for a in Action)
-    choices = [str(a.value) for a in Action]
-    default = str(Action.SKIP.value)
+    options = ", ".join(f"{a.value}-{a.name.lower()}" for a in ConflictResolution)
+    choices = [str(a.value) for a in ConflictResolution]
+    default = str(ConflictResolution.SKIP.value)
 
     click.echo(f"\nThe path of {target_path} already exists.")
 
@@ -57,10 +55,10 @@ def ask_user_for_action(target_path: str, expected_source: str | None = None) ->
         show_choices=True,
         default=default,
     )
-    return Action(int(choice))
+    return ConflictResolution(int(choice))
 
 
-def ask_user_for_conflict(managed_file: Path, target_file: Path) -> str:
+def ask_user_for_conflict(managed_file: Path, target_file: Path) -> CopyConflictResolution:
     """Prompt user to resolve a bidirectional copy conflict.
 
     Args:
@@ -68,23 +66,23 @@ def ask_user_for_conflict(managed_file: Path, target_file: Path) -> str:
         target_file: Path to the target (copied) file.
 
     Returns:
-        One of CopyConflictAction values: managed, target, or skip.
+        The user's chosen resolution: MANAGED, TARGET, or SKIP.
     """
     click.echo("\nConflict detected: both managed and target files have changed")
     click.echo(f"  managed: {managed_file}")
     click.echo(f"  target:  {target_file}")
 
+    # Derive shortcut and label from enum values: "managed" → "[m]anaged"
+    resolution_map = {m.value[0]: m for m in CopyConflictResolution}
+    prompt_options = " / ".join(f"[{k}]{m.value[1:]}" for k, m in resolution_map.items())
+    default = CopyConflictResolution.SKIP.value[0]
+
     choice = click.prompt(
-        "\nChoose resolution: [m]anaged / [t]arget / [s]kip",
-        type=click.Choice(["m", "t", "s"]),
+        f"\nChoose resolution: {prompt_options}",
+        type=click.Choice(list(resolution_map)),
         show_choices=False,
-        default="s",
+        default=default,
     )
-    resolution_map = {
-        "m": CopyConflictAction.MANAGED,
-        "t": CopyConflictAction.TARGET,
-        "s": CopyConflictAction.SKIP,
-    }
     return resolution_map[choice]
 
 

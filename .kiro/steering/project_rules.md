@@ -34,7 +34,16 @@ All files — code, documentation, configuration, scripts, and any generated con
 
 ## 5. Fixed Option Values
 
-All fixed sets of option values (output formats, modes, strategies) must be defined as `StrEnum` members in `src/beyond_local_file/options.py`. No magic strings elsewhere.
+`src/beyond_local_file/options.py` is the single home for two kinds of user-facing option sets:
 
+**CLI option values** — string values typed as flags or arguments (e.g. `--format table`). Define these as `StrEnum`.
 - Use `[f.value for f in MyEnum]` for `click.Choice` lists.
 - Coerce raw Click strings back to the enum at the CLI boundary: `MyEnum(raw_value)`.
+
+**Interactive prompt choices** — numeric values presented as a numbered menu (e.g. `1-skip, 2-overwrite, 3-abort`). Define these as plain `Enum` with integer values.
+- Use `[str(a.value) for a in MyEnum]` for `click.Choice` lists.
+- Coerce the user's input back to the enum: `MyEnum(int(choice))`.
+
+Internal enums that are never exposed to the user belong in the module that owns the concept — not in `options.py`. Examples:
+- `SyncStatus` → `sync_state.py` (computed copy-sync state)
+- `LinkStrategy` → `model/processing.py` (derived from YAML config, never a CLI option)

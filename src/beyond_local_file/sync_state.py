@@ -7,12 +7,32 @@ which side (managed, target, or both) has been modified since the last sync.
 import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .options import SyncStatus
+
+class SyncStatus(StrEnum):
+    """Sync status for a copied file.
+
+    Attributes:
+        IN_SYNC: Managed and target files are identical and match recorded state.
+        MANUALLY_SYNCED: Managed and target files are identical but differ from recorded state.
+        MANAGED_CHANGED: Only the managed (source) file changed since last sync.
+        TARGET_CHANGED: Only the target file changed since last sync.
+        BOTH_CHANGED: Both files changed — conflict.
+        UNKNOWN: No previous sync state recorded.
+    """
+
+    IN_SYNC = "in_sync"
+    MANUALLY_SYNCED = "manually_synced"
+    MANAGED_CHANGED = "managed_changed"
+    TARGET_CHANGED = "target_changed"
+    BOTH_CHANGED = "both_changed"
+    UNKNOWN = "unknown"
+
 
 STATE_DIR = ".blf"
 STATE_FILE = "sync-state.yml"

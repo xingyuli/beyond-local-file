@@ -9,9 +9,8 @@ from pathlib import Path
 
 import click
 
-from ..options import LinkStrategy
 from .config import ConfigProject
-from .processing import ManagedProjectItem, ProcessingUnit
+from .processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 
 # Padding threshold for display names
 _PADDING_THRESHOLD = 10

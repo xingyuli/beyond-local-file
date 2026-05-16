@@ -4,9 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.model.processing import ManagedProjectItem, ProcessingUnit
+from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 from beyond_local_file.operations.link_sync import SyncOperation
-from beyond_local_file.options import LinkStrategy
 
 
 @pytest.fixture

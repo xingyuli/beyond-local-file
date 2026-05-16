@@ -15,8 +15,8 @@ from ..link_strategy_protocol import (
     GitExcludeCheckResult,
     LinkCheckResult,
 )
-from ..model.processing import ProcessingUnit
-from ..options import LinkStrategy, OutputFormat
+from ..model.processing import LinkStrategy, ProcessingUnit
+from ..options import OutputFormat
 from ..symlink_manager import SymlinkManager
 from .base import CmdOperation
 

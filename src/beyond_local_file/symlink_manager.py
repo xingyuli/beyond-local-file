@@ -2,7 +2,6 @@
 
 import shutil
 from collections.abc import Callable
-from enum import Enum
 from pathlib import Path
 
 from .git_manager import GitExcludeManager
@@ -14,14 +13,7 @@ from .link_strategy_protocol import (
     OperationProgress,
 )
 from .model.processing import ManagedProjectItem
-
-
-class Action(Enum):
-    """Actions to take when encountering an existing path."""
-
-    SKIP = 1
-    OVERWRITE = 2
-    ABORT = 3
+from .options import ConflictResolution
 
 
 class SymlinkManager:
@@ -60,12 +52,12 @@ class SymlinkManager:
         """
         return self.symlink_items
 
-    def create_links(self, ask_callback: Callable[[str, str], Action] | None = None) -> LinkCreateResult:
+    def create_links(self, ask_callback: Callable[[str, str], ConflictResolution] | None = None) -> LinkCreateResult:
         """Create links for all managed items (protocol method).
 
         Args:
             ask_callback: Optional callback function that takes a path string
-                        and expected source path, and returns an Action.
+                        and expected source path, and returns a ConflictResolution.
 
         Returns:
             LinkCreateResult containing details of the operation with progress tracking.
@@ -82,14 +74,14 @@ class SymlinkManager:
 
             if link_path.exists() or link_path.is_symlink():
                 action = self._handle_existing_path(link_path, item.path, ask_callback)
-                if action == Action.SKIP:
+                if action == ConflictResolution.SKIP:
                     result.skipped.add(item.name)
                     result.progress.completed_items += 1
                     continue
-                elif action == Action.ABORT:
+                elif action == ConflictResolution.ABORT:
                     result.progress.aborted = True
                     return result
-                elif action == Action.OVERWRITE:
+                elif action == ConflictResolution.OVERWRITE:
                     self._remove_path(link_path)
 
             # Ensure parent directories exist for subpath items
@@ -195,8 +187,8 @@ class SymlinkManager:
         return link_path.resolve() == source_path.resolve()
 
     def _handle_existing_path(
-        self, link_path: Path, source_path: Path, ask_callback: Callable[[str, str], Action] | None = None
-    ) -> Action:
+        self, link_path: Path, source_path: Path, ask_callback: Callable[[str, str], ConflictResolution] | None = None
+    ) -> ConflictResolution:
         """Handle an existing path at the symlink location.
 
         Args:
@@ -209,7 +201,7 @@ class SymlinkManager:
         """
         if ask_callback:
             return ask_callback(str(link_path), str(source_path))
-        return Action.SKIP
+        return ConflictResolution.SKIP
 
     def _remove_path(self, path: Path) -> None:
         """Safely remove a file, symlink, or directory.

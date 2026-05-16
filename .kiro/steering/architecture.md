@@ -12,7 +12,7 @@ src/beyond_local_file/
 ├── __init__.py                  # Package metadata (__version__)
 ├── cli.py                       # Click CLI entry point — command groups and options
 ├── config.py                    # YAML config loading and path resolution (Config class)
-├── options.py                   # StrEnum definitions for CLI option values
+├── options.py                   # User-facing option enums: StrEnum for CLI flags, Enum for interactive prompts
 ├── link_strategy_protocol.py   # Protocol definitions and unified result types
 ├── git_manager.py               # GitExcludeManager — reads/writes .git/info/exclude
 ├── project_processor.py         # Config loading, ProjectProcessor orchestrator
@@ -116,7 +116,7 @@ This design:
 2. Define a `CmdOperation` subclass and its formatter(s) in that module.
 3. Re-export the operation class from `operations/__init__.py`.
 4. Add a new Click command in `cli.py` under the `link` group (or a new group).
-5. If the command has fixed option values, define a `StrEnum` in `options.py`.
+5. If the command has fixed CLI option values (flags/args), define a `StrEnum` in `options.py`. If it presents a numbered interactive prompt, define a plain `Enum` with integer values in `options.py`.
 6. Use protocol methods (`create_links()`, `check_links()`, `add_git_excludes()`, `check_git_excludes()`).
 7. Operations must check git repo status before calling git exclude methods.
 8. All result types come from `link_strategy_protocol.py`.
