@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from hypothesis import settings
-from click.testing import CliRunner
 
 
 @pytest.fixture

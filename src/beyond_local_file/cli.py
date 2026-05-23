@@ -10,9 +10,10 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
-from .operations import CheckOperation, SyncOperation, run_upgrade
+from .operations import CheckOperation, RevlinkOperation, SyncOperation, run_upgrade
+from .operations.revlink import RevlinkFormatter
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
-from .project_processor import ProjectProcessor, load_config_projects
+from .project_processor import ProjectProcessor, load_config_projects, resolve_project_from_cwd
 
 
 def ask_user_for_action(target_path: str, expected_source: str | None = None) -> ConflictResolution:
@@ -167,6 +168,55 @@ def upgrade(ctx, dry_run):
     preview the command without executing it.
     """
     exit_code = run_upgrade(dry_run=dry_run)
+    ctx.exit(exit_code)
+
+
+@cli.command()
+@click.argument("path")
+@click.option("--dry-run", is_flag=True, help="Preview actions without modifying the filesystem.")
+@click.option("--force", is_flag=True, help="Overwrite existing destination in managed project.")
+@click.pass_context
+def revlink(ctx, path, dry_run, force):
+    """Convert an existing file or directory into a managed symlink.
+
+    Copies PATH to the managed project, verifies the copy via MD5 checksum,
+    replaces the original with a symlink, and records the item in
+    .git/info/exclude if the target directory is a Git repository.
+    """
+    source = Path(path).resolve()
+    config = ctx.obj["config"]
+
+    result = load_config_projects(config)
+    if result is None:
+        ctx.exit(1)
+        return
+
+    config_projects, _ = result
+    cwd = Path.cwd()
+    project = resolve_project_from_cwd(config_projects, cwd)
+
+    if project is None:
+        hint = (
+            "Hint: add a target entry for this directory in your config, "
+            "or use --config to specify the correct config file."
+        )
+        click.echo(f"No managed project found for current directory: {cwd}\n{hint}")
+        ctx.exit(1)
+        return
+
+    if isinstance(project, list):
+        names = ", ".join(p.managed_project_name for p in project)
+        click.echo(f"Ambiguous: multiple projects target {cwd}: {names}")
+        ctx.exit(1)
+        return
+
+    exit_code = RevlinkOperation(
+        source=source,
+        dest_root=project.managed_project_path,
+        dry_run=dry_run,
+        force=force,
+        formatter=RevlinkFormatter(dry_run=dry_run),
+    ).run()
     ctx.exit(exit_code)
 
 

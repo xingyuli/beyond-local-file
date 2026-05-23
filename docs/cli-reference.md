@@ -278,6 +278,96 @@ blf -c custom.yml link check
 blf --config custom.yml link check my-project --extra-exclude --format verbose
 ```
 
+## `revlink` — Adopt an Existing File into Managed Workflow
+
+Convert an existing file or directory in the current working directory into a managed symlink.
+Where `link sync` pushes symlinks from a managed project into target directories, `revlink`
+works in reverse: it copies the path to the managed project, verifies the copy via MD5
+checksum, replaces the original with a symlink, and optionally records the item in
+`.git/info/exclude`.
+
+### Syntax
+
+```bash
+blf revlink [OPTIONS] PATH
+```
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `PATH` | Yes | File or directory in the current working directory to convert |
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--dry-run` | Flag | Off | Preview all actions without modifying the filesystem |
+| `--force` | Flag | Off | Overwrite an existing destination in the managed project |
+
+### Behavior
+
+1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
+2. Identifies the managed project whose target paths include the current working directory.
+3. Validates the source path (must exist, must not already be a symlink).
+4. Copies the source to `<managed_project_path>/<name>`.
+5. Verifies the copy via MD5 checksum; aborts and deletes the copy on mismatch.
+6. Removes the original and creates a symlink pointing to the managed copy.
+7. Adds the item name to `.git/info/exclude` if the current directory is a Git repository.
+
+### Examples
+
+```bash
+# Adopt a file into the managed project
+blf revlink myfile.txt
+
+# Adopt a directory
+blf revlink .kiro/hooks
+
+# Preview without making changes
+blf revlink --dry-run myfile.txt
+
+# Overwrite an existing managed copy
+blf revlink --force myfile.txt
+
+# Use a custom config file
+blf -c ~/my-files/config.yml revlink myfile.txt
+```
+
+### Output
+
+```
+Copying /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
+Computing checksum of /Users/user/project/myfile.txt
+✓ MD5 checksum verified
+✓ Symlink created: /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
+Added 'myfile.txt' to .git/info/exclude
+```
+
+With `--dry-run`:
+
+```
+[dry-run] Copying /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
+[dry-run] Computing checksum of /Users/user/project/myfile.txt
+[dry-run] ✓ MD5 checksum verified
+[dry-run] ✓ Symlink created: /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
+[dry-run] Added 'myfile.txt' to .git/info/exclude
+```
+
+### Error Cases
+
+| Condition | Message |
+|-----------|---------|
+| PATH does not exist | `Error: Path does not exist: <path>` |
+| PATH is already a symlink | `Error: Path is already a symlink: <path>` |
+| Destination exists and `--force` not set | `Error: Destination already exists: <path>` |
+| No managed project targets CWD | `No managed project found for current directory: <cwd>` |
+| Multiple projects target CWD | `Ambiguous: multiple projects target <cwd>: <names>` |
+| MD5 checksum mismatch | `Error: Checksum mismatch — copy may be corrupt. Destination deleted.` |
+| Permission denied removing source | `Error: Permission denied removing <path>` |
+
+---
+
 ## `upgrade` — Self-Upgrade
 
 Upgrade beyond-local-file to the latest version. Automatically detects whether the tool was

@@ -229,6 +229,7 @@ See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order)
 |---------|-------------|
 | `blf link sync [PROJECT]` | Create symlinks or copies in target directories |
 | `blf link check [PROJECT]` | Check link status and Git excludes |
+| `blf revlink PATH` | Adopt an existing file or directory into the managed workflow |
 | `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
 
 ### Progress Tracking

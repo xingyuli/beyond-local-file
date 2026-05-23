@@ -36,6 +36,7 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/operations/base.py",
     "beyond_local_file/operations/link_check.py",
     "beyond_local_file/operations/link_sync.py",
+    "beyond_local_file/operations/revlink.py",
     "beyond_local_file/operations/upgrade.py",
 ]
 

@@ -20,10 +20,11 @@ src/beyond_local_file/
 ├── copy_manager.py              # CopyManager — implements LinkStrategyManager protocol
 ├── sync_state.py                # Copy strategy state tracking
 ├── operations/
-│   ├── __init__.py              # Re-exports CmdOperation, SyncOperation, CheckOperation, run_upgrade
+│   ├── __init__.py              # Re-exports CmdOperation, SyncOperation, CheckOperation, RevlinkOperation, run_upgrade
 │   ├── base.py                  # CmdOperation ABC
 │   ├── link_sync.py             # SyncOperation + LinkSyncFormatter
 │   ├── link_check.py            # CheckOperation + LinkCheckFormatter + table formatters
+│   ├── revlink.py               # RevlinkOperation + ChecksumVerifier + RevlinkFormatter (standalone)
 │   └── upgrade.py               # run_upgrade — install method detection and self-upgrade logic
 └── model/
     ├── config.py                # Config models (YAML structure)
@@ -112,6 +113,10 @@ This design:
 
 ## Adding a New CLI Command
 
+### Standard Pattern (project-iterating commands)
+
+Use this for commands that iterate over all configured projects via `ProjectProcessor`:
+
 1. Create a new module in `src/beyond_local_file/operations/` (e.g., `link_repair.py`).
 2. Define a `CmdOperation` subclass and its formatter(s) in that module.
 3. Re-export the operation class from `operations/__init__.py`.
@@ -120,3 +125,13 @@ This design:
 6. Use protocol methods (`create_links()`, `check_links()`, `add_git_excludes()`, `check_git_excludes()`).
 7. Operations must check git repo status before calling git exclude methods.
 8. All result types come from `link_strategy_protocol.py`.
+
+### Standalone Pattern (single-path commands)
+
+Use this for commands that operate on a single path argument rather than iterating all projects. `revlink` is the canonical example.
+
+- Do **not** extend `CmdOperation` — the `execute_unit(ProcessingUnit)` contract doesn't apply.
+- Define a standalone `@dataclass` operation class with its own `run() -> int` entry point.
+- Resolve the target project via `resolve_project_from_cwd()` in `cli.py` instead of `ProjectProcessor.process_all_units()`.
+- Own the formatter class in the same module as the operation.
+- Register the command directly under `@cli.command()` (top-level), not under a subgroup.

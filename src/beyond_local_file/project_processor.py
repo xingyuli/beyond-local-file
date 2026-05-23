@@ -206,6 +206,45 @@ def _load_and_combine_configs(
         return None
 
 
+def resolve_project_from_cwd(
+    config_projects: dict[str, ConfigProject],
+    cwd: Path,
+) -> ConfigProject | None | list[ConfigProject]:
+    """Resolve the managed project whose target paths include the given directory.
+
+    Iterates all ``ConfigProject`` instances and collects those whose
+    ``Mapping.targets`` contain ``cwd``.  The return type encodes the three
+    possible outcomes:
+
+    - **Exactly one match** — returns the matching ``ConfigProject`` directly.
+    - **No match** — returns ``None``; the caller should emit a descriptive
+      error and exit with a non-zero status code.
+    - **Multiple matches** — returns a ``list[ConfigProject]`` containing every
+      matching project; the caller should report the ambiguity and exit with a
+      non-zero status code.
+
+    Args:
+        config_projects: Dictionary of project key → ``ConfigProject`` as
+            returned by :func:`load_config_projects`.
+        cwd: The current working directory to match against each mapping's
+            target paths.
+
+    Returns:
+        A single ``ConfigProject`` when exactly one project targets ``cwd``,
+        ``None`` when no project targets ``cwd``, or a ``list[ConfigProject]``
+        when two or more projects target ``cwd``.
+    """
+    matches: list[ConfigProject] = [
+        project for project in config_projects.values() for mapping in project.mappings if cwd in mapping.targets
+    ]
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) == 0:
+        return None
+    return matches
+
+
 def _get_absolute_path(path: str) -> str:
     """Resolve a path to its absolute form.
 
