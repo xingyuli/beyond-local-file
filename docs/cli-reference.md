@@ -314,6 +314,7 @@ blf revlink [OPTIONS] PATH
 5. Verifies the copy via MD5 checksum; aborts and deletes the copy on mismatch.
 6. Removes the original and creates a symlink pointing to the managed copy.
 7. Adds the item name to `.git/info/exclude` if the current directory is a Git repository.
+8. If the matched mapping uses selective sync (`subpath` list), appends the item name to that list in the config file so that `link sync` and `link check` will manage it going forward. Mappings that sync everything (no `subpath`) are unaffected.
 
 ### Examples
 

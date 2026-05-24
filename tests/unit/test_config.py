@@ -363,3 +363,234 @@ class TestPathResolution:
 
         assert mapping.targets[0].is_absolute()
         assert mapping.targets[0] == target.resolve()
+
+
+# ---------------------------------------------------------------------------
+# ConfigUpdater
+#
+# The config grammar supports three shapes for a project value:
+#
+#   (A) string mapping   — project-name: /target
+#   (B) dict mapping     — project-name: {target: /target, subpath: [...]}
+#   (C) list of mappings — project-name: [{target: /t1, subpath: [...]}, ...]
+#
+# Within a subpath list, each entry is either:
+#   (1) a plain string   — "filename.txt"
+#   (2) a path-dict      — {path: "filename.txt", copy: true}
+#
+# ConfigUpdater.add_subpath_entry() must handle all combinations.
+# ---------------------------------------------------------------------------
+
+
+def write_raw_config(tmp_path: Path, content: str) -> Path:
+    """Write a raw YAML string to a config file and return its path.
+
+    Used instead of yaml.dump() so that ruamel.yaml round-trip behaviour
+    (comments, indentation) is exercised with realistic input.
+    """
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(content)
+    return config_path
+
+
+class TestConfigUpdaterStringMapping:
+    """Shape (A): project-name: /target — sync-all, no subpath key."""
+
+    def test_string_mapping_returns_false_and_leaves_file_unchanged(self, tmp_path: Path) -> None:
+        """A plain string mapping already syncs everything; no update is needed.
+
+        ConfigUpdater must return False and not modify the file when the
+        project value is a bare target path (no subpath key).
+        """
+        target = tmp_path / "target"
+        content = f"my-project: {target}\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target, "newfile.txt")
+
+        assert changed is False
+        assert config_path.read_text() == content
+
+
+class TestConfigUpdaterDictMapping:
+    """Shape (B): project-name: {target: /target, subpath: [...]}"""
+
+    def test_dict_mapping_with_subpath_list_appends_entry(self, tmp_path: Path) -> None:
+        """A dict mapping with an existing subpath list gets the new entry appended.
+
+        Shape (B) + subpath entries as plain strings (variant 1).
+        ConfigUpdater must return True and write the updated file.
+        """
+        target = tmp_path / "target"
+        content = f"my-project:\n  target: {target}\n  subpath:\n    - existing.txt\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "newfile.txt")
+
+        assert changed is True
+        updated = config_path.read_text()
+        assert "newfile.txt" in updated
+        assert "existing.txt" in updated  # original entry preserved
+
+    def test_dict_mapping_without_subpath_key_returns_false(self, tmp_path: Path) -> None:
+        """A dict mapping with no subpath key syncs everything; no update needed.
+
+        Shape (B) without a subpath key — ConfigUpdater must return False.
+        """
+        target = tmp_path / "target"
+        content = f"my-project:\n  target: {target}\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "newfile.txt")
+
+        assert changed is False
+
+    def test_dict_mapping_does_not_duplicate_plain_string_entry(self, tmp_path: Path) -> None:
+        """Adding an entry that already exists as a plain string is a no-op.
+
+        Shape (B) + variant (1): deduplication against existing plain-string
+        subpath entries.
+        """
+        target = tmp_path / "target"
+        content = f"my-project:\n  target: {target}\n  subpath:\n    - existing.txt\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "existing.txt")
+
+        assert changed is False
+
+    def test_dict_mapping_does_not_duplicate_path_dict_entry(self, tmp_path: Path) -> None:
+        """Adding an entry that already exists as a path-dict is a no-op.
+
+        Shape (B) + variant (2): deduplication against existing path-dict
+        subpath entries (e.g. ``{path: rules.md, copy: true}``).
+        """
+        target = tmp_path / "target"
+        content = (
+            f"my-project:\n"
+            f"  target: {target}\n"
+            f"  subpath:\n"
+            f"    - path: rules.md\n"
+            f"      copy: true\n"
+        )
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "rules.md")
+
+        assert changed is False
+
+
+class TestConfigUpdaterListOfMappings:
+    """Shape (C): project-name: [{target: /t1, subpath: [...]}, {target: /t2}]"""
+
+    def test_list_matching_target_with_subpath_appends_entry(self, tmp_path: Path) -> None:
+        """The matching dict mapping inside a list gets the new entry appended.
+
+        Shape (C): two dict mappings; only the one whose target matches cwd
+        should be updated.
+        """
+        t1 = tmp_path / "target1"
+        t2 = tmp_path / "target2"
+        content = (
+            f"my-project:\n"
+            f"  - target: {t1}\n"
+            f"    subpath:\n"
+            f"      - existing.txt\n"
+            f"  - target: {t2}\n"
+            f"    subpath:\n"
+            f"      - other.txt\n"
+        )
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", t1.resolve(), "newfile.txt")
+
+        assert changed is True
+        updated = config_path.read_text()
+        assert "newfile.txt" in updated
+        assert "other.txt" in updated  # unrelated mapping untouched
+
+    def test_list_non_matching_target_returns_false(self, tmp_path: Path) -> None:
+        """When cwd does not match any target in the list, no update is made.
+
+        Shape (C): cwd points to a directory not referenced by any mapping.
+        """
+        t1 = tmp_path / "target1"
+        unrelated = tmp_path / "unrelated"
+        content = (
+            f"my-project:\n"
+            f"  - target: {t1}\n"
+            f"    subpath:\n"
+            f"      - existing.txt\n"
+        )
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", unrelated.resolve(), "newfile.txt")
+
+        assert changed is False
+
+    def test_list_of_string_mappings_returns_false(self, tmp_path: Path) -> None:
+        """A list of plain string mappings syncs everything; no update needed.
+
+        Shape (C) where all items are bare target paths (no subpath key).
+        ConfigUpdater must return False for the entire list.
+        """
+        t1 = tmp_path / "target1"
+        t2 = tmp_path / "target2"
+        content = f"my-project:\n  - {t1}\n  - {t2}\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", t1.resolve(), "newfile.txt")
+
+        assert changed is False
+
+    def test_list_matching_target_without_subpath_key_returns_false(self, tmp_path: Path) -> None:
+        """A matching dict mapping in a list with no subpath key is a no-op.
+
+        Shape (C): the matching mapping exists but has no subpath key, so it
+        syncs everything and ConfigUpdater must return False.
+        """
+        t1 = tmp_path / "target1"
+        content = f"my-project:\n  - target: {t1}\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("my-project", t1.resolve(), "newfile.txt")
+
+        assert changed is False
+
+
+class TestConfigUpdaterUnknownProject:
+    """add_subpath_entry with a project name not present in the config."""
+
+    def test_unknown_project_returns_false(self, tmp_path: Path) -> None:
+        """Requesting an update for a project that doesn't exist returns False.
+
+        ConfigUpdater must not raise and must not modify the file.
+        """
+        target = tmp_path / "target"
+        content = f"my-project: {target}\n"
+        config_path = write_raw_config(tmp_path, content)
+
+        from beyond_local_file.config import ConfigUpdater
+
+        changed = ConfigUpdater(config_path).add_subpath_entry("does-not-exist", target.resolve(), "newfile.txt")
+
+        assert changed is False
+        assert config_path.read_text() == content

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
 
+from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.git_manager import GitExcludeManager
+from beyond_local_file.model.config import Mapping
 
 # ---------------------------------------------------------------------------
 # ChecksumVerifier
@@ -193,6 +195,43 @@ class RevlinkFormatter:
         """
         self._echo(f"Error: {message}")
 
+    def config_updated(self, entry_name: str) -> None:
+        """Print a confirmation that *entry_name* was added to the config subpath list.
+
+        Args:
+            entry_name: The filename or directory name added to the config.
+        """
+        self._echo(f"Added {entry_name!r} to config subpath list")
+
+
+# ---------------------------------------------------------------------------
+# RevlinkContext
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RevlinkContext:
+    """Config-resolution context needed for the post-symlink config update step.
+
+    Groups the four pieces of information that ``RevlinkOperation`` needs to
+    register the adopted item in the config file when the matched mapping uses
+    selective sync (``subpath`` list).  Pass ``None`` to skip the config
+    update step entirely — useful in tests that do not exercise that path.
+
+    Attributes:
+        config_path: Absolute path to the resolved config file.
+        project_name: The project key as it appears in the config file.
+        matched_mapping: The ``Mapping`` whose targets include the CWD; used
+            to determine whether a config update is needed.
+        cwd: The current working directory; used to locate the correct mapping
+            node when the project has multiple mappings.
+    """
+
+    config_path: Path
+    project_name: str
+    matched_mapping: Mapping
+    cwd: Path
+
 
 # ---------------------------------------------------------------------------
 # RevlinkOperation
@@ -218,6 +257,8 @@ class RevlinkOperation:
         force: When ``True``, overwrite an existing destination in the managed
             project.  MD5 verification still applies.
         formatter: Formatter instance used for all user-facing output.
+        context: Config-resolution context used for the post-symlink config
+            update step.  ``None`` skips the update (useful in tests).
     """
 
     source: Path
@@ -225,6 +266,7 @@ class RevlinkOperation:
     dry_run: bool
     force: bool
     formatter: RevlinkFormatter
+    context: RevlinkContext | None = field(default=None)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -264,6 +306,7 @@ class RevlinkOperation:
                 return result
 
             self._git_exclude()
+            self._update_config()
 
         return 0
 
@@ -284,6 +327,8 @@ class RevlinkOperation:
         self.formatter.checksum_ok()
         self.formatter.symlink_created(self.source, dest)
         self._git_exclude_preview()
+        if self.context is not None and self.context.matched_mapping.subpaths is not None:
+            self.formatter.config_updated(self.source.name)
 
     # ------------------------------------------------------------------
     # Internal steps
@@ -426,6 +471,25 @@ class RevlinkOperation:
 
         self.formatter.symlink_created(self.source, dest)
         return 0
+
+    def _update_config(self) -> None:
+        """Add the source item to the config subpath list if the mapping uses selective sync.
+
+        When the matched mapping has no ``subpath`` list (sync-all), the item
+        is already covered and no update is needed.  When a ``subpath`` list
+        exists, the item must be registered so that ``link sync`` and
+        ``link check`` will manage it going forward.
+
+        This step is non-fatal: failures are silently ignored so that a config
+        write error does not undo the already-completed symlink creation.
+        """
+        if self.context is None or self.context.matched_mapping.subpaths is None:
+            return
+
+        updater = ConfigUpdater(self.context.config_path)
+        changed = updater.add_subpath_entry(self.context.project_name, self.context.cwd, self.source.name)
+        if changed:
+            self.formatter.config_updated(self.source.name)
 
     def _git_exclude_preview(self) -> None:
         """Emit a dry-run preview for the git-exclude step.

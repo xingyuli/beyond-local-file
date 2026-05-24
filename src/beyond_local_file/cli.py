@@ -10,8 +10,9 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
+from .constants import DEFAULT_CONFIG_FILE
 from .operations import CheckOperation, RevlinkOperation, SyncOperation, run_upgrade
-from .operations.revlink import RevlinkFormatter
+from .operations.revlink import RevlinkContext, RevlinkFormatter
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
 from .project_processor import ProjectProcessor, load_config_projects, resolve_project_from_cwd
 
@@ -191,7 +192,7 @@ def revlink(ctx, path, dry_run, force):
         ctx.exit(1)
         return
 
-    config_projects, _ = result
+    config_projects, config_dir = result
     cwd = Path.cwd()
     project = resolve_project_from_cwd(config_projects, cwd)
 
@@ -210,12 +211,27 @@ def revlink(ctx, path, dry_run, force):
         ctx.exit(1)
         return
 
+    # Find the specific mapping whose targets include CWD — needed for config update
+    matched_mapping = next((m for m in project.mappings if cwd in m.targets), None)
+
+    # Resolve config file path: explicit --config wins; otherwise reconstruct
+    # from config_dir using the default filename.
+    config_path = Path(config).resolve() if config else config_dir / DEFAULT_CONFIG_FILE
+
+    ctx_obj = RevlinkContext(
+        config_path=config_path,
+        project_name=project.managed_project_name,
+        matched_mapping=matched_mapping,
+        cwd=cwd,
+    ) if matched_mapping is not None else None
+
     exit_code = RevlinkOperation(
         source=source,
         dest_root=project.managed_project_path,
         dry_run=dry_run,
         force=force,
         formatter=RevlinkFormatter(dry_run=dry_run),
+        context=ctx_obj,
     ).run()
     ctx.exit(exit_code)
 

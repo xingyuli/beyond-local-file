@@ -463,3 +463,178 @@ class TestRevlinkConfigResolution:
         assert result.exit_code == 0, result.output
         assert source_file.is_symlink()
         assert (managed_dir / "readme.txt").read_text() == "readme content"
+
+
+# ---------------------------------------------------------------------------
+# Config subpath update
+# ---------------------------------------------------------------------------
+
+
+class TestRevlinkConfigUpdate:
+    """Integration tests for automatic config subpath update.
+
+    When the matched mapping uses selective sync (subpath list), revlink must
+    add the adopted item to that list so link sync and link check will manage
+    it going forward.
+    """
+
+    def _write_subpath_config(
+        self, config_path: Path, project_name: str, target_dir: Path, subpaths: list[str]
+    ) -> None:
+        """Write a config with a dict-mapping that has a subpath list.
+
+        Args:
+            config_path: Destination path for the YAML config file.
+            project_name: The project name key.
+            target_dir: The target directory path to map to.
+            subpaths: Initial list of subpath entries.
+        """
+        subpath_yaml = "\n".join(f"    - {s}" for s in subpaths)
+        config_path.write_text(
+            f"{project_name}:\n"
+            f"  target: {target_dir}\n"
+            f"  subpath:\n"
+            f"{subpath_yaml}\n"
+        )
+
+    def test_subpath_entry_added_when_mapping_has_subpath_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """revlink adds the adopted item to the config subpath list.
+
+        When the matched mapping already has a subpath list, the new item must
+        be appended so that link sync will manage it.
+        """
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        self._write_subpath_config(config_path, "my-project", target_dir, [".kiro/hooks"])
+
+        source_file = target_dir / "newfile.txt"
+        source_file.write_text("content")
+
+        monkeypatch.chdir(target_dir)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "newfile.txt"],
+            env=isolated_home,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert source_file.is_symlink()
+
+        # Config must now contain the new entry
+        updated = config_path.read_text()
+        assert "newfile.txt" in updated
+
+    def test_no_config_update_when_mapping_has_no_subpath(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """revlink does not modify the config when the mapping syncs everything.
+
+        A string mapping (no subpath) already covers all items — no update needed.
+        """
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        _write_config(config_path, "my-project", target_dir)
+        original_content = config_path.read_text()
+
+        source_file = target_dir / "newfile.txt"
+        source_file.write_text("content")
+
+        monkeypatch.chdir(target_dir)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "newfile.txt"],
+            env=isolated_home,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert config_path.read_text() == original_content, "config must not be modified for sync-all mapping"
+
+    def test_subpath_entry_not_duplicated_when_already_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """revlink does not duplicate a subpath entry that already exists.
+
+        If the item is already in the subpath list (e.g. from a previous run
+        with --force), the config must remain unchanged.
+        """
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        self._write_subpath_config(config_path, "my-project", target_dir, [".kiro/hooks", "newfile.txt"])
+        original_content = config_path.read_text()
+
+        source_file = target_dir / "newfile.txt"
+        source_file.write_text("content")
+
+        monkeypatch.chdir(target_dir)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "newfile.txt"],
+            env=isolated_home,
+        )
+
+        assert result.exit_code == 0, result.output
+        # Entry count must not increase
+        updated = config_path.read_text()
+        assert updated.count("newfile.txt") == original_content.count("newfile.txt")
+
+    def test_comments_and_blank_lines_preserved_after_update(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """Comments and blank lines in the config file survive a subpath update."""
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            f"# Shared dev configs\n"
+            f"my-project:\n"
+            f"  target: {target_dir}\n"
+            f"  subpath:\n"
+            f"    - .kiro/hooks  # AI hooks\n"
+            f"\n"
+            f"    - .vscode\n"
+        )
+
+        source_file = target_dir / "newfile.txt"
+        source_file.write_text("content")
+
+        monkeypatch.chdir(target_dir)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "newfile.txt"],
+            env=isolated_home,
+        )
+
+        assert result.exit_code == 0, result.output
+        updated = config_path.read_text()
+        assert "# Shared dev configs" in updated, "top-level comment must be preserved"
+        assert "# AI hooks" in updated, "inline comment must be preserved"
+        assert "newfile.txt" in updated, "new entry must be present"
