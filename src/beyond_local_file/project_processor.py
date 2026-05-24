@@ -6,6 +6,7 @@ Operation logic lives in the ``operations`` package — one module per subcomman
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -17,6 +18,21 @@ from .constants import DEFAULT_CONFIG_FILE
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_processing
 from .operations import CmdOperation
+
+
+@dataclass(frozen=True)
+class ConfigLoadResult:
+    """Result of a successful :func:`load_config_projects` call.
+
+    Attributes:
+        projects: Mapping of project key to :class:`~beyond_local_file.model.config.ConfigProject`.
+        config_file: Resolved path to the config file that was loaded.
+            Use ``.parent`` when a directory path is needed (e.g. for
+            :class:`~beyond_local_file.operations.SyncOperation`).
+    """
+
+    projects: dict[str, ConfigProject]
+    config_file: Path
 
 
 class ProjectProcessor:
@@ -64,9 +80,7 @@ class ProjectProcessor:
         return True
 
 
-def load_config_projects(
-    config: str | None, project_name: str | None = None
-) -> tuple[dict[str, ConfigProject], Path] | None:
+def load_config_projects(config: str | None, project_name: str | None = None) -> ConfigLoadResult | None:
     """Load configuration using new model structure with .blfrc support.
 
     Config resolution order:
@@ -81,8 +95,7 @@ def load_config_projects(
             returns configuration for that project.
 
     Returns:
-        Tuple of (ConfigProject dict, config directory path).
-        Returns None if loading failed.
+        A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
     """
     # 1. Explicit --config flag
     if config is not None:
@@ -106,7 +119,7 @@ def load_config_projects(
 
 def _load_config_from_path(
     config: str, project_name: str | None, *, show_hint: bool = False
-) -> tuple[dict[str, ConfigProject], Path] | None:
+) -> ConfigLoadResult | None:
     """Resolve a config path string, check existence, and load it.
 
     Args:
@@ -117,8 +130,8 @@ def _load_config_from_path(
             users know how to specify a config explicitly.
 
     Returns:
-        Tuple of (ConfigProject dict, config directory path).
-        Returns None if the file does not exist or loading failed.
+        A :class:`ConfigLoadResult` on success, or ``None`` if the file does
+        not exist or loading failed.
     """
     config_path = Path(_get_absolute_path(config))
     if not config_path.exists():
@@ -130,9 +143,7 @@ def _load_config_from_path(
     return _load_single_config(config_path, project_name)
 
 
-def _load_single_config(
-    config_path: Path | str, project_name: str | None
-) -> tuple[dict[str, ConfigProject], Path] | None:
+def _load_single_config(config_path: Path | str, project_name: str | None) -> ConfigLoadResult | None:
     """Load a single config file.
 
     Args:
@@ -140,23 +151,19 @@ def _load_single_config(
         project_name: Optional project name to filter.
 
     Returns:
-        Tuple of (ConfigProject dict, config directory path).
-        Returns None if loading failed.
+        A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
     """
     try:
         cfg = Config(Path(config_path))
         cfg.load()
         projects = cfg.get_config_projects(project_name)
-        config_dir = Path(config_path).parent
-        return projects, config_dir
+        return ConfigLoadResult(projects=projects, config_file=Path(config_path))
     except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(str(e))
         return None
 
 
-def _load_and_combine_configs(
-    config_paths: list[Path], project_name: str | None
-) -> tuple[dict[str, ConfigProject], Path] | None:
+def _load_and_combine_configs(config_paths: list[Path], project_name: str | None) -> ConfigLoadResult | None:
     """Load and combine multiple config files with conflict detection.
 
     Each config file's project names are resolved relative to that config
@@ -168,8 +175,8 @@ def _load_and_combine_configs(
         project_name: Optional project name to filter.
 
     Returns:
-        Tuple of (ConfigProject dict, first config directory path).
-        Returns None if loading failed.
+        A :class:`ConfigLoadResult` whose ``config_file`` is the first path in
+        ``config_paths``, or ``None`` if loading failed.
     """
     try:
         combined_projects: dict[str, ConfigProject] = {}
@@ -199,8 +206,7 @@ def _load_and_combine_configs(
                 return None
             combined_projects = matches
 
-        config_dir = config_paths[0].parent
-        return combined_projects, config_dir
+        return ConfigLoadResult(projects=combined_projects, config_file=config_paths[0])
     except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(f"Error: {e}")
         return None

@@ -10,7 +10,6 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
-from .constants import DEFAULT_CONFIG_FILE
 from .operations import CheckOperation, RevlinkOperation, SyncOperation, run_upgrade
 from .operations.revlink import RevlinkContext, RevlinkFormatter
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
@@ -124,9 +123,8 @@ def sync(ctx, project_name):
     if result is None:
         ctx.exit(1)
 
-    config_projects, config_dir = result
-    operation = SyncOperation(config_dir, ask_user_for_action, ask_user_for_conflict)
-    ProjectProcessor.process_all_units(config_projects, operation)
+    operation = SyncOperation(result.config_file.parent, ask_user_for_action, ask_user_for_conflict)
+    ProjectProcessor.process_all_units(result.projects, operation)
 
 
 @link.command()
@@ -152,9 +150,8 @@ def check(ctx, project_name, extra_exclude, output_format):
     if result is None:
         ctx.exit(1)
 
-    config_projects, config_dir = result
-    operation = CheckOperation(config_dir, extra_exclude, OutputFormat(output_format))
-    ProjectProcessor.process_all_units(config_projects, operation)
+    operation = CheckOperation(result.config_file.parent, extra_exclude, OutputFormat(output_format))
+    ProjectProcessor.process_all_units(result.projects, operation)
     operation.render()
 
 
@@ -192,9 +189,8 @@ def revlink(ctx, path, dry_run, force):
         ctx.exit(1)
         return
 
-    config_projects, config_dir = result
     cwd = Path.cwd()
-    project = resolve_project_from_cwd(config_projects, cwd)
+    project = resolve_project_from_cwd(result.projects, cwd)
 
     if project is None:
         hint = (
@@ -214,16 +210,16 @@ def revlink(ctx, path, dry_run, force):
     # Find the specific mapping whose targets include CWD — needed for config update
     matched_mapping = next((m for m in project.mappings if cwd in m.targets), None)
 
-    # Resolve config file path: explicit --config wins; otherwise reconstruct
-    # from config_dir using the default filename.
-    config_path = Path(config).resolve() if config else config_dir / DEFAULT_CONFIG_FILE
-
-    ctx_obj = RevlinkContext(
-        config_path=config_path,
-        project_name=project.managed_project_name,
-        matched_mapping=matched_mapping,
-        cwd=cwd,
-    ) if matched_mapping is not None else None
+    ctx_obj = (
+        RevlinkContext(
+            config_path=result.config_file,
+            project_name=project.managed_project_name,
+            matched_mapping=matched_mapping,
+            cwd=cwd,
+        )
+        if matched_mapping is not None
+        else None
+    )
 
     exit_code = RevlinkOperation(
         source=source,
