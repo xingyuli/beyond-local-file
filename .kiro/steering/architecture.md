@@ -20,11 +20,11 @@ src/beyond_local_file/
 ├── copy_manager.py              # CopyManager — implements LinkStrategyManager protocol
 ├── sync_state.py                # Copy strategy state tracking
 ├── operations/
-│   ├── __init__.py              # Re-exports CmdOperation, SyncOperation, CheckOperation, RevlinkOperation, run_upgrade
+│   ├── __init__.py              # Re-exports CmdOperation, SyncOperation, CheckOperation, CreateOperation, RestoreOperation, run_upgrade
 │   ├── base.py                  # CmdOperation ABC
 │   ├── link_sync.py             # SyncOperation + LinkSyncFormatter
 │   ├── link_check.py            # CheckOperation + LinkCheckFormatter + table formatters
-│   ├── revlink.py               # RevlinkOperation + ChecksumVerifier + RevlinkFormatter (standalone)
+│   ├── revlink.py               # CreateOperation + RestoreOperation + ChecksumVerifier + CreateFormatter + RestoreFormatter (standalone)
 │   └── upgrade.py               # run_upgrade — install method detection and self-upgrade logic
 └── model/
     ├── config.py                # Config models (YAML structure)
@@ -134,4 +134,33 @@ Use this for commands that operate on a single path argument rather than iterati
 - Define a standalone `@dataclass` operation class with its own `run() -> int` entry point.
 - Resolve the target project via `resolve_project_from_cwd()` in `cli.py` instead of `ProjectProcessor.process_all_units()`.
 - Own the formatter class in the same module as the operation.
-- Register the command directly under `@cli.command()` (top-level), not under a subgroup.
+- Register the command group under `@cli.group()` (top-level), with subcommands registered under that group.
+
+**`revlink` as a subcommand group example:**
+
+```python
+@cli.group()
+def revlink():
+    """Manage the lifecycle of files adopted into the managed project."""
+
+@revlink.command("create")
+@click.argument("path")
+@click.option("--dry-run", is_flag=True, ...)
+@click.option("--force", is_flag=True, ...)
+@click.pass_context
+def revlink_create(ctx, path, dry_run, force):
+    """..."""
+    exit_code = CreateOperation(...).run()
+    ctx.exit(exit_code)
+
+@revlink.command("restore")
+@click.argument("path")
+@click.option("--dry-run", is_flag=True, ...)
+@click.pass_context
+def revlink_restore(ctx, path, dry_run):
+    """..."""
+    exit_code = RestoreOperation(...).run()
+    ctx.exit(exit_code)
+```
+
+**Path resolution note:** `revlink restore` uses `(cwd / path).absolute()` instead of `Path(path).resolve()` so that symlinks are not followed — the source must be the symlink path itself, not the managed copy it points to. `revlink create` uses `Path(path).resolve()` because the source is a real file and following symlinks is not a concern.

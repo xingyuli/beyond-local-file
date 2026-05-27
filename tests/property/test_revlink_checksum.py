@@ -98,6 +98,7 @@ def test_checksum_verifier_is_deterministic(
         f"ChecksumVerifier.compute returned different digests on consecutive calls: {first!r} != {second!r}"
     )
 
+
 # ---------------------------------------------------------------------------
 # Property 5: Checksum verifier produces matching digests for identical content
 # ---------------------------------------------------------------------------

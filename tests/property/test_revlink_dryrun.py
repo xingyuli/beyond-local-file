@@ -1,6 +1,6 @@
-"""Property-based tests for RevlinkOperation dry-run filesystem invariant.
+"""Property-based tests for CreateOperation dry-run filesystem invariant.
 
-This module verifies that invoking ``RevlinkOperation`` with ``dry_run=True``
+This module verifies that invoking ``CreateOperation`` with ``dry_run=True``
 never modifies the filesystem, regardless of the source path or its contents.
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from beyond_local_file.operations.revlink import RevlinkFormatter, RevlinkOperation
+from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -85,7 +85,7 @@ def test_dryrun_does_not_modify_filesystem_with_existing_source(
     **Validates: Requirements 3.4, 6.4**
 
     For any valid source file in ``tmp_path/target/`` and any ``dest_root``
-    in ``tmp_path/managed/``, invoking ``RevlinkOperation`` with
+    in ``tmp_path/managed/``, invoking ``CreateOperation`` with
     ``dry_run=True`` must leave the entire ``tmp_path`` tree in exactly the
     same state as before the call — no files created, moved, or deleted.
 
@@ -109,12 +109,12 @@ def test_dryrun_does_not_modify_filesystem_with_existing_source(
 
         before = _snapshot(tmp_path)
 
-        RevlinkOperation(
+        CreateOperation(
             source=source,
             dest_root=managed_dir,
             dry_run=True,
             force=False,
-            formatter=RevlinkFormatter(dry_run=True),
+            formatter=CreateFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)
@@ -142,7 +142,7 @@ def test_dryrun_does_not_modify_filesystem_with_nonexistent_source(
     **Validates: Requirements 3.4, 6.4**
 
     Even when validation fails (source path does not exist), invoking
-    ``RevlinkOperation`` with ``dry_run=True`` must not modify the filesystem.
+    ``CreateOperation`` with ``dry_run=True`` must not modify the filesystem.
     This exercises the validation-failure path of the dry-run invariant.
 
     A fresh ``tempfile.TemporaryDirectory`` is used inside the test body so
@@ -166,12 +166,12 @@ def test_dryrun_does_not_modify_filesystem_with_nonexistent_source(
 
         before = _snapshot(tmp_path)
 
-        RevlinkOperation(
+        CreateOperation(
             source=source,
             dest_root=managed_dir,
             dry_run=True,
             force=False,
-            formatter=RevlinkFormatter(dry_run=True),
+            formatter=CreateFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)

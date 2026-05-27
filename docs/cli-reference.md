@@ -278,10 +278,26 @@ blf -c custom.yml link check
 blf --config custom.yml link check my-project --extra-exclude --format verbose
 ```
 
-## `revlink` — Adopt an Existing File into Managed Workflow
+## `revlink` — Manage Files Adopted into the Managed Workflow
+
+`revlink` is a subcommand group with two operations: `create` adopts an existing file or
+directory into the managed project, and `restore` is the exact inverse — it dissolves the
+managed symlink and recovers the real file.
+
+```bash
+blf revlink SUBCOMMAND [OPTIONS] PATH
+```
+
+**Subcommands:**
+- `create` — Convert a real file or directory into a managed symlink
+- `restore` — Dissolve a managed symlink and recover the real file
+
+---
+
+## `revlink create` — Adopt a File into the Managed Workflow
 
 Convert an existing file or directory in the current working directory into a managed symlink.
-Where `link sync` pushes symlinks from a managed project into target directories, `revlink`
+Where `link sync` pushes symlinks from a managed project into target directories, `revlink create`
 works in reverse: it copies the path to the managed project, verifies the copy via MD5
 checksum, replaces the original with a symlink, and optionally records the item in
 `.git/info/exclude`.
@@ -289,7 +305,7 @@ checksum, replaces the original with a symlink, and optionally records the item 
 ### Syntax
 
 ```bash
-blf revlink [OPTIONS] PATH
+blf revlink create [OPTIONS] PATH
 ```
 
 ### Arguments
@@ -320,19 +336,19 @@ blf revlink [OPTIONS] PATH
 
 ```bash
 # Adopt a file into the managed project
-blf revlink myfile.txt
+blf revlink create myfile.txt
 
 # Adopt a directory
-blf revlink .kiro/hooks
+blf revlink create .kiro/hooks
 
 # Preview without making changes
-blf revlink --dry-run myfile.txt
+blf revlink create --dry-run myfile.txt
 
 # Overwrite an existing managed copy
-blf revlink --force myfile.txt
+blf revlink create --force myfile.txt
 
 # Use a custom config file
-blf -c ~/my-files/config.yml revlink myfile.txt
+blf -c ~/my-files/config.yml revlink create myfile.txt
 ```
 
 ### Output
@@ -366,6 +382,94 @@ With `--dry-run`:
 | Multiple projects target CWD | `Ambiguous: multiple projects target <cwd>: <names>` |
 | MD5 checksum mismatch | `Error: Checksum mismatch — copy may be corrupt. Destination deleted.` |
 | Permission denied removing source | `Error: Permission denied removing <path>` |
+
+---
+
+## `revlink restore` — Dissolve a Managed Symlink
+
+The exact inverse of `revlink create`. Given a path in the current working directory that is
+a symlink pointing to the managed project, `revlink restore` copies the managed file back,
+verifies integrity via MD5 checksum, deletes the managed copy, and removes the item from
+`.git/info/exclude` and the config subpath list.
+
+### Syntax
+
+```bash
+blf revlink restore [OPTIONS] PATH
+```
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `PATH` | Yes | Symlink in the current working directory to dissolve |
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--dry-run` | Flag | Off | Preview all actions without modifying the filesystem |
+
+### Behavior
+
+1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
+2. Identifies the managed project whose target paths include the current working directory.
+3. Validates the path (must exist, must be a symlink, symlink target must exist).
+4. Removes the symlink and copies the managed copy back to the original path.
+5. Verifies the copy via MD5 checksum; aborts and deletes the restored copy on mismatch.
+6. Deletes the managed copy (non-fatal if this fails — a warning is printed and the restore is still considered successful).
+7. Removes the item name from `.git/info/exclude` if the current directory is a Git repository.
+8. If the matched mapping uses selective sync (`subpath` list), removes the item name from that list in the config file.
+
+### Examples
+
+```bash
+# Restore a file from the managed project
+blf revlink restore myfile.txt
+
+# Restore a directory
+blf revlink restore .kiro/hooks
+
+# Preview without making changes
+blf revlink restore --dry-run myfile.txt
+
+# Use a custom config file
+blf -c ~/my-files/config.yml revlink restore myfile.txt
+```
+
+### Output
+
+```
+Removing symlink at /Users/user/project/myfile.txt
+Copying /Users/user/my-files/project/myfile.txt -> /Users/user/project/myfile.txt
+Computing checksum of /Users/user/my-files/project/myfile.txt
+✓ MD5 checksum verified
+✓ Managed copy deleted: /Users/user/my-files/project/myfile.txt
+Removed 'myfile.txt' from .git/info/exclude
+Removed 'myfile.txt' from config subpath list
+```
+
+With `--dry-run`:
+
+```
+[dry-run] Removing symlink at /Users/user/project/myfile.txt
+[dry-run] Copying /Users/user/my-files/project/myfile.txt -> /Users/user/project/myfile.txt
+[dry-run] Computing checksum of /Users/user/my-files/project/myfile.txt
+[dry-run] ✓ MD5 checksum verified
+[dry-run] ✓ Managed copy deleted: /Users/user/my-files/project/myfile.txt
+```
+
+### Error Cases
+
+| Condition | Message |
+|-----------|---------|
+| PATH does not exist | `Error: Path does not exist: <path>` |
+| PATH is not a symlink | `Error: Path is not a symlink: <path>\nUse 'revlink create' to adopt a real file.` |
+| Symlink target (managed copy) missing | `Error: Dangling symlink: managed copy does not exist at <managed>` |
+| Permission denied removing symlink | `Error: Permission denied removing symlink at <path>` |
+| MD5 checksum mismatch | `Error: Checksum mismatch — restored copy deleted. Managed copy preserved.` |
+| No managed project targets CWD | `No managed project found for current directory: <cwd>` |
+| Multiple projects target CWD | `Ambiguous: multiple projects target <cwd>: <names>` |
 
 ---
 

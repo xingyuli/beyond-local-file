@@ -1,14 +1,14 @@
-"""Unit tests for RevlinkOperation git exclude integration and RevlinkFormatter output.
+"""Unit tests for CreateOperation git exclude integration and CreateFormatter output.
 
 Covers task 7.3:
 - Git exclude integration: entry added, skipped when not in git repo, idempotent
-- RevlinkFormatter: each method produces the expected string, with and without [dry-run]
+- CreateFormatter: each method produces the expected string, with and without [dry-run]
 """
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from beyond_local_file.operations.revlink import RevlinkFormatter, RevlinkOperation
+from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,8 +34,8 @@ def _make_operation(
     *,
     dry_run: bool = False,
     force: bool = False,
-) -> tuple[RevlinkOperation, MagicMock]:
-    """Build a RevlinkOperation with a mock formatter.
+) -> tuple[CreateOperation, MagicMock]:
+    """Build a CreateOperation with a mock formatter.
 
     Args:
         source: Source path for the operation.
@@ -44,10 +44,10 @@ def _make_operation(
         force: Whether to enable force mode.
 
     Returns:
-        Tuple of (RevlinkOperation, mock formatter).
+        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=RevlinkFormatter)
-    op = RevlinkOperation(
+    formatter = MagicMock(spec=CreateFormatter)
+    op = CreateOperation(
         source=source,
         dest_root=dest_root,
         dry_run=dry_run,
@@ -63,7 +63,7 @@ def _make_operation(
 
 
 class TestGitExcludeIntegration:
-    """Tests for RevlinkOperation._git_exclude() behaviour."""
+    """Tests for CreateOperation._git_exclude() behaviour."""
 
     def test_entry_added_when_in_git_repo(self, tmp_path: Path) -> None:
         """Entry is written to .git/info/exclude when source is inside a git repo.
@@ -143,16 +143,16 @@ class TestGitExcludeIntegration:
 
 
 # ---------------------------------------------------------------------------
-# RevlinkFormatter tests (Requirements 7.1-7.7)
+# CreateFormatter tests (Requirements 7.1-7.7)
 # ---------------------------------------------------------------------------
 
 
-class TestRevlinkFormatterNoDryRun:
-    """Tests for RevlinkFormatter with dry_run=False."""
+class TestCreateFormatterNoDryRun:
+    """Tests for CreateFormatter with dry_run=False."""
 
     def setup_method(self) -> None:
         """Create a formatter with dry_run=False for each test."""
-        self.formatter = RevlinkFormatter(dry_run=False)
+        self.formatter = CreateFormatter(dry_run=False)
 
     def test_computing_checksum(self) -> None:
         """computing_checksum emits the expected message without prefix.
@@ -227,15 +227,15 @@ class TestRevlinkFormatterNoDryRun:
         mock_echo.assert_called_once_with("Error: some error")
 
 
-class TestRevlinkFormatterDryRun:
-    """Tests for RevlinkFormatter with dry_run=True — all output prefixed with [dry-run].
+class TestCreateFormatterDryRun:
+    """Tests for CreateFormatter with dry_run=True — all output prefixed with [dry-run].
 
     Requirements: 7.6
     """
 
     def setup_method(self) -> None:
         """Create a formatter with dry_run=True for each test."""
-        self.formatter = RevlinkFormatter(dry_run=True)
+        self.formatter = CreateFormatter(dry_run=True)
 
     def test_computing_checksum_dry_run(self) -> None:
         """computing_checksum emits [dry-run] prefix when dry_run=True.

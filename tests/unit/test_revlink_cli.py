@@ -70,13 +70,13 @@ def test_revlink_not_under_link_group() -> None:
 def test_revlink_help_shows_path_argument() -> None:
     """Test that --help displays the PATH positional argument.
 
-    Requirement 1.2: THE Revlink_Command SHALL accept exactly one required
+    Requirement 1.2: THE Create_Command SHALL accept exactly one required
     positional argument: the path of the file or directory to convert.
-    Requirement 1.6: WHEN blf revlink --help is invoked, the command SHALL
+    Requirement 1.6: WHEN blf revlink create --help is invoked, the command SHALL
     display the path argument and all supported options.
     """
     runner = CliRunner()
-    result = runner.invoke(cli, ["revlink", "--help"])
+    result = runner.invoke(cli, ["revlink", "create", "--help"])
     assert result.exit_code == 0
     assert "PATH" in result.output
 
@@ -84,11 +84,11 @@ def test_revlink_help_shows_path_argument() -> None:
 def test_revlink_help_shows_dry_run_option() -> None:
     """Test that --help displays the --dry-run flag.
 
-    Requirement 1.3: THE Revlink_Command SHALL accept a --dry-run flag.
+    Requirement 1.3: THE Create_Command SHALL accept a --dry-run flag.
     Requirement 1.6: --help SHALL display all supported options.
     """
     runner = CliRunner()
-    result = runner.invoke(cli, ["revlink", "--help"])
+    result = runner.invoke(cli, ["revlink", "create", "--help"])
     assert result.exit_code == 0
     assert "--dry-run" in result.output
 
@@ -96,11 +96,11 @@ def test_revlink_help_shows_dry_run_option() -> None:
 def test_revlink_help_shows_force_option() -> None:
     """Test that --help displays the --force flag.
 
-    Requirement 1.4: THE Revlink_Command SHALL accept a --force flag.
+    Requirement 1.4: THE Create_Command SHALL accept a --force flag.
     Requirement 1.6: --help SHALL display all supported options.
     """
     runner = CliRunner()
-    result = runner.invoke(cli, ["revlink", "--help"])
+    result = runner.invoke(cli, ["revlink", "create", "--help"])
     assert result.exit_code == 0
     assert "--force" in result.output
 
@@ -108,11 +108,11 @@ def test_revlink_help_shows_force_option() -> None:
 def test_revlink_help_shows_description() -> None:
     """Test that --help shows a concise description of the command.
 
-    Requirement 1.6: WHEN blf revlink --help is invoked, THE Revlink_Command
+    Requirement 1.6: WHEN blf revlink create --help is invoked, THE Create_Command
     SHALL display a concise description.
     """
     runner = CliRunner()
-    result = runner.invoke(cli, ["revlink", "--help"])
+    result = runner.invoke(cli, ["revlink", "create", "--help"])
     assert result.exit_code == 0
     # The docstring mentions converting to a managed symlink
     assert "symlink" in result.output.lower() or "managed" in result.output.lower()
@@ -150,7 +150,7 @@ def test_revlink_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
         mock_resolve.return_value = project
 
         nonexistent = target_dir / "does_not_exist.txt"
-        result = runner.invoke(cli, ["revlink", str(nonexistent)])
+        result = runner.invoke(cli, ["revlink", "create", str(nonexistent)])
 
     assert result.exit_code == 1
     assert "Path does not exist" in result.output
@@ -169,7 +169,7 @@ def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
     is already a symlink and exit with a non-zero status code.
 
     The CLI resolves the path via ``Path(path).resolve()`` before passing it to
-    ``RevlinkOperation``.  To ensure the resolved path is still seen as a
+    ``CreateOperation``.  To ensure the resolved path is still seen as a
     symlink, we patch ``Path.resolve`` to return the symlink path itself
     (without following it).
     """
@@ -206,7 +206,7 @@ def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
         )
         mock_resolve.return_value = project
 
-        result = runner.invoke(cli, ["revlink", str(symlink_path)])
+        result = runner.invoke(cli, ["revlink", "create", str(symlink_path)])
 
     assert result.exit_code == 1
     assert "already a symlink" in result.output
@@ -251,7 +251,7 @@ def test_revlink_dest_exists_without_force_exits_with_error(tmp_path: Path) -> N
         )
         mock_resolve.return_value = project
 
-        result = runner.invoke(cli, ["revlink", str(source_file)])
+        result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
     assert result.exit_code == 1
     assert "Destination already exists" in result.output
@@ -295,7 +295,7 @@ def test_revlink_force_allows_overwrite_when_dest_exists(tmp_path: Path) -> None
         )
         mock_resolve.return_value = project
 
-        result = runner.invoke(cli, ["revlink", "--force", str(source_file)])
+        result = runner.invoke(cli, ["revlink", "create", "--force", str(source_file)])
 
     # With --force the validation passes; operation proceeds past pre-flight.
     # The "Destination already exists" error must NOT appear.
@@ -337,7 +337,7 @@ def test_revlink_dry_run_does_not_modify_filesystem(tmp_path: Path) -> None:
         )
         mock_resolve.return_value = project
 
-        result = runner.invoke(cli, ["revlink", "--dry-run", str(source_file)])
+        result = runner.invoke(cli, ["revlink", "create", "--dry-run", str(source_file)])
 
     assert result.exit_code == 0
     # Source must still be a regular file (not a symlink)
@@ -374,7 +374,7 @@ def test_revlink_dry_run_prints_preview_output(tmp_path: Path) -> None:
         )
         mock_resolve.return_value = project
 
-        result = runner.invoke(cli, ["revlink", "--dry-run", str(source_file)])
+        result = runner.invoke(cli, ["revlink", "create", "--dry-run", str(source_file)])
 
     assert result.exit_code == 0
     # Every output line must carry the [dry-run] prefix
@@ -413,7 +413,7 @@ def test_revlink_no_matching_project_exits_with_error(tmp_path: Path) -> None:
         mock_load.return_value = ConfigLoadResult(projects={}, config_file=tmp_path / "config.yml")
         mock_resolve.return_value = None  # no match
 
-        result = runner.invoke(cli, ["revlink", str(source_file)])
+        result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
     assert result.exit_code == 1
     assert "No managed project found" in result.output
@@ -455,7 +455,7 @@ def test_revlink_ambiguous_project_exits_with_error(tmp_path: Path) -> None:
         )
         mock_resolve.return_value = [project_a, project_b]  # ambiguous
 
-        result = runner.invoke(cli, ["revlink", str(source_file)])
+        result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
     assert result.exit_code == 1
     assert "Ambiguous" in result.output

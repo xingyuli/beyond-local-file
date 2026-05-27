@@ -10,10 +10,19 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
-from .operations import CheckOperation, RevlinkOperation, SyncOperation, run_upgrade
-from .operations.revlink import RevlinkContext, RevlinkFormatter
+from .operations import (
+    CheckOperation,
+    CreateOperation,
+    SyncOperation,
+    run_upgrade,
+)
+from .operations.revlink import CreateFormatter, RestoreFormatter, RestoreOperation, RevlinkContext
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
-from .project_processor import ProjectProcessor, load_config_projects, resolve_project_from_cwd
+from .project_processor import (
+    ProjectProcessor,
+    load_config_projects,
+    resolve_project_from_cwd,
+)
 
 
 def ask_user_for_action(target_path: str, expected_source: str | None = None) -> ConflictResolution:
@@ -169,12 +178,18 @@ def upgrade(ctx, dry_run):
     ctx.exit(exit_code)
 
 
-@cli.command()
+@cli.group()
+def revlink():
+    """Manage the lifecycle of files adopted into the managed project."""
+    pass
+
+
+@revlink.command("create")
 @click.argument("path")
 @click.option("--dry-run", is_flag=True, help="Preview actions without modifying the filesystem.")
 @click.option("--force", is_flag=True, help="Overwrite existing destination in managed project.")
 @click.pass_context
-def revlink(ctx, path, dry_run, force):
+def revlink_create(ctx, path, dry_run, force):
     """Convert an existing file or directory into a managed symlink.
 
     Copies PATH to the managed project, verifies the copy via MD5 checksum,
@@ -221,12 +236,75 @@ def revlink(ctx, path, dry_run, force):
         else None
     )
 
-    exit_code = RevlinkOperation(
+    exit_code = CreateOperation(
         source=source,
         dest_root=project.managed_project_path,
         dry_run=dry_run,
         force=force,
-        formatter=RevlinkFormatter(dry_run=dry_run),
+        formatter=CreateFormatter(dry_run=dry_run),
+        context=ctx_obj,
+    ).run()
+    ctx.exit(exit_code)
+
+
+@revlink.command("restore")
+@click.argument("path")
+@click.option("--dry-run", is_flag=True, help="Preview actions without modifying the filesystem.")
+@click.pass_context
+def revlink_restore(ctx, path, dry_run):
+    """Dissolve a managed symlink and recover the real file from the managed project.
+
+    Copies the managed copy back to PATH, verifies integrity via MD5 checksum,
+    deletes the managed copy, removes the item from .git/info/exclude, and
+    removes the entry from the config subpath list if selective sync is active.
+    """
+    config = ctx.obj["config"]
+
+    result = load_config_projects(config)
+    if result is None:
+        ctx.exit(1)
+        return
+
+    cwd = Path.cwd()
+    # Use absolute() instead of resolve() so that symlinks are not followed —
+    # the source must be the symlink path itself, not the managed copy it points to.
+    source = (cwd / path).absolute()
+    project = resolve_project_from_cwd(result.projects, cwd)
+
+    if project is None:
+        hint = (
+            "Hint: add a target entry for this directory in your config, "
+            "or use --config to specify the correct config file."
+        )
+        click.echo(f"No managed project found for current directory: {cwd}\n{hint}")
+        ctx.exit(1)
+        return
+
+    if isinstance(project, list):
+        names = ", ".join(p.managed_project_name for p in project)
+        click.echo(f"Ambiguous: multiple projects target {cwd}: {names}")
+        ctx.exit(1)
+        return
+
+    # Find the specific mapping whose targets include CWD — needed for config removal
+    matched_mapping = next((m for m in project.mappings if cwd in m.targets), None)
+
+    ctx_obj = (
+        RevlinkContext(
+            config_path=result.config_file,
+            project_name=project.managed_project_name,
+            matched_mapping=matched_mapping,
+            cwd=cwd,
+        )
+        if matched_mapping is not None
+        else None
+    )
+
+    exit_code = RestoreOperation(
+        source=source,
+        dest_root=project.managed_project_path,
+        dry_run=dry_run,
+        formatter=RestoreFormatter(dry_run=dry_run),
         context=ctx_obj,
     ).run()
     ctx.exit(exit_code)

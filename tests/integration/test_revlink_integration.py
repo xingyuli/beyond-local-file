@@ -84,7 +84,7 @@ class TestRevlinkHappyPathFile:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "myfile.txt"],
+            ["--config", str(config_path), "revlink", "create", "myfile.txt"],
             env=isolated_home,
         )
 
@@ -133,7 +133,7 @@ class TestRevlinkHappyPathFile:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "data.txt"],
+            ["--config", str(config_path), "revlink", "create", "data.txt"],
             env=isolated_home,
         )
 
@@ -188,7 +188,7 @@ class TestRevlinkDirectoryTree:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "mydir"],
+            ["--config", str(config_path), "revlink", "create", "mydir"],
             env=isolated_home,
         )
 
@@ -235,7 +235,7 @@ class TestRevlinkDirectoryTree:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "configs"],
+            ["--config", str(config_path), "revlink", "create", "configs"],
             env=isolated_home,
         )
 
@@ -291,7 +291,7 @@ class TestRevlinkForce:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "--force", "myfile.txt"],
+            ["--config", str(config_path), "revlink", "create", "--force", "myfile.txt"],
             env=isolated_home,
         )
 
@@ -329,7 +329,7 @@ class TestRevlinkForce:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "--force", "fresh.txt"],
+            ["--config", str(config_path), "revlink", "create", "--force", "fresh.txt"],
             env=isolated_home,
         )
 
@@ -379,7 +379,7 @@ class TestRevlinkConfigResolution:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "file.txt"],
+            ["--config", str(config_path), "revlink", "create", "file.txt"],
             env=isolated_home,
         )
 
@@ -415,7 +415,7 @@ class TestRevlinkConfigResolution:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["revlink", "notes.txt"],
+            ["revlink", "create", "notes.txt"],
             env=isolated_home,
         )
 
@@ -456,7 +456,7 @@ class TestRevlinkConfigResolution:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["revlink", "readme.txt"],
+            ["revlink", "create", "readme.txt"],
             env=env,
         )
 
@@ -490,12 +490,14 @@ class TestRevlinkConfigUpdate:
             subpaths: Initial list of subpath entries.
         """
         subpath_yaml = "\n".join(f"    - {s}" for s in subpaths)
+        # fmt: off
         config_path.write_text(
             f"{project_name}:\n"
             f"  target: {target_dir}\n"
             f"  subpath:\n"
             f"{subpath_yaml}\n"
         )
+        # fmt: on
 
     def test_subpath_entry_added_when_mapping_has_subpath_list(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
@@ -522,7 +524,7 @@ class TestRevlinkConfigUpdate:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "newfile.txt"],
+            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
             env=isolated_home,
         )
 
@@ -558,7 +560,7 @@ class TestRevlinkConfigUpdate:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "newfile.txt"],
+            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
             env=isolated_home,
         )
 
@@ -591,7 +593,7 @@ class TestRevlinkConfigUpdate:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "newfile.txt"],
+            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
             env=isolated_home,
         )
 
@@ -629,7 +631,7 @@ class TestRevlinkConfigUpdate:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--config", str(config_path), "revlink", "newfile.txt"],
+            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
             env=isolated_home,
         )
 

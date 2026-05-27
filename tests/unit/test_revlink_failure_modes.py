@@ -1,4 +1,4 @@
-"""Unit tests for RevlinkOperation failure modes.
+"""Unit tests for CreateOperation failure modes.
 
 Covers task 7.2:
 - MD5 mismatch: failed copy is deleted, source is untouched, exit code 1
@@ -11,7 +11,7 @@ Requirements: 4.3, 4.4, 5.4, 5.5
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from beyond_local_file.operations.revlink import ChecksumVerifier, RevlinkFormatter, RevlinkOperation
+from beyond_local_file.operations.revlink import ChecksumVerifier, CreateFormatter, CreateOperation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,8 +23,8 @@ def _make_operation(
     dest_root: Path,
     *,
     force: bool = False,
-) -> tuple[RevlinkOperation, MagicMock]:
-    """Build a RevlinkOperation with a mock formatter.
+) -> tuple[CreateOperation, MagicMock]:
+    """Build a CreateOperation with a mock formatter.
 
     Args:
         source: Source path for the operation.
@@ -32,10 +32,10 @@ def _make_operation(
         force: Whether to enable force mode.
 
     Returns:
-        Tuple of (RevlinkOperation, mock formatter).
+        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=RevlinkFormatter)
-    op = RevlinkOperation(
+    formatter = MagicMock(spec=CreateFormatter)
+    op = CreateOperation(
         source=source,
         dest_root=dest_root,
         dry_run=False,

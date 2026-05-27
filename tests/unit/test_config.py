@@ -474,6 +474,7 @@ class TestConfigUpdaterDictMapping:
         subpath entries (e.g. ``{path: rules.md, copy: true}``).
         """
         target = tmp_path / "target"
+        # fmt: off
         content = (
             f"my-project:\n"
             f"  target: {target}\n"
@@ -481,6 +482,7 @@ class TestConfigUpdaterDictMapping:
             f"    - path: rules.md\n"
             f"      copy: true\n"
         )
+        # fmt: on
         config_path = write_raw_config(tmp_path, content)
 
         from beyond_local_file.config import ConfigUpdater
@@ -528,12 +530,14 @@ class TestConfigUpdaterListOfMappings:
         """
         t1 = tmp_path / "target1"
         unrelated = tmp_path / "unrelated"
+        # fmt: off
         content = (
             f"my-project:\n"
             f"  - target: {t1}\n"
             f"    subpath:\n"
             f"      - existing.txt\n"
         )
+        # fmt: on
         config_path = write_raw_config(tmp_path, content)
 
         from beyond_local_file.config import ConfigUpdater

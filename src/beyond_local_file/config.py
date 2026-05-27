@@ -266,10 +266,11 @@ class Config:
 
 
 class ConfigUpdater:
-    """Adds a subpath entry to an existing config file when needed.
+    """Manages subpath entries in an existing config file for the revlink workflow.
 
-    Used by ``revlink`` to register the newly adopted item in the config so
-    that ``link sync`` and ``link check`` will manage it going forward.
+    Used by ``revlink create`` to register a newly adopted item in the config so
+    that ``link sync`` and ``link check`` will manage it going forward, and by
+    ``revlink restore`` to de-register the item when the symlink is dissolved.
 
     Only acts when the matched mapping already has a ``subpath`` list.  When
     the mapping syncs everything (no ``subpath``), the item is already covered
@@ -378,12 +379,123 @@ class ConfigUpdater:
         subpath_list = mapping[_KEY_SUBPATH]
 
         # Collect existing plain-string entries and path-dict entries.
-        existing = {
-            e if isinstance(e, str) else e.get("path", "")
-            for e in subpath_list
-        }
+        existing = {e if isinstance(e, str) else e.get("path", "") for e in subpath_list}
         if entry_name in existing:
             return False
 
         subpath_list.append(entry_name)
+        return True
+
+    def remove_subpath_entry(
+        self,
+        project_name: str,
+        cwd: Path,
+        entry_name: str,
+    ) -> bool:
+        """Remove *entry_name* from the subpath list of the mapping that targets *cwd*.
+
+        Loads the raw YAML while preserving comments and formatting, locates
+        the correct mapping for *project_name* and *cwd*, removes *entry_name*
+        from its ``subpath`` list, and writes the file back in-place.
+
+        Does nothing and returns ``False`` when:
+
+        - The mapping has no ``subpath`` key (sync-all mapping — no update
+          needed).
+        - *entry_name* is not present in the subpath list.
+
+        When the subpath list becomes empty after removal, the empty list is
+        left in place — removing the ``subpath`` key entirely would change the
+        mapping semantics from selective sync to sync-all.
+
+        Args:
+            project_name: The project key as it appears in the config file.
+            cwd: The current working directory; used to identify which mapping
+                to update when a project has multiple mappings.
+            entry_name: The filename or directory name to remove (e.g.
+                ``"myfile.txt"``).
+
+        Returns:
+            ``True`` if the file was updated, ``False`` if no change was
+            needed.
+        """
+        data = self._yaml.load(self._config_path)
+        project_value = data.get(project_name)
+        if project_value is None:
+            return False
+
+        changed = self._unpatch_value(project_value, cwd, entry_name)
+        if changed:
+            with self._config_path.open("w") as fh:
+                self._yaml.dump(data, fh)
+        return changed
+
+    def _unpatch_value(self, value: str | CommentedMap | CommentedSeq, cwd: Path, entry_name: str) -> bool:
+        """Mutate *value* in-place to remove *entry_name* from the right subpath list.
+
+        Args:
+            value: Raw YAML value for the project (string, dict, or list).
+            cwd: Target directory to match against.
+            entry_name: Subpath entry to remove.
+
+        Returns:
+            ``True`` if a subpath list was found and updated.
+        """
+        if isinstance(value, str):
+            # String mapping — syncs everything, nothing to do.
+            return False
+
+        if isinstance(value, dict) and _KEY_TARGET in value:
+            return self._unpatch_dict_mapping(value, entry_name)
+
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and _KEY_TARGET in item:
+                    targets = item[_KEY_TARGET]
+                    if isinstance(targets, str):
+                        targets = [targets]
+                    if any(Path(t).resolve() == cwd for t in targets):
+                        return self._unpatch_dict_mapping(item, entry_name)
+            # List of string mappings — syncs everything, nothing to do.
+            return False
+
+        return False
+
+    def _unpatch_dict_mapping(self, mapping: CommentedMap, entry_name: str) -> bool:
+        """Remove *entry_name* from the ``subpath`` list of *mapping* if present.
+
+        When the subpath list becomes empty after removal, the empty list is
+        left in place to preserve selective-sync semantics.
+
+        Args:
+            mapping: A dict-mapping node from the round-trip YAML parse.
+            entry_name: Subpath entry to remove.
+
+        Returns:
+            ``True`` if the subpath list was updated, ``False`` otherwise.
+        """
+        if _KEY_SUBPATH not in mapping:
+            # No subpath key — mapping syncs everything, nothing to do.
+            return False
+
+        subpath_list = mapping[_KEY_SUBPATH]
+
+        if not subpath_list:
+            # Subpath key is present but the list is empty or None — nothing to remove.
+            return False
+
+        # Find the index of the matching entry (plain string or {"path": ...} dict).
+        index_to_remove = None
+        for i, entry in enumerate(subpath_list):
+            if isinstance(entry, str) and entry == entry_name:
+                index_to_remove = i
+                break
+            if isinstance(entry, dict) and entry.get("path") == entry_name:
+                index_to_remove = i
+                break
+
+        if index_to_remove is None:
+            return False
+
+        del subpath_list[index_to_remove]
         return True
