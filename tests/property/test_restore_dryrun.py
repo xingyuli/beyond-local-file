@@ -118,6 +118,7 @@ def test_restore_dryrun_does_not_modify_filesystem_with_valid_symlink(
         RestoreOperation(
             source=source,
             dest_root=managed_dir,
+            rel_path=Path(filename),
             dry_run=True,
             formatter=RestoreFormatter(dry_run=True),
         ).run()
@@ -174,6 +175,7 @@ def test_restore_dryrun_does_not_modify_filesystem_when_source_missing(
         RestoreOperation(
             source=source,
             dest_root=managed_dir,
+            rel_path=Path(filename),
             dry_run=True,
             formatter=RestoreFormatter(dry_run=True),
         ).run()
@@ -229,6 +231,7 @@ def test_restore_dryrun_does_not_modify_filesystem_when_source_is_not_symlink(
         RestoreOperation(
             source=source,
             dest_root=managed_dir,
+            rel_path=Path(filename),
             dry_run=True,
             formatter=RestoreFormatter(dry_run=True),
         ).run()

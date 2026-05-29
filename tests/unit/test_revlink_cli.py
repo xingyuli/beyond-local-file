@@ -199,6 +199,7 @@ def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
         patch.object(Path, "resolve", _resolve_no_follow),
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -244,6 +245,7 @@ def test_revlink_dest_exists_without_force_exits_with_error(tmp_path: Path) -> N
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -288,6 +290,7 @@ def test_revlink_force_allows_overwrite_when_dest_exists(tmp_path: Path) -> None
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -330,6 +333,7 @@ def test_revlink_dry_run_does_not_modify_filesystem(tmp_path: Path) -> None:
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -367,6 +371,7 @@ def test_revlink_dry_run_prints_preview_output(tmp_path: Path) -> None:
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -409,6 +414,7 @@ def test_revlink_no_matching_project_exits_with_error(tmp_path: Path) -> None:
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(projects={}, config_file=tmp_path / "config.yml")
         mock_resolve.return_value = None  # no match
@@ -448,6 +454,7 @@ def test_revlink_ambiguous_project_exits_with_error(tmp_path: Path) -> None:
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"project-a": project_a, "project-b": project_b},

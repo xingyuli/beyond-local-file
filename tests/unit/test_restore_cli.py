@@ -158,6 +158,7 @@ def test_restore_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -201,6 +202,7 @@ def test_restore_real_file_exits_with_error_and_suggests_create(tmp_path: Path) 
     with (
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -259,6 +261,7 @@ def test_restore_dangling_symlink_exits_with_error(tmp_path: Path) -> None:
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
         patch.object(Path, "resolve", _resolve_no_follow),
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -315,6 +318,7 @@ def test_restore_dry_run_accepted_and_exits_zero(tmp_path: Path) -> None:
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
         patch.object(Path, "resolve", _resolve_no_follow),
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},
@@ -366,6 +370,7 @@ def test_restore_dry_run_prints_dry_run_prefixed_output(tmp_path: Path) -> None:
         patch("beyond_local_file.cli.load_config_projects") as mock_load,
         patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
         patch.object(Path, "resolve", _resolve_no_follow),
+        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
         mock_load.return_value = ConfigLoadResult(
             projects={"test-project": project},

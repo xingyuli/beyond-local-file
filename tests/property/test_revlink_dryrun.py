@@ -112,6 +112,7 @@ def test_dryrun_does_not_modify_filesystem_with_existing_source(
         CreateOperation(
             source=source,
             dest_root=managed_dir,
+            rel_path=Path(filename),
             dry_run=True,
             force=False,
             formatter=CreateFormatter(dry_run=True),
@@ -169,6 +170,7 @@ def test_dryrun_does_not_modify_filesystem_with_nonexistent_source(
         CreateOperation(
             source=source,
             dest_root=managed_dir,
+            rel_path=Path(filename),
             dry_run=True,
             force=False,
             formatter=CreateFormatter(dry_run=True),

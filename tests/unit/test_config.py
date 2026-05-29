@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from beyond_local_file.config import Config
+from beyond_local_file.config import Config, ConfigUpdater
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -406,8 +406,6 @@ class TestConfigUpdaterStringMapping:
         content = f"my-project: {target}\n"
         config_path = write_raw_config(tmp_path, content)
 
-        from beyond_local_file.config import ConfigUpdater
-
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target, "newfile.txt")
 
         assert changed is False
@@ -427,8 +425,6 @@ class TestConfigUpdaterDictMapping:
         content = f"my-project:\n  target: {target}\n  subpath:\n    - existing.txt\n"
         config_path = write_raw_config(tmp_path, content)
 
-        from beyond_local_file.config import ConfigUpdater
-
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "newfile.txt")
 
         assert changed is True
@@ -445,8 +441,6 @@ class TestConfigUpdaterDictMapping:
         content = f"my-project:\n  target: {target}\n"
         config_path = write_raw_config(tmp_path, content)
 
-        from beyond_local_file.config import ConfigUpdater
-
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "newfile.txt")
 
         assert changed is False
@@ -460,8 +454,6 @@ class TestConfigUpdaterDictMapping:
         target = tmp_path / "target"
         content = f"my-project:\n  target: {target}\n  subpath:\n    - existing.txt\n"
         config_path = write_raw_config(tmp_path, content)
-
-        from beyond_local_file.config import ConfigUpdater
 
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "existing.txt")
 
@@ -484,8 +476,6 @@ class TestConfigUpdaterDictMapping:
         )
         # fmt: on
         config_path = write_raw_config(tmp_path, content)
-
-        from beyond_local_file.config import ConfigUpdater
 
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", target.resolve(), "rules.md")
 
@@ -514,8 +504,6 @@ class TestConfigUpdaterListOfMappings:
         )
         config_path = write_raw_config(tmp_path, content)
 
-        from beyond_local_file.config import ConfigUpdater
-
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", t1.resolve(), "newfile.txt")
 
         assert changed is True
@@ -540,8 +528,6 @@ class TestConfigUpdaterListOfMappings:
         # fmt: on
         config_path = write_raw_config(tmp_path, content)
 
-        from beyond_local_file.config import ConfigUpdater
-
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", unrelated.resolve(), "newfile.txt")
 
         assert changed is False
@@ -557,8 +543,6 @@ class TestConfigUpdaterListOfMappings:
         content = f"my-project:\n  - {t1}\n  - {t2}\n"
         config_path = write_raw_config(tmp_path, content)
 
-        from beyond_local_file.config import ConfigUpdater
-
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", t1.resolve(), "newfile.txt")
 
         assert changed is False
@@ -572,8 +556,6 @@ class TestConfigUpdaterListOfMappings:
         t1 = tmp_path / "target1"
         content = f"my-project:\n  - target: {t1}\n"
         config_path = write_raw_config(tmp_path, content)
-
-        from beyond_local_file.config import ConfigUpdater
 
         changed = ConfigUpdater(config_path).add_subpath_entry("my-project", t1.resolve(), "newfile.txt")
 
@@ -591,8 +573,6 @@ class TestConfigUpdaterUnknownProject:
         target = tmp_path / "target"
         content = f"my-project: {target}\n"
         config_path = write_raw_config(tmp_path, content)
-
-        from beyond_local_file.config import ConfigUpdater
 
         changed = ConfigUpdater(config_path).add_subpath_entry("does-not-exist", target.resolve(), "newfile.txt")
 

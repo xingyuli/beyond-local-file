@@ -1,14 +1,17 @@
 """End-to-end integration tests for the revlink command.
 
-Covers Requirements 1.5, 4.1, 4.5, 5.2, 5.3, 6.1.
+Covers Requirements 1.5, 2.1, 2.2, 4.1, 4.5, 5.2, 5.3, 6.1.
 """
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
+from beyond_local_file.model.config import ConfigProject, Mapping
+from beyond_local_file.project_processor import ConfigLoadResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -570,10 +573,10 @@ class TestRevlinkConfigUpdate:
     def test_subpath_entry_not_duplicated_when_already_present(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
     ) -> None:
-        """revlink does not duplicate a subpath entry that already exists.
+        """revlink rejects create when the path is already a declared subpath.
 
-        If the item is already in the subpath list (e.g. from a previous run
-        with --force), the config must remain unchanged.
+        Rule 5 detects that ``newfile.txt`` is already in the subpath list and
+        exits 1 with an informative error.  The config must remain unchanged.
         """
         target_dir = tmp_path / "target"
         target_dir.mkdir()
@@ -597,10 +600,12 @@ class TestRevlinkConfigUpdate:
             env=isolated_home,
         )
 
-        assert result.exit_code == 0, result.output
-        # Entry count must not increase
-        updated = config_path.read_text()
-        assert updated.count("newfile.txt") == original_content.count("newfile.txt")
+        # Rule 5: path already declared as a subpath → exit 1 with error
+        assert result.exit_code == 1, result.output
+        assert "already a declared subpath" in result.output
+
+        # Config must remain unchanged — no duplication, no removal
+        assert config_path.read_text() == original_content
 
     def test_comments_and_blank_lines_preserved_after_update(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
@@ -640,3 +645,275 @@ class TestRevlinkConfigUpdate:
         assert "# Shared dev configs" in updated, "top-level comment must be preserved"
         assert "# AI hooks" in updated, "inline comment must be preserved"
         assert "newfile.txt" in updated, "new entry must be present"
+
+
+# ---------------------------------------------------------------------------
+# Nested path handling
+# ---------------------------------------------------------------------------
+
+
+class TestRevlinkNestedPath:
+    """Integration tests for nested path handling in revlink create.
+
+    Validates that a path like ``.kiro/specs/foo`` is managed at the correct
+    nested location inside the managed project directory, not at the basename.
+
+    Requirements: 1.2, 1.3, 1.4, 4.2
+    """
+
+    def _make_config_project(self, managed_path: Path, target_path: Path) -> ConfigProject:
+        """Build a ConfigProject with a selective sync mapping (empty subpath list).
+
+        Args:
+            managed_path: The managed project path (destination root).
+            target_path: A target directory that maps to this project.
+
+        Returns:
+            A ConfigProject with a single selective-sync mapping targeting
+            ``target_path`` and an empty subpath list.
+        """
+        return ConfigProject(
+            managed_project_name="test-project",
+            managed_project_path=managed_path,
+            mappings=[Mapping(targets=[target_path], subpaths=[], copy_paths=None)],
+        )
+
+    def test_nested_path_managed_copy_at_correct_location(self, tmp_path: Path) -> None:
+        """revlink create with a nested path places the managed copy at the full rel_path.
+
+        Given a source at ``target/.kiro/specs/foo``, the managed copy must land
+        at ``managed/.kiro/specs/foo``, not ``managed/foo``.
+
+        Requirements 1.2, 1.3, 1.4.
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "managed"
+        managed_dir.mkdir()
+
+        # Write a real config file so the config update step can read it
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(f"test-project:\n  target: {target_dir}\n  subpath: []\n")
+
+        # Create a minimal git repo structure so GitExcludeManager can write the exclude entry
+        _make_fake_git_repo(target_dir)
+
+        # Create the nested source file
+        source_dir = target_dir / ".kiro" / "specs"
+        source_dir.mkdir(parents=True)
+        source_file = source_dir / "foo"
+        source_file.write_text("spec content")
+
+        project = self._make_config_project(managed_dir, target_dir)
+
+        runner = CliRunner()
+        with (
+            patch("beyond_local_file.cli.load_config_projects") as mock_load,
+            patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+            patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
+        ):
+            mock_load.return_value = ConfigLoadResult(
+                projects={"test-project": project},
+                config_file=config_path,
+            )
+            mock_resolve.return_value = project
+
+            # Act — invoke with the absolute path (Path.cwd is mocked, so
+            # Path(path).resolve() in cli.py will resolve against the real OS
+            # CWD; passing the absolute path avoids that ambiguity)
+            result = runner.invoke(cli, ["revlink", "create", str(source_file)])
+
+        # Assert: exit code 0
+        assert result.exit_code == 0, result.output
+
+        # Assert: managed copy at managed/.kiro/specs/foo (not managed/foo)
+        managed_copy = managed_dir / ".kiro" / "specs" / "foo"
+        assert managed_copy.exists(), f"managed copy not found at {managed_copy}"
+        assert managed_copy.read_text() == "spec content"
+
+        # Assert: symlink at target/.kiro/specs/foo pointing to managed/.kiro/specs/foo
+        assert source_file.is_symlink(), "source path should be a symlink after revlink create"
+        assert source_file.resolve() == managed_copy.resolve()
+
+        # Assert: config subpath list contains .kiro/specs/foo
+        updated_config = config_path.read_text()
+        assert ".kiro/specs/foo" in updated_config
+
+    def test_nested_path_config_subpath_entry_uses_full_rel_path(self, tmp_path: Path) -> None:
+        """revlink create adds the full rel_path to the config subpath list.
+
+        The config entry must be ``.kiro/specs/foo``, not ``foo``.
+
+        Requirement 4.2.
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "managed"
+        managed_dir.mkdir()
+
+        # Write a real config file so the config update can be verified
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(f"test-project:\n  target: {target_dir}\n  subpath: []\n")
+
+        source_dir = target_dir / ".kiro" / "specs"
+        source_dir.mkdir(parents=True)
+        source_file = source_dir / "foo"
+        source_file.write_text("spec content")
+
+        project = ConfigProject(
+            managed_project_name="test-project",
+            managed_project_path=managed_dir,
+            mappings=[Mapping(targets=[target_dir], subpaths=[], copy_paths=None)],
+        )
+
+        runner = CliRunner()
+        with (
+            patch("beyond_local_file.cli.load_config_projects") as mock_load,
+            patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+            patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
+        ):
+            mock_load.return_value = ConfigLoadResult(
+                projects={"test-project": project},
+                config_file=config_path,
+            )
+            mock_resolve.return_value = project
+
+            # Act — pass the absolute path (same reason as the first test)
+            result = runner.invoke(cli, ["revlink", "create", str(source_file)])
+
+        assert result.exit_code == 0, result.output
+
+        # Assert: config subpath list contains the full rel_path, not just the basename
+        updated_config = config_path.read_text()
+        assert ".kiro/specs/foo" in updated_config, f"Expected '.kiro/specs/foo' in config, got:\n{updated_config}"
+        assert updated_config.count("foo") == 1, (
+            "Only the full path entry should appear — basename 'foo' must not be added separately"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Nested path handling — revlink restore
+# ---------------------------------------------------------------------------
+
+
+class TestRevlinkRestoreNestedPath:
+    """Integration tests for ``revlink restore`` with a nested path argument.
+
+    Verifies that the managed copy is looked up at the full relative path
+    (e.g. ``managed/.kiro/specs/foo``) rather than just the basename
+    (``managed/foo``), and that the real file is restored at the correct
+    location in the target directory.
+
+    Requirements: 2.1, 2.2
+    """
+
+    def _write_subpath_config(
+        self,
+        config_path: Path,
+        project_name: str,
+        target_dir: Path,
+        subpaths: list[str],
+    ) -> None:
+        """Write a config with a dict-mapping that has a subpath list.
+
+        Args:
+            config_path: Destination path for the YAML config file.
+            project_name: The project name key.
+            target_dir: The target directory path to map to.
+            subpaths: Initial list of subpath entries.
+        """
+        subpath_yaml = "\n".join(f"    - {s}" for s in subpaths)
+        config_path.write_text(f"{project_name}:\n  target: {target_dir}\n  subpath:\n{subpath_yaml}\n")
+
+    def test_restore_nested_path_real_file_at_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """Real file is restored at ``target/.kiro/specs/foo`` after restore.
+
+        Set up a managed copy at ``managed/.kiro/specs/foo`` and a symlink at
+        ``target/.kiro/specs/foo`` pointing to it.  Run ``revlink restore
+        .kiro/specs/foo`` from the target directory.  The symlink must be
+        replaced with a real file containing the original content.
+
+        Requirements 2.1, 2.2.
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        self._write_subpath_config(config_path, "my-project", target_dir, [".kiro/specs/foo"])
+
+        # Set up the managed copy at the full nested path
+        managed_copy = managed_dir / ".kiro" / "specs" / "foo"
+        managed_copy.parent.mkdir(parents=True, exist_ok=True)
+        managed_copy.write_text("spec content")
+
+        # Set up the symlink at the nested path inside target_dir
+        symlink_path = target_dir / ".kiro" / "specs" / "foo"
+        symlink_path.parent.mkdir(parents=True, exist_ok=True)
+        symlink_path.symlink_to(managed_copy)
+
+        monkeypatch.chdir(target_dir)
+
+        # Act
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "restore", ".kiro/specs/foo"],
+            env=isolated_home,
+        )
+
+        # Assert
+        assert result.exit_code == 0, result.output
+
+        # The path is now a real file, not a symlink
+        assert not symlink_path.is_symlink(), "path should no longer be a symlink"
+        assert symlink_path.is_file(), "path should be a real file"
+        assert symlink_path.read_text() == "spec content"
+
+    def test_restore_nested_path_managed_copy_deleted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """Managed copy at ``managed/.kiro/specs/foo`` is deleted after restore.
+
+        Requirements 2.1, 2.2.
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        self._write_subpath_config(config_path, "my-project", target_dir, [".kiro/specs/foo"])
+
+        managed_copy = managed_dir / ".kiro" / "specs" / "foo"
+        managed_copy.parent.mkdir(parents=True, exist_ok=True)
+        managed_copy.write_text("spec content")
+
+        symlink_path = target_dir / ".kiro" / "specs" / "foo"
+        symlink_path.parent.mkdir(parents=True, exist_ok=True)
+        symlink_path.symlink_to(managed_copy)
+
+        monkeypatch.chdir(target_dir)
+
+        # Act
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "restore", ".kiro/specs/foo"],
+            env=isolated_home,
+        )
+
+        # Assert
+        assert result.exit_code == 0, result.output
+        assert not managed_copy.exists(), "managed copy at nested path should have been deleted"

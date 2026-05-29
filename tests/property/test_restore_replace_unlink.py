@@ -107,6 +107,7 @@ def test_replace_does_not_rmtree_symlink_target(
         operation = RestoreOperation(
             source=symlink_path,
             dest_root=dest_root,
+            rel_path=Path(dir_name),
             dry_run=False,
             formatter=RestoreFormatter(dry_run=False),
         )

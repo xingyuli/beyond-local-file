@@ -35,6 +35,7 @@ def _make_operation(
     op = RestoreOperation(
         source=source,
         dest_root=dest_root,
+        rel_path=Path(source.name),
         dry_run=False,
         formatter=formatter,
     )

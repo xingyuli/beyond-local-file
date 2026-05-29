@@ -50,6 +50,7 @@ def _make_operation(
     op = CreateOperation(
         source=source,
         dest_root=dest_root,
+        rel_path=Path(source.name),
         dry_run=dry_run,
         force=force,
         formatter=formatter,

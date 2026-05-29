@@ -197,6 +197,15 @@ def revlink_create(ctx, path, dry_run, force):
     .git/info/exclude if the target directory is a Git repository.
     """
     source = Path(path).resolve()
+    cwd = Path.cwd()
+
+    try:
+        rel_path = source.relative_to(cwd)
+    except ValueError:
+        click.echo(f"Error: PATH must be inside the current directory: {path}")
+        ctx.exit(1)
+        return
+
     config = ctx.obj["config"]
 
     result = load_config_projects(config)
@@ -204,7 +213,6 @@ def revlink_create(ctx, path, dry_run, force):
         ctx.exit(1)
         return
 
-    cwd = Path.cwd()
     project = resolve_project_from_cwd(result.projects, cwd)
 
     if project is None:
@@ -239,6 +247,7 @@ def revlink_create(ctx, path, dry_run, force):
     exit_code = CreateOperation(
         source=source,
         dest_root=project.managed_project_path,
+        rel_path=rel_path,
         dry_run=dry_run,
         force=force,
         formatter=CreateFormatter(dry_run=dry_run),
@@ -258,6 +267,18 @@ def revlink_restore(ctx, path, dry_run):
     deletes the managed copy, removes the item from .git/info/exclude, and
     removes the entry from the config subpath list if selective sync is active.
     """
+    cwd = Path.cwd()
+    # Use absolute() instead of resolve() so that symlinks are not followed —
+    # the source must be the symlink path itself, not the managed copy it points to.
+    source = (cwd / path).absolute()
+
+    try:
+        rel_path = source.relative_to(cwd)
+    except ValueError:
+        click.echo(f"Error: PATH must be inside the current directory: {path}")
+        ctx.exit(1)
+        return
+
     config = ctx.obj["config"]
 
     result = load_config_projects(config)
@@ -265,10 +286,6 @@ def revlink_restore(ctx, path, dry_run):
         ctx.exit(1)
         return
 
-    cwd = Path.cwd()
-    # Use absolute() instead of resolve() so that symlinks are not followed —
-    # the source must be the symlink path itself, not the managed copy it points to.
-    source = (cwd / path).absolute()
     project = resolve_project_from_cwd(result.projects, cwd)
 
     if project is None:
@@ -303,6 +320,7 @@ def revlink_restore(ctx, path, dry_run):
     exit_code = RestoreOperation(
         source=source,
         dest_root=project.managed_project_path,
+        rel_path=rel_path,
         dry_run=dry_run,
         formatter=RestoreFormatter(dry_run=dry_run),
         context=ctx_obj,

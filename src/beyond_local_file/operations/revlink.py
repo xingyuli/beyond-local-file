@@ -187,6 +187,17 @@ class CreateFormatter:
         """
         self._echo(f"Warning: overwriting existing managed copy at {dest}")
 
+    def info(self, message: str) -> None:
+        """Print an informational message (no ``Error:`` prefix).
+
+        Used for non-error early exits such as the Rule 3 managed-symlink
+        case where the path is already managed through an ancestor.
+
+        Args:
+            message: Human-readable informational text to display.
+        """
+        self._echo(message)
+
     def error(self, message: str) -> None:
         """Print an error message.
 
@@ -338,12 +349,13 @@ class RestoreFormatter:
 
 @dataclass
 class RevlinkContext:
-    """Config-resolution context needed for the post-symlink config update step.
+    """Config-resolution context needed for the config update and removal steps.
 
-    Groups the four pieces of information that ``CreateOperation`` needs to
-    register the adopted item in the config file when the matched mapping uses
-    selective sync (``subpath`` list).  Pass ``None`` to skip the config
-    update step entirely — useful in tests that do not exercise that path.
+    Groups the context information that ``CreateOperation`` and
+    ``RestoreOperation`` need to register or de-register an adopted item in
+    the config file when the matched mapping uses selective sync (``subpath``
+    list).  Pass ``None`` to skip the config update step entirely — useful in
+    tests that do not exercise that path.
 
     Attributes:
         config_path: Absolute path to the resolved config file.
@@ -379,6 +391,9 @@ class CreateOperation:
             that will be converted into a managed symlink.
         dest_root: ``managed_project_path`` from the resolved
             ``ConfigProject``; the destination root for the copy.
+        rel_path: Path of the source relative to CWD (e.g.
+            ``.kiro/specs/foo``).  Used as the destination suffix so the
+            managed layout mirrors the target layout exactly.
         dry_run: When ``True``, perform all validation and report what would
             happen without modifying the filesystem.
         force: When ``True``, overwrite an existing destination in the managed
@@ -390,6 +405,7 @@ class CreateOperation:
 
     source: Path
     dest_root: Path
+    rel_path: Path
     dry_run: bool
     force: bool
     formatter: CreateFormatter
@@ -402,16 +418,17 @@ class CreateOperation:
     def run(self) -> int:
         """Execute the full revlink workflow and return an exit code.
 
-        Derives ``dest`` as ``dest_root / source.name``, then runs the
-        pre-flight validation step.  When not in dry-run mode, proceeds
-        through copy, verify, replace, and git-exclude steps in order.
-        When in dry-run mode, previews all steps via the formatter without
-        modifying the filesystem.
+        Derives ``dest`` as ``dest_root / rel_path``, preserving the full
+        directory structure so the managed layout mirrors the target layout
+        exactly.  Runs the pre-flight validation step, then proceeds through
+        copy, verify, replace, and git-exclude steps in order when not in
+        dry-run mode.  In dry-run mode, previews all steps via the formatter
+        without modifying the filesystem.
 
         Returns:
             ``0`` on success, ``1`` if any step fails.
         """
-        dest = self.dest_root / self.source.name
+        dest = self.dest_root / self.rel_path
 
         result = self._validate(dest)
         if result != 0:
@@ -445,7 +462,7 @@ class CreateOperation:
         would happen.
 
         Args:
-            dest: Derived destination path (``dest_root / source.name``).
+            dest: Derived destination path (``dest_root / rel_path``).
         """
         if self.force and dest.exists():
             self.formatter.force_warning(dest)
@@ -455,26 +472,46 @@ class CreateOperation:
         self.formatter.symlink_created(self.source, dest)
         self._git_exclude_preview()
         if self.context is not None and self.context.matched_mapping.subpaths is not None:
-            self.formatter.config_updated(self.source.name)
+            self.formatter.config_updated(str(self.rel_path))
 
     # ------------------------------------------------------------------
     # Internal steps
     # ------------------------------------------------------------------
 
-    def _validate(self, dest: Path) -> int:
+    def _validate(self, dest: Path) -> int:  # noqa: PLR0911, PLR0912 -- each validation rule needs its own early return; six ordered rules require multiple branches
         """Run pre-flight validation checks before any filesystem mutation.
 
         Checks are performed in order:
 
         1. ``source`` must exist.
         2. ``source`` must not already be a symlink.
-        3. ``dest`` must not exist, unless ``--force`` is set.
+        3. No ancestor directory of ``rel_path`` may be a symlink (skipped when
+           ``self.context is None``).  If an ancestor symlink resolves into the
+           managed project the path is already managed — print an info message
+           and return 0.  If it resolves elsewhere print an error and return 1.
+        4. When the matched mapping uses sync-all (``subpaths is None``),
+           ``rel_path`` must have exactly one component — nested paths are
+           rejected with an error (skipped when ``self.context is None``).
+        5. When the matched mapping uses selective sync (``subpaths is not None``),
+           check each declared subpath for conflicts (skipped when
+           ``self.context is None``):
+
+           - 5a: if a declared subpath is an ancestor of (or equal to)
+             ``rel_path``, the path is already covered — print an error
+             directing the user to run ``blf link sync`` (or copy manually
+             first) and return 1.
+           - 5b: if ``rel_path`` is an ancestor of a declared subpath (reverse
+             conflict), adopting the broader path would shadow the narrower
+             declared entry — print an error and return 1.
+
+        6. ``dest`` must not exist, unless ``--force`` is set.
 
         Args:
-            dest: Derived destination path (``dest_root / source.name``).
+            dest: Derived destination path (``dest_root / rel_path``).
 
         Returns:
-            ``0`` if all checks pass, ``1`` on the first failing check.
+            ``0`` if all checks pass, ``1`` on the first failing check, or
+            ``0`` for the Rule 3 managed-symlink early exit.
         """
         if not self.source.exists():
             self.formatter.error(f"Path does not exist: {self.source}")
@@ -483,6 +520,66 @@ class CreateOperation:
         if self.source.is_symlink():
             self.formatter.error(f"Path is already a symlink: {self.source}")
             return 1
+
+        # Rule 3 — no intermediate symlink in the path
+        if self.context is not None:
+            for anc in self.rel_path.parents:
+                if anc == Path("."):
+                    continue
+                candidate = self.context.cwd / anc
+                if candidate.is_symlink():
+                    resolved = candidate.resolve()
+                    if resolved.is_relative_to(self.dest_root):
+                        self.formatter.info(
+                            f"'{anc}' is a managed symlink — '{self.rel_path}' is already"
+                            " managed through it. Nothing to do."
+                        )
+                        return 0
+                    else:
+                        self.formatter.error(
+                            f"'{anc}' is a symlink not managed by blf."
+                            " Cannot adopt a path through an unmanaged symlink."
+                        )
+                        return 1
+
+        # Rule 4 — sync-all mapping rejects nested paths
+        if self.context is not None and self.context.matched_mapping.subpaths is None and len(self.rel_path.parts) > 1:
+            self.formatter.error(
+                f"'{self.rel_path}' is a nested path. This mapping uses sync-all"
+                " — only top-level paths can be adopted directly."
+                " Add a 'subpath' entry to your config mapping first."
+            )
+            return 1
+
+        # Rule 5 — selective sync mapping: no ancestor subpath conflict
+        if self.context is not None and self.context.matched_mapping.subpaths is not None:
+            managed_copy = self.dest_root / self.rel_path
+            for declared in self.context.matched_mapping.subpaths:
+                declared_path = Path(declared)
+                # 5a — declared subpath is an ancestor of (or equal to) rel_path
+                if self.rel_path == declared_path or self.rel_path.is_relative_to(declared_path):
+                    if managed_copy.exists():
+                        self.formatter.error(
+                            f"'{declared}' is already a declared subpath that covers this path,"
+                            f" and the managed copy already exists at '{managed_copy}'."
+                            " Run 'blf link sync' to create the symlink."
+                        )
+                    else:
+                        self.formatter.error(
+                            f"'{declared}' is already a declared subpath that covers this path."
+                            f" Copy '{self.source}' to '{managed_copy}' manually,"
+                            " then run 'blf link sync' to create the symlink."
+                        )
+                    return 1
+                # 5b — rel_path is an ancestor of a declared subpath (reverse conflict)
+                if declared_path.is_relative_to(self.rel_path) and declared_path != self.rel_path:
+                    self.formatter.error(
+                        f"'{declared}' is a declared subpath under this path."
+                        f" Adopting '{self.rel_path}' would conflict with it."
+                        f" Remove '{declared}' from the config subpath list first,"
+                        " or adopt a more specific path."
+                    )
+                    return 1
 
         if dest.exists() and not self.force:
             self.formatter.error(f"Destination already exists: {dest}\nUse --force to overwrite.")
@@ -502,7 +599,7 @@ class CreateOperation:
         tree.
 
         Args:
-            dest: Derived destination path (``dest_root / source.name``).
+            dest: Derived destination path (``dest_root / rel_path``).
 
         Returns:
             ``0`` on success.
@@ -517,6 +614,7 @@ class CreateOperation:
 
         self.formatter.copying(self.source, dest)
 
+        dest.parent.mkdir(parents=True, exist_ok=True)
         if self.source.is_dir():
             shutil.copytree(self.source, dest)
         else:
@@ -533,7 +631,7 @@ class CreateOperation:
         emits an error message, and returns 1 so the caller can abort.
 
         Args:
-            dest: Derived destination path (``dest_root / source.name``)
+            dest: Derived destination path (``dest_root / rel_path``)
                 where the copy was placed by :meth:`_copy`.
 
         Returns:
@@ -573,7 +671,7 @@ class CreateOperation:
           recover manually.
 
         Args:
-            dest: Derived destination path (``dest_root / source.name``) that
+            dest: Derived destination path (``dest_root / rel_path``) that
                 the new symlink will point to.
 
         Returns:
@@ -614,9 +712,9 @@ class CreateOperation:
             return
 
         updater = ConfigUpdater(self.context.config_path)
-        changed = updater.add_subpath_entry(self.context.project_name, self.context.cwd, self.source.name)
+        changed = updater.add_subpath_entry(self.context.project_name, self.context.cwd, str(self.rel_path))
         if changed:
-            self.formatter.config_updated(self.source.name)
+            self.formatter.config_updated(str(self.rel_path))
 
     def _git_exclude_preview(self) -> None:
         """Emit a dry-run preview for the git-exclude step.
@@ -624,15 +722,20 @@ class CreateOperation:
         Checks whether the source's parent directory is a Git repository and
         whether the entry already exists, then reports what would happen via
         the formatter — without writing anything.
+
+        The entry name is ``str(self.rel_path)`` (e.g. ``.kiro/specs/foo``)
+        rather than ``source.name`` so the exclude entry mirrors the full
+        relative path used by ``link sync``.
         """
         manager = GitExcludeManager(self.source.parent)
         if not manager.is_git_repo():
             return
         existing = manager.read_entries()
-        if self.source.name in existing:
-            self.formatter.git_exclude_exists(self.source.name)
+        entry_name = str(self.rel_path)
+        if entry_name in existing:
+            self.formatter.git_exclude_exists(entry_name)
         else:
-            self.formatter.git_exclude_added(self.source.name)
+            self.formatter.git_exclude_added(entry_name)
 
     def _git_exclude(self) -> int:
         """Add the source item to ``.git/info/exclude`` if inside a Git repository.
@@ -641,8 +744,12 @@ class CreateOperation:
         for the source's parent directory.  If the directory is not a Git
         repository the step is silently skipped (Requirement 6.3).  Otherwise
         calls :meth:`~beyond_local_file.git_manager.GitExcludeManager.write_entries`
-        with a set containing ``source.name`` and reports the outcome via the
+        with a set containing ``str(rel_path)`` and reports the outcome via the
         formatter.
+
+        The entry name is ``str(self.rel_path)`` (e.g. ``.kiro/specs/foo``)
+        rather than ``source.name`` so the exclude entry mirrors the full
+        relative path used by ``link sync``.
 
         This step is non-fatal: it always returns ``0`` regardless of whether
         the entry was added, already existed, or the directory is not a Git
@@ -656,12 +763,13 @@ class CreateOperation:
         if not manager.is_git_repo():
             return 0
 
-        added_count, already_existing = manager.write_entries({self.source.name})
+        entry_name = str(self.rel_path)
+        added_count, already_existing = manager.write_entries({entry_name})
 
         if added_count > 0:
-            self.formatter.git_exclude_added(self.source.name)
-        elif self.source.name in already_existing:
-            self.formatter.git_exclude_exists(self.source.name)
+            self.formatter.git_exclude_added(entry_name)
+        elif entry_name in already_existing:
+            self.formatter.git_exclude_exists(entry_name)
 
         return 0
 
@@ -689,6 +797,9 @@ class RestoreOperation:
             and replaced with the real file or directory.
         dest_root: ``managed_project_path`` from the resolved
             ``ConfigProject``; the root under which the managed copy lives.
+        rel_path: Path of the source relative to CWD (e.g.
+            ``.kiro/specs/foo``).  Used to derive the managed copy location as
+            ``dest_root / rel_path``, preserving the full directory structure.
         dry_run: When ``True``, perform all validation and report what would
             happen without modifying the filesystem.
         formatter: Formatter instance used for all user-facing output.
@@ -698,6 +809,7 @@ class RestoreOperation:
 
     source: Path
     dest_root: Path
+    rel_path: Path
     dry_run: bool
     formatter: RestoreFormatter
     context: RevlinkContext | None = field(default=None)
@@ -709,16 +821,17 @@ class RestoreOperation:
     def run(self) -> int:
         """Execute the full restore workflow and return an exit code.
 
-        Derives ``managed`` as ``dest_root / source.name``, then runs the
-        pre-flight validation step.  When not in dry-run mode, proceeds
-        through replace, verify, delete-managed, git-exclude, and
-        remove-config steps in order.  When in dry-run mode, previews all
-        steps via the formatter without modifying the filesystem.
+        Derives ``managed`` as ``dest_root / rel_path``, preserving the full
+        directory structure so the managed copy location mirrors the target
+        layout exactly.  Then runs the pre-flight validation step.  When not
+        in dry-run mode, proceeds through replace, verify, delete-managed,
+        git-exclude, and remove-config steps in order.  When in dry-run mode,
+        previews all steps via the formatter without modifying the filesystem.
 
         Returns:
             ``0`` on success, ``1`` if any step fails.
         """
-        managed = self.dest_root / self.source.name
+        managed = self.dest_root / self.rel_path
 
         result = self._validate(managed)
         if result != 0:
@@ -749,7 +862,7 @@ class RestoreOperation:
         would happen.
 
         Args:
-            managed: Derived managed copy path (``dest_root / source.name``).
+            managed: Derived managed copy path (``dest_root / rel_path``).
         """
         self.formatter.removing_symlink(self.source)
         self.formatter.copying_back(managed, self.source)
@@ -766,17 +879,20 @@ class RestoreOperation:
 
         Checks are performed in order:
 
-        1. ``source`` must exist (including as a dangling symlink check via
-           ``lstat``).
+        1. ``source`` must exist as a real path or as a dangling symlink.
+           A path that does not exist at all (not even as a symlink entry)
+           is rejected here.
         2. ``source`` must be a symlink.
         3. The managed copy at ``managed`` must exist.
 
         Args:
-            managed: Derived managed copy path (``dest_root / source.name``).
+            managed: Derived managed copy path (``dest_root / rel_path``).
 
         Returns:
             ``0`` if all checks pass, ``1`` on the first failing check.
         """
+        # exists() follows symlinks and returns False for dangling symlinks, so
+        # both conditions are needed to distinguish "nothing here" from "dangling symlink".
         if not self.source.exists() and not self.source.is_symlink():
             self.formatter.error(f"Path does not exist: {self.source}")
             return 1
@@ -803,7 +919,7 @@ class RestoreOperation:
         ``shutil.copy2`` for files or ``shutil.copytree`` for directories.
 
         Args:
-            managed: Derived managed copy path (``dest_root / source.name``)
+            managed: Derived managed copy path (``dest_root / rel_path``)
                 whose content will be copied back to ``source``.
 
         Returns:
@@ -836,7 +952,7 @@ class RestoreOperation:
         caller can abort.
 
         Args:
-            managed: Derived managed copy path (``dest_root / source.name``)
+            managed: Derived managed copy path (``dest_root / rel_path``)
                 used as the reference for checksum comparison.
 
         Returns:
@@ -883,8 +999,10 @@ class RestoreOperation:
         for the source's parent directory.  If the directory is not a Git
         repository the step is silently skipped.  Otherwise calls
         :meth:`~beyond_local_file.git_manager.GitExcludeManager.remove_entries`
-        with a set containing ``source.name`` and reports the outcome via the
-        formatter.
+        with a set containing ``str(rel_path)`` and reports the outcome via the
+        formatter.  Using ``rel_path`` rather than ``source.name`` ensures the
+        entry matches what was written by :class:`CreateOperation` for nested
+        paths (e.g. ``.kiro/specs/foo`` instead of just ``foo``).
 
         This step is non-fatal: it always returns ``0`` regardless of outcome.
 
@@ -896,12 +1014,13 @@ class RestoreOperation:
         if not manager.is_git_repo():
             return 0
 
-        removed = manager.remove_entries({self.source.name})
+        entry_name = str(self.rel_path)
+        removed = manager.remove_entries({entry_name})
 
-        if self.source.name in removed:
-            self.formatter.git_exclude_removed(self.source.name)
+        if entry_name in removed:
+            self.formatter.git_exclude_removed(entry_name)
         else:
-            self.formatter.git_exclude_not_found(self.source.name)
+            self.formatter.git_exclude_not_found(entry_name)
 
         return 0
 
@@ -911,7 +1030,9 @@ class RestoreOperation:
         When the matched mapping has no ``subpath`` list (sync-all), the item
         is already covered and no update is needed.  When a ``subpath`` list
         exists, the item must be de-registered so that ``link sync`` and
-        ``link check`` will no longer manage it.
+        ``link check`` will no longer manage it.  The entry name is
+        ``str(rel_path)`` rather than ``source.name`` so that nested paths
+        (e.g. ``.kiro/specs/foo``) are matched correctly in the config.
 
         This step is non-fatal: failures are silently ignored so that a config
         write error does not undo the already-completed restore.
@@ -919,7 +1040,8 @@ class RestoreOperation:
         if self.context is None or self.context.matched_mapping.subpaths is None:
             return
 
+        entry_name = str(self.rel_path)
         updater = ConfigUpdater(self.context.config_path)
-        changed = updater.remove_subpath_entry(self.context.project_name, self.context.cwd, self.source.name)
+        changed = updater.remove_subpath_entry(self.context.project_name, self.context.cwd, entry_name)
         if changed:
-            self.formatter.config_entry_removed(self.source.name)
+            self.formatter.config_entry_removed(entry_name)
