@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-04
+
+### Added
+- **Add .blfrc config support** — Support loading config file path from `~/.blfrc` in the home directory. Allows specifying one or more config files (absolute, tilde, or home-relative paths), combining multiple configs with fast conflict detection. Eliminates the need to pass `--config` repeatedly and enables running `blf` from any directory.
+- **Add upgrade subcommand** — New `blf upgrade` command that auto-detects the install method (uv tool or pipx) from `sys.executable` and runs the correct upgrade command automatically. Supports `--dry-run` to preview the command without executing.
+- **Implement reverse link command** — New `blf revlink create <path>` command converts an existing file or directory in the current working directory into a managed symlink. Uses a copy-checksum-replace approach to ensure data integrity, adds the path to `.git/info/exclude`, and registers it in the config subpath list.
+- **Add revlink restore subcommand** — New `blf revlink restore <path>` is the exact inverse of `revlink create`. Dissolves a managed symlink back into a real file/directory by copying from the managed location, verifying MD5 integrity, then removing the managed copy and cleaning up `.git/info/exclude` and config subpath entries.
+
+### Changed
+- **Refactor non-CLI enums out of options.py** — Moved `SyncStatus` from `options.py` into `sync_state.py`, where it belongs alongside the copy strategy state it describes. `options.py` now exclusively contains user-facing CLI option enums, making the module's contract precise and self-documenting.
+- **Refactor `load_config_projects` return type** — Replaced the anonymous `tuple[dict, Path]` return with a named `ConfigLoadResult` dataclass. The `config_file` field now holds the resolved path to the config file itself (not its parent directory), eliminating fragile basename reconstruction at all three call sites in `cli.py`.
+
+### Usability
+- **Add CLI completion for project names** — Shell auto-completion now works for managed project names in `blf link check` and `blf link sync`. Reads available project names from the config and provides them as tab-completion candidates across bash, zsh, and fish.
+
+[0.3.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.3.0
+
 ## [0.2.2] - 2026-05-01
 
 ### Added
