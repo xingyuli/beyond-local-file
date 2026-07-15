@@ -8,7 +8,14 @@ Covers task 7.3:
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
+from beyond_local_file.model.config import Mapping
+from beyond_local_file.operations.revlink import (
+    CreateFormatter,
+    CreateOperation,
+    RestoreFormatter,
+    RestoreOperation,
+    RevlinkContext,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -28,12 +35,33 @@ def _make_git_repo(base: Path) -> Path:
     return base
 
 
+def _make_context(repo_dir: Path, config_path: Path) -> RevlinkContext:
+    """Build a minimal RevlinkContext pointing at *repo_dir* as the project root.
+
+    Args:
+        repo_dir: Path to use as ``cwd`` (the project/git root).
+        config_path: Path to a (possibly non-existent) config file.
+
+    Returns:
+        A :class:`RevlinkContext` with a stub ``matched_mapping``.
+    """
+    mapping = MagicMock(spec=Mapping)
+    mapping.subpaths = []
+    return RevlinkContext(
+        config_path=config_path,
+        project_name="project",
+        matched_mapping=mapping,
+        cwd=repo_dir,
+    )
+
+
 def _make_operation(
     source: Path,
     dest_root: Path,
     *,
     dry_run: bool = False,
     force: bool = False,
+    context: RevlinkContext | None = None,
 ) -> tuple[CreateOperation, MagicMock]:
     """Build a CreateOperation with a mock formatter.
 
@@ -42,6 +70,8 @@ def _make_operation(
         dest_root: Destination root for the operation.
         dry_run: Whether to enable dry-run mode.
         force: Whether to enable force mode.
+        context: Optional RevlinkContext; when provided the git exclude step
+            uses ``context.cwd`` as the repository root.
 
     Returns:
         Tuple of (CreateOperation, mock formatter).
@@ -54,6 +84,7 @@ def _make_operation(
         dry_run=dry_run,
         force=force,
         formatter=formatter,
+        context=context,
     )
     return op, formatter
 
@@ -75,7 +106,8 @@ class TestGitExcludeIntegration:
         source = repo_dir / "myfile.txt"
         source.write_text("hello")
 
-        op, formatter = _make_operation(source, tmp_path / "managed")
+        context = _make_context(repo_dir, tmp_path / "config.yaml")
+        op, formatter = _make_operation(source, tmp_path / "managed", context=context)
         op._git_exclude()
 
         exclude_file = repo_dir / ".git" / "info" / "exclude"
@@ -94,7 +126,9 @@ class TestGitExcludeIntegration:
         source = plain_dir / "myfile.txt"
         source.write_text("hello")
 
-        op, formatter = _make_operation(source, tmp_path / "managed")
+        # context.cwd points to a plain (non-git) directory
+        context = _make_context(plain_dir, tmp_path / "config.yaml")
+        op, formatter = _make_operation(source, tmp_path / "managed", context=context)
         result = op._git_exclude()
 
         assert result == 0
@@ -114,7 +148,8 @@ class TestGitExcludeIntegration:
         source = repo_dir / "myfile.txt"
         source.write_text("hello")
 
-        op, formatter = _make_operation(source, tmp_path / "managed")
+        context = _make_context(repo_dir, tmp_path / "config.yaml")
+        op, formatter = _make_operation(source, tmp_path / "managed", context=context)
         op._git_exclude()
 
         # File content should still contain the entry (unchanged)
@@ -127,19 +162,21 @@ class TestGitExcludeIntegration:
 
         Requirements: 6.1, 6.2, 6.3
         """
-        # In git repo
+        # In git repo — supply context so the git exclude step runs
         repo_dir = _make_git_repo(tmp_path / "repo")
         source = repo_dir / "f.txt"
         source.write_text("x")
-        op, _ = _make_operation(source, tmp_path / "managed")
+        context = _make_context(repo_dir, tmp_path / "config.yaml")
+        op, _ = _make_operation(source, tmp_path / "managed", context=context)
         assert op._git_exclude() == 0
 
-        # Not in git repo
+        # Not in git repo — supply context pointing at plain dir
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
         source2 = plain_dir / "f.txt"
         source2.write_text("x")
-        op2, _ = _make_operation(source2, tmp_path / "managed2")
+        context2 = _make_context(plain_dir, tmp_path / "config2.yaml")
+        op2, _ = _make_operation(source2, tmp_path / "managed2", context=context2)
         assert op2._git_exclude() == 0
 
 
@@ -309,3 +346,95 @@ class TestCreateFormatterDryRun:
         with patch("click.echo") as mock_echo:
             self.formatter.error("some error")
         mock_echo.assert_called_once_with("[dry-run] Error: some error")
+
+
+# ---------------------------------------------------------------------------
+# context is None — git exclude skipped silently (Requirement 3.4)
+# ---------------------------------------------------------------------------
+
+
+class TestContextNoneSkipsGitExclude:
+    """Unit tests verifying that context=None causes git exclude to be silently skipped.
+
+    When ``context`` is ``None``, both ``CreateOperation._git_exclude`` and
+    ``RestoreOperation._git_exclude`` must return ``0`` without error and
+    without writing or removing any entry in ``.git/info/exclude``.
+
+    On unfixed code, ``context is None`` does not cause an early return, but
+    both methods still return ``0`` silently because ``source.parent`` is not
+    a git repository, so ``is_git_repo()`` returns ``False``.  After the fix,
+    the methods return ``0`` immediately due to the ``context is None`` guard.
+    Either way, the externally observable result is identical: exit code 0,
+    no exclude file written or modified, no formatter calls.
+
+    Requirements: 3.4
+    """
+
+    def test_create_operation_context_none_returns_zero_without_error(self, tmp_path: Path) -> None:
+        """CreateOperation._git_exclude returns 0 without error when context is None.
+
+        Source is placed in a plain directory (no .git) so that ``is_git_repo``
+        returns ``False`` regardless of whether the ``context is None`` guard
+        is present.  This exercises the observable contract: when context is
+        None, the step always exits cleanly with code 0 and no exclude entry
+        is written.
+
+        Requirements: 3.4
+        """
+        plain_dir = tmp_path / "plain"
+        plain_dir.mkdir()
+        source = plain_dir / "myfile.txt"
+        source.write_text("hello")
+
+        formatter = MagicMock(spec=CreateFormatter)
+        op = CreateOperation(
+            source=source,
+            dest_root=tmp_path / "managed",
+            rel_path=Path("myfile.txt"),
+            dry_run=False,
+            force=False,
+            formatter=formatter,
+            context=None,  # explicitly None
+        )
+
+        result = op._git_exclude()
+
+        assert result == 0, "Expected _git_exclude to return 0 when context is None"
+        # No entry was written — exclude file should not exist
+        assert not (plain_dir / ".git").exists(), ".git dir should not be created"
+        formatter.git_exclude_added.assert_not_called()
+        formatter.git_exclude_exists.assert_not_called()
+
+    def test_restore_operation_context_none_returns_zero_without_error(self, tmp_path: Path) -> None:
+        """RestoreOperation._git_exclude returns 0 without error when context is None.
+
+        Source is placed in a plain directory (no .git) so that ``is_git_repo``
+        returns ``False`` regardless of whether the ``context is None`` guard
+        is present.  This exercises the observable contract: when context is
+        None, the step always exits cleanly with code 0 and no exclude entry
+        is removed.
+
+        Requirements: 3.4
+        """
+        plain_dir = tmp_path / "plain"
+        plain_dir.mkdir()
+        source = plain_dir / "myfile.txt"
+        source.write_text("hello")
+
+        formatter = MagicMock(spec=RestoreFormatter)
+        op = RestoreOperation(
+            source=source,
+            dest_root=tmp_path / "managed",
+            rel_path=Path("myfile.txt"),
+            dry_run=False,
+            formatter=formatter,
+            context=None,  # explicitly None
+        )
+
+        result = op._git_exclude()
+
+        assert result == 0, "Expected _git_exclude to return 0 when context is None"
+        # No entry was removed — exclude file should not exist
+        assert not (plain_dir / ".git").exists(), ".git dir should not be created"
+        formatter.git_exclude_removed.assert_not_called()
+        formatter.git_exclude_not_found.assert_not_called()

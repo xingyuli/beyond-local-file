@@ -719,15 +719,17 @@ class CreateOperation:
     def _git_exclude_preview(self) -> None:
         """Emit a dry-run preview for the git-exclude step.
 
-        Checks whether the source's parent directory is a Git repository and
-        whether the entry already exists, then reports what would happen via
+        Checks whether the project root (``context.cwd``) is a Git repository
+        and whether the entry already exists, then reports what would happen via
         the formatter — without writing anything.
 
         The entry name is ``str(self.rel_path)`` (e.g. ``.kiro/specs/foo``)
         rather than ``source.name`` so the exclude entry mirrors the full
         relative path used by ``link sync``.
         """
-        manager = GitExcludeManager(self.source.parent)
+        if self.context is None:
+            return
+        manager = GitExcludeManager(self.context.cwd)
         if not manager.is_git_repo():
             return
         existing = manager.read_entries()
@@ -741,7 +743,7 @@ class CreateOperation:
         """Add the source item to ``.git/info/exclude`` if inside a Git repository.
 
         Instantiates a :class:`~beyond_local_file.git_manager.GitExcludeManager`
-        for the source's parent directory.  If the directory is not a Git
+        for the project root (``context.cwd``).  If the directory is not a Git
         repository the step is silently skipped (Requirement 6.3).  Otherwise
         calls :meth:`~beyond_local_file.git_manager.GitExcludeManager.write_entries`
         with a set containing ``str(rel_path)`` and reports the outcome via the
@@ -758,7 +760,9 @@ class CreateOperation:
         Returns:
             Always ``0``.
         """
-        manager = GitExcludeManager(self.source.parent)
+        if self.context is None:
+            return 0
+        manager = GitExcludeManager(self.context.cwd)
 
         if not manager.is_git_repo():
             return 0
@@ -996,7 +1000,7 @@ class RestoreOperation:
         """Remove the source item from ``.git/info/exclude`` if inside a Git repository.
 
         Instantiates a :class:`~beyond_local_file.git_manager.GitExcludeManager`
-        for the source's parent directory.  If the directory is not a Git
+        for the project root (``context.cwd``).  If the directory is not a Git
         repository the step is silently skipped.  Otherwise calls
         :meth:`~beyond_local_file.git_manager.GitExcludeManager.remove_entries`
         with a set containing ``str(rel_path)`` and reports the outcome via the
@@ -1009,7 +1013,9 @@ class RestoreOperation:
         Returns:
             Always ``0``.
         """
-        manager = GitExcludeManager(self.source.parent)
+        if self.context is None:
+            return 0
+        manager = GitExcludeManager(self.context.cwd)
 
         if not manager.is_git_repo():
             return 0

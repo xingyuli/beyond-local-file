@@ -111,6 +111,19 @@ This design:
 - Avoids redundant git repo checks across multiple managers
 - Makes the precondition explicit in the contract
 
+### GitExcludeManager repo root requirement
+
+`GitExcludeManager` must always be initialised with the **repo root** — the directory that directly contains `.git/`. Passing a subdirectory will cause `is_git_repo()` to return `False` and silently skip all git exclude operations.
+
+For `SymlinkManager` and `CopyManager`, the `target_path` passed at construction is used as the repo root. This means:
+
+- If the user configures a `target` path that *is* a git repo root, git exclude operations work correctly.
+- If the user configures a `target` path that is a subdirectory inside a repo (e.g. `~/work/myrepo/src/configs`), git operations are silently skipped — this is by design. The tool does not walk upward to find the repo root.
+
+Document this to users if relevant (e.g., in README or help text for the `sync` command).
+
+For the `revlink` standalone commands, the repo root is resolved explicitly via `context.cwd` (the working directory at invocation time), which is the correct repo root for those operations.
+
 ## Adding a New CLI Command
 
 ### Standard Pattern (project-iterating commands)

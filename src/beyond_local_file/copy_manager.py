@@ -36,6 +36,12 @@ class CopyManager:
         config_dir: Directory where the config file lives (for sync state storage).
         sync_state: Persistent sync state tracker.
         git_manager: Manager for Git exclude file operations.
+
+    Note:
+        Git exclude operations require ``target_path`` to be the root of a Git
+        repository (i.e., the directory that directly contains ``.git/``).
+        If ``target_path`` is a subdirectory of a repo, ``is_git_repo()`` will
+        return ``False`` and all git exclude steps will be silently skipped.
     """
 
     def __init__(self, copy_items: list[ManagedProjectItem], target_path: Path, config_dir: Path):
@@ -43,7 +49,8 @@ class CopyManager:
 
         Args:
             copy_items: Items with ``strategy == LinkStrategy.COPY``.
-            target_path: Target directory for file copies.
+            target_path: Target directory for file copies.  Must be the root of
+                a Git repository for git exclude operations to take effect.
             config_dir: Directory where the config file lives.
         """
         self.copy_items = [i for i in copy_items if i.strategy == LinkStrategy.COPY]

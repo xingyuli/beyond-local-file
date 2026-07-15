@@ -28,6 +28,12 @@ class SymlinkManager:
         symlink_items: List of items to manage (pre-filtered by strategy).
         target_path: The target directory where symlinks should be created.
         git_manager: Manager for Git exclude file operations.
+
+    Note:
+        Git exclude operations require ``target_path`` to be the root of a Git
+        repository (i.e., the directory that directly contains ``.git/``).
+        If ``target_path`` is a subdirectory of a repo, ``is_git_repo()`` will
+        return ``False`` and all git exclude steps will be silently skipped.
     """
 
     def __init__(self, symlink_items: list[ManagedProjectItem], target_path: Path):
@@ -36,7 +42,8 @@ class SymlinkManager:
         Args:
             symlink_items: List of ManagedProjectItem instances with SYMLINK strategy.
                           Should be pre-filtered by the caller.
-            target_path: The target directory for symlinks.
+            target_path: The target directory for symlinks.  Must be the root of
+                a Git repository for git exclude operations to take effect.
         """
         self.symlink_items = symlink_items
         self.target_path = Path(target_path)

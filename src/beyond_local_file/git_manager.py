@@ -11,29 +11,32 @@ class GitExcludeManager:
     that point outside the repository.
 
     Attributes:
-        target_dir: The target directory where symlinks are created.
-        git_dir: Path to the .git directory in the target.
+        repo_root: The root of the Git repository (the directory that
+            contains the ``.git/`` folder).
+        git_dir: Path to the .git directory.
         exclude_file: Path to the .git/info/exclude file.
     """
 
     GIT_DIR = ".git"
     EXCLUDE_FILE = "info/exclude"
 
-    def __init__(self, target_dir: Path):
-        """Initialize the GitExcludeManager for a target directory.
+    def __init__(self, repo_root: Path):
+        """Initialize the GitExcludeManager for a Git repository root.
 
         Args:
-            target_dir: The directory where symlinks are being created.
+            repo_root: The root of the Git repository.  This must be the
+                directory that directly contains the ``.git/`` folder —
+                *not* a subdirectory of the repository.
         """
-        self.target_dir = Path(target_dir)
-        self.git_dir = self.target_dir / self.GIT_DIR
+        self.repo_root = Path(repo_root)
+        self.git_dir = self.repo_root / self.GIT_DIR
         self.exclude_file = self.git_dir / self.EXCLUDE_FILE
 
     def is_git_repo(self) -> bool:
-        """Check if the target directory is a Git repository.
+        """Check if the repo root is a Git repository.
 
         Returns:
-            True if the target directory contains a .git directory.
+            True if ``repo_root`` contains a ``.git`` directory.
         """
         return self.git_dir.exists() and self.git_dir.is_dir()
 

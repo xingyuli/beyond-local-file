@@ -35,6 +35,26 @@ def _make_git_repo(base: Path) -> Path:
     return base
 
 
+def _make_context(cwd: Path, tmp_path: Path) -> RevlinkContext:
+    """Build a minimal RevlinkContext using *cwd* as the project root.
+
+    Args:
+        cwd: The current working directory / project root for the context.
+        tmp_path: Temporary directory used to place the config file.
+
+    Returns:
+        A :class:`RevlinkContext` with a stub ``matched_mapping``.
+    """
+    mapping = MagicMock(spec=Mapping)
+    mapping.subpaths = []
+    return RevlinkContext(
+        config_path=tmp_path / "config.yaml",
+        project_name="project",
+        matched_mapping=mapping,
+        cwd=cwd,
+    )
+
+
 def _make_operation(  # noqa: PLR0913 -- test helper needs all six fields to build CreateOperation
     source: Path,
     dest_root: Path,
@@ -207,7 +227,8 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root.mkdir()
 
         # rel_path is the nested path — this is what the entry name must be
-        op, _formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
+        context = _make_context(repo_dir, tmp_path)
+        op, _formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
         result = op._git_exclude()
 
         assert result == 0
@@ -234,7 +255,8 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
+        context = _make_context(repo_dir, tmp_path)
+        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
         op._git_exclude()
 
         formatter.git_exclude_added.assert_called_once_with(".kiro/specs/foo")
@@ -254,7 +276,8 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
+        context = _make_context(repo_dir, tmp_path)
+        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
         op._git_exclude()
 
         formatter.git_exclude_exists.assert_called_once_with(".kiro/specs/foo")
@@ -276,7 +299,8 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
+        context = _make_context(repo_dir, tmp_path)
+        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
         op._git_exclude()
 
         # The full rel_path entry is missing, so it should be added

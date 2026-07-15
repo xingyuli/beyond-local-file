@@ -3,11 +3,15 @@
 Covers Requirements 1.5, 2.1, 2.2, 4.1, 4.5, 5.2, 5.3, 6.1.
 """
 
+import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from beyond_local_file.cli import cli
 from beyond_local_file.model.config import ConfigProject, Mapping
@@ -917,3 +921,338 @@ class TestRevlinkRestoreNestedPath:
         # Assert
         assert result.exit_code == 0, result.output
         assert not managed_copy.exists(), "managed copy at nested path should have been deleted"
+
+
+# ---------------------------------------------------------------------------
+# Git exclude — nested path bug condition
+# ---------------------------------------------------------------------------
+
+
+class TestRevlinkGitExcludeNestedPath:
+    """Bug condition exploration tests for nested path git exclude handling.
+
+    These tests surface the bug where ``_git_exclude`` and
+    ``_git_exclude_preview`` silently skip the git exclude step when the
+    source path is nested (e.g. ``docs/agent``).  The root cause is that all
+    three affected methods pass ``self.source.parent`` (an intermediate
+    subdirectory without ``.git``) to ``GitExcludeManager`` instead of
+    ``self.context.cwd`` (the project root).
+
+    All three tests are EXPECTED TO FAIL on unfixed code — failure confirms
+    the bug exists.
+
+    Requirements: 1.1, 1.2, 1.3
+    """
+
+    def _write_subpath_config(
+        self,
+        config_path: Path,
+        project_name: str,
+        target_dir: Path,
+        subpaths: list[str],
+    ) -> None:
+        """Write a selective-sync config with the given subpath list.
+
+        Args:
+            config_path: Destination path for the YAML config file.
+            project_name: The project name key.
+            target_dir: The target directory path to map to.
+            subpaths: Initial list of subpath entries.
+        """
+        subpath_yaml = "\n".join(f"    - {s}" for s in subpaths)
+        config_path.write_text(f"{project_name}:\n  target: {target_dir}\n  subpath:\n{subpath_yaml}\n")
+
+    def test_create_nested_path_git_exclude(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """``create docs/agent`` writes ``docs/agent`` to ``.git/info/exclude``.
+
+        Bug condition: ``source.parent`` is ``<cwd>/docs/`` which has no
+        ``.git``, so ``is_git_repo()`` returns ``False`` and the entry is
+        never written.
+
+        EXPECTED TO FAIL on unfixed code — the entry will NOT be present in
+        ``.git/info/exclude``.
+
+        Requirements: 1.1, 2.1
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        _make_fake_git_repo(target_dir)
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        # Use a pre-existing subpath entry so the mapping is recognised as
+        # selective-sync (subpaths is not None).  An empty YAML list parses as
+        # None (sync-all), which triggers Rule 4 before we reach the git-exclude step.
+        self._write_subpath_config(config_path, "my-project", target_dir, [".placeholder"])
+
+        # Create the nested source directory: docs/agent inside target_dir
+        source_dir = target_dir / "docs" / "agent"
+        source_dir.mkdir(parents=True)
+        (source_dir / "readme.md").write_text("agent docs")
+
+        monkeypatch.chdir(target_dir)
+
+        # Act
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "create", "docs/agent"],
+            env=isolated_home,
+        )
+
+        # Assert: command succeeds
+        assert result.exit_code == 0, result.output
+
+        # Assert: docs/agent appears in .git/info/exclude
+        # This WILL FAIL on unfixed code — the entry is not written because
+        # GitExcludeManager is called with source.parent (docs/) which has no .git
+        exclude_file = target_dir / ".git" / "info" / "exclude"
+        exclude_contents = exclude_file.read_text() if exclude_file.exists() else ""
+        assert "docs/agent" in exclude_contents, (
+            f"Expected 'docs/agent' in .git/info/exclude, but got:\n{exclude_contents!r}"
+        )
+
+    def test_create_nested_path_dry_run_git_exclude(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """``create --dry-run docs/agent`` includes a git exclude message in output.
+
+        Bug condition: ``_git_exclude_preview`` uses ``source.parent`` (the
+        ``docs/`` subdirectory) which has no ``.git``, so no git exclude
+        preview line is emitted at all.
+
+        EXPECTED TO FAIL on unfixed code — the output will contain no mention
+        of the git exclude action.
+
+        Requirements: 1.2, 2.2
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        _make_fake_git_repo(target_dir)
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        # Use a pre-existing subpath entry so the mapping is recognised as
+        # selective-sync (subpaths is not None).  An empty YAML list parses as
+        # None (sync-all), which triggers Rule 4 before we reach the git-exclude step.
+        self._write_subpath_config(config_path, "my-project", target_dir, [".placeholder"])
+
+        source_dir = target_dir / "docs" / "agent"
+        source_dir.mkdir(parents=True)
+        (source_dir / "readme.md").write_text("agent docs")
+
+        monkeypatch.chdir(target_dir)
+
+        # Act
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "create", "--dry-run", "docs/agent"],
+            env=isolated_home,
+        )
+
+        # Assert: command succeeds
+        assert result.exit_code == 0, result.output
+
+        # Assert: output contains a git exclude message
+        # This WILL FAIL on unfixed code — the preview silently skips the git
+        # exclude step because source.parent (docs/) has no .git
+        output = result.output
+        assert "exclude" in output.lower(), f"Expected git exclude message in dry-run output, but got:\n{output!r}"
+
+    def test_restore_nested_path_git_exclude(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
+        """``restore docs/agent`` removes ``docs/agent`` from ``.git/info/exclude``.
+
+        Bug condition: ``RestoreOperation._git_exclude`` uses ``source.parent``
+        (the ``docs/`` subdirectory) which has no ``.git``, so ``is_git_repo()``
+        returns ``False`` and the entry is never removed.
+
+        EXPECTED TO FAIL on unfixed code — the entry will still be present in
+        ``.git/info/exclude`` after restore.
+
+        Requirements: 1.3, 2.3
+        """
+        # Arrange
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        _make_fake_git_repo(target_dir)
+
+        managed_dir = tmp_path / "my-project"
+        managed_dir.mkdir()
+
+        config_path = tmp_path / "config.yml"
+        self._write_subpath_config(config_path, "my-project", target_dir, ["docs/agent"])
+
+        # Set up the managed copy at the full nested path
+        managed_copy = managed_dir / "docs" / "agent"
+        managed_copy.parent.mkdir(parents=True, exist_ok=True)
+        managed_copy.mkdir()
+        (managed_copy / "readme.md").write_text("agent docs")
+
+        # Set up the symlink at the nested path inside target_dir
+        symlink_dir = target_dir / "docs"
+        symlink_dir.mkdir(parents=True, exist_ok=True)
+        symlink_path = target_dir / "docs" / "agent"
+        symlink_path.symlink_to(managed_copy)
+
+        # Pre-populate .git/info/exclude with the entry
+        exclude_file = target_dir / ".git" / "info" / "exclude"
+        exclude_file.write_text("docs/agent\n")
+
+        monkeypatch.chdir(target_dir)
+
+        # Act
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(config_path), "revlink", "restore", "docs/agent"],
+            env=isolated_home,
+        )
+
+        # Assert: command succeeds
+        assert result.exit_code == 0, result.output
+
+        # Assert: docs/agent is NO LONGER in .git/info/exclude
+        # This WILL FAIL on unfixed code — the entry is not removed because
+        # GitExcludeManager is called with source.parent (docs/) which has no .git
+        exclude_contents = exclude_file.read_text() if exclude_file.exists() else ""
+        assert "docs/agent" not in exclude_contents, (
+            f"Expected 'docs/agent' to be removed from .git/info/exclude, but got:\n{exclude_contents!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Preservation property-based tests (Property 2)
+    # EXPECTED TO PASS on unfixed code — confirms baseline behavior.
+    # ------------------------------------------------------------------
+
+    @settings(max_examples=10, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(filename=st.from_regex(r"[a-zA-Z][a-zA-Z0-9_-]{0,15}", fullmatch=True))
+    def test_create_top_level_path_git_exclude_preserved(self, filename: str) -> None:
+        """``create <name>`` writes ``<name>`` to ``.git/info/exclude`` for any top-level path.
+
+        Preservation property: top-level path git exclude behavior must be
+        identical before and after the fix.  Generates valid single-component
+        filenames (no slashes, no leading dot, reasonable length) and verifies
+        that each is written into ``.git/info/exclude`` after a successful
+        ``create`` run.
+
+        **Validates: Requirements 3.1**
+
+        EXPECTED TO PASS on unfixed code — this is the preserved baseline.
+        """
+        with tempfile.TemporaryDirectory() as _base:
+            base = Path(_base)
+
+            target_dir = base / "target"
+            target_dir.mkdir()
+            _make_fake_git_repo(target_dir)
+
+            managed_dir = base / "my-project"
+            managed_dir.mkdir()
+
+            # Isolated home so .blfrc is not used
+            home_dir = base / "home"
+            home_dir.mkdir()
+            env = {"BLF_HOME": str(home_dir)}
+
+            config_path = base / "config.yml"
+            config_path.write_text(f"my-project:\n  target: {target_dir}\n  subpath:\n    - .placeholder\n")
+
+            source_file = target_dir / filename
+            source_file.write_text("content")
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(target_dir)
+                runner = CliRunner()
+                result = runner.invoke(
+                    cli,
+                    ["--config", str(config_path), "revlink", "create", filename],
+                    env=env,
+                    catch_exceptions=False,
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            assert result.exit_code == 0, f"create failed for filename={filename!r}:\n{result.output}"
+
+            exclude_file = target_dir / ".git" / "info" / "exclude"
+            exclude_contents = exclude_file.read_text() if exclude_file.exists() else ""
+            assert filename in exclude_contents, (
+                f"Expected {filename!r} in .git/info/exclude after create, but got:\n{exclude_contents!r}"
+            )
+
+    @settings(max_examples=10, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(filename=st.from_regex(r"[a-zA-Z][a-zA-Z0-9_-]{0,15}", fullmatch=True))
+    def test_restore_top_level_path_git_exclude_preserved(self, filename: str) -> None:
+        """``restore <name>`` removes ``<name>`` from ``.git/info/exclude`` for any top-level path.
+
+        Preservation property: top-level path git exclude removal behavior
+        must be identical before and after the fix.  Generates valid
+        single-component filenames and verifies that each is removed from
+        ``.git/info/exclude`` after a successful ``restore`` run.
+
+        **Validates: Requirements 3.3**
+
+        EXPECTED TO PASS on unfixed code — this is the preserved baseline.
+        """
+        with tempfile.TemporaryDirectory() as _base:
+            base = Path(_base)
+
+            target_dir = base / "target"
+            target_dir.mkdir()
+            _make_fake_git_repo(target_dir)
+
+            managed_dir = base / "my-project"
+            managed_dir.mkdir()
+
+            # Isolated home so .blfrc is not used
+            home_dir = base / "home"
+            home_dir.mkdir()
+            env = {"BLF_HOME": str(home_dir)}
+
+            config_path = base / "config.yml"
+            config_path.write_text(f"my-project:\n  target: {target_dir}\n  subpath:\n    - {filename}\n")
+
+            # Set up managed copy
+            managed_copy = managed_dir / filename
+            managed_copy.write_text("content")
+
+            # Set up symlink in target_dir pointing to managed copy
+            symlink_path = target_dir / filename
+            symlink_path.symlink_to(managed_copy)
+
+            # Pre-populate .git/info/exclude with the entry
+            exclude_file = target_dir / ".git" / "info" / "exclude"
+            exclude_file.write_text(f"{filename}\n")
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(target_dir)
+                runner = CliRunner()
+                result = runner.invoke(
+                    cli,
+                    ["--config", str(config_path), "revlink", "restore", filename],
+                    env=env,
+                    catch_exceptions=False,
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            assert result.exit_code == 0, f"restore failed for filename={filename!r}:\n{result.output}"
+
+            exclude_contents = exclude_file.read_text() if exclude_file.exists() else ""
+            assert filename not in exclude_contents, (
+                f"Expected {filename!r} to be removed from .git/info/exclude after restore, "
+                f"but it is still present:\n{exclude_contents!r}"
+            )
