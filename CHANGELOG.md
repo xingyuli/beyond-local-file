@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-16
+
+### Fixed
+- **Fix revlink git exclude skipped for nested paths** — `blf revlink create` and `blf revlink restore` now correctly write and remove `.git/info/exclude` entries for nested paths (e.g. `docs/agent`). Previously, only top-level paths triggered the exclude step; nested paths were silently skipped because `GitExcludeManager` was instantiated with the path's immediate parent instead of the project root. Dry-run preview (`--dry-run`) was also affected and now correctly reports the git exclude action for nested paths.
+- **Preserve comments and blank lines in `.git/info/exclude`** — `GitExcludeManager` now appends new entries to the exclude file rather than rewriting it from scratch. Existing comments, blank lines, and custom ordering are preserved verbatim on both `write_entries` and `remove_entries`. Previously, every write operation silently discarded any comments or non-entry lines present in the file.
+
+[0.3.1]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.3.1
+
 ## [0.3.0] - 2026-07-04
 
 ### Added
