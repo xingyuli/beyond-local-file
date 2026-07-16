@@ -201,6 +201,12 @@ class CopyManager:
         return LinkCheckResult(
             exists=in_sync_list + manually_synced_list,
             missing=missing_list,
+            # incorrect is intentionally left empty for copy strategy.
+            # Copy drift (managed_changed, target_changed, both_changed) is fully
+            # captured in CopyCheckDetails and surfaced by the copy-specific formatters.
+            # Populating incorrect would be redundant and would trigger the symlink-flavoured
+            # "points to wrong source" message in the verbose formatter, which is misleading
+            # for file copies.
             details=details,
         )
 
