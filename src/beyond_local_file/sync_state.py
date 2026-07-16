@@ -23,7 +23,6 @@ class SyncStatus(StrEnum):
         MANAGED_CHANGED: Only the managed (source) file changed since last sync.
         TARGET_CHANGED: Only the target file changed since last sync.
         BOTH_CHANGED: Both files changed — conflict.
-        UNKNOWN: No previous sync state recorded.
     """
 
     IN_SYNC = "in_sync"
@@ -31,7 +30,6 @@ class SyncStatus(StrEnum):
     MANAGED_CHANGED = "managed_changed"
     TARGET_CHANGED = "target_changed"
     BOTH_CHANGED = "both_changed"
-    UNKNOWN = "unknown"
 
 
 STATE_DIR = ".blf"
