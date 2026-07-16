@@ -55,7 +55,8 @@ class GitExcludeManager:
     def write_entries(self, entries: set[str]) -> tuple[int, set[str]]:
         """Write entries to the exclude file.
 
-        Adds new entries to the exclude file while preserving existing ones.
+        Appends new entries to the exclude file without modifying existing lines.
+        Comments, blank lines, and custom ordering in the file are preserved.
 
         Args:
             entries: Set of entry names to add to the exclude file.
@@ -66,16 +67,21 @@ class GitExcludeManager:
         self.exclude_file.parent.mkdir(parents=True, exist_ok=True)
 
         existing_entries = self.read_entries()
-        new_entries = existing_entries | entries
-        added_entries = entries - existing_entries
+        new_entries = entries - existing_entries
         already_existing = entries & existing_entries
 
-        self.exclude_file.write_text("\n".join(sorted(new_entries)) + "\n")
+        if new_entries:
+            with open(self.exclude_file, "a") as f:
+                for entry in sorted(new_entries):
+                    f.write(entry + "\n")
 
-        return len(added_entries), already_existing
+        return len(new_entries), already_existing
 
     def remove_entries(self, entries: set[str]) -> set[str]:
         """Remove entries from the exclude file.
+
+        Removes only the matching entry lines; all other lines (comments, blanks,
+        unrelated entries) are preserved verbatim.
 
         Args:
             entries: Set of entry names to remove.
@@ -86,9 +92,16 @@ class GitExcludeManager:
         if not self.exclude_file.exists():
             return set()
 
-        current_entries = self.read_entries()
-        remaining = current_entries - entries
+        removed: set[str] = set()
+        kept_lines: list[str] = []
 
-        self.exclude_file.write_text("\n".join(sorted(remaining)) + "\n")
+        for line in self.exclude_file.read_text().splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped in entries:
+                removed.add(stripped)
+            else:
+                kept_lines.append(line)
 
-        return current_entries & entries
+        self.exclude_file.write_text("".join(kept_lines))
+
+        return removed
