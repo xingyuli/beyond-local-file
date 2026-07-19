@@ -190,9 +190,15 @@ class LinkStrategyManager(Protocol):
     All link strategy managers must implement this interface to provide
     uniform operations for creating, checking, and managing links.
 
-    This protocol defines two groups of operations:
+    This protocol defines three groups of operations:
     1. Link operations: create_links() and check_links()
-    2. Git exclude operations: add_git_excludes() and check_git_excludes()
+    2. Git repo detection: is_git_repo()
+    3. Git exclude operations: add_git_excludes() and check_git_excludes()
+
+    Git exclude methods return ``None`` when the target directory is not inside
+    a git repository.  Callers may use ``is_git_repo()`` to branch on repo
+    presence when they need to vary behaviour beyond just handling ``None``
+    results (e.g. producing different formatter output).
     """
 
     def get_managed_items(self) -> list:
@@ -219,30 +225,38 @@ class LinkStrategyManager(Protocol):
         """
         ...
 
-    def add_git_excludes(self) -> GitExcludeAddResult:
-        """Add git exclude entries for all managed items (protocol method).
-
-        PRECONDITION: This method is guaranteed to be called only when the target
-        directory is inside a git repository. Callers must check git repo status
-        before invoking this method.
+    def is_git_repo(self) -> bool:
+        """Return whether the target directory is inside a git repository.
 
         Returns:
-            GitExcludeAddResult with added count and existing entries.
+            True if the target is a git repository root, False otherwise.
         """
         ...
 
-    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
-        """Check git exclude status for managed items (protocol method).
+    def add_git_excludes(self) -> GitExcludeAddResult | None:
+        """Add git exclude entries for all managed items.
 
-        PRECONDITION: This method is guaranteed to be called only when the target
-        directory is inside a git repository. Callers must check git repo status
-        before invoking this method.
+        Returns ``None`` when the target directory is not inside a git
+        repository; no entries are written in that case.
+
+        Returns:
+            GitExcludeAddResult with added count and existing entries, or
+            ``None`` if the target is not a git repository.
+        """
+        ...
+
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult | None:
+        """Check git exclude status for managed items.
+
+        Returns ``None`` when the target directory is not inside a git
+        repository.
 
         Args:
             all_valid_entries: Set of ALL valid entry names from all managers.
                              Used to identify extra/stale entries.
 
         Returns:
-            GitExcludeCheckResult with present, missing, extra entries.
+            GitExcludeCheckResult with present, missing, extra entries, or
+            ``None`` if the target is not a git repository.
         """
         ...

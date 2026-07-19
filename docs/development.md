@@ -248,18 +248,20 @@ class HardlinkManager:
 - `get_managed_items()` — Return list of managed items
 - `create_links()` — Create links, return `LinkCreateResult`
 - `check_links()` — Check status, return `LinkCheckResult`
-- `add_git_excludes()` — Add git excludes, return `GitExcludeAddResult`
-- `check_git_excludes(all_valid_entries)` — Check git excludes, return `GitExcludeCheckResult`
+- `add_git_excludes()` — Add git excludes, return `GitExcludeAddResult | None`
+- `check_git_excludes(all_valid_entries)` — Check git excludes, return `GitExcludeCheckResult | None`
+- `is_git_repo()` — Return whether the target is a git repository root
 
 **Progress Tracking:**
 - Initialize `OperationProgress` with `total_items`
 - Increment `completed_items` as work progresses
 - Set `aborted=True` if user interrupts
 
-**Git Repo Precondition:**
-- Operations check `git_manager.is_git_repo()` before calling git exclude methods
-- Managers document this as PRECONDITION in docstrings
-- Managers assume git repo exists when git methods are called
+**Git Repo Contract:**
+- `add_git_excludes()` and `check_git_excludes()` return `None` when the target is not a git repository — no guards needed at call sites
+- `is_git_repo()` is available on the protocol for callers that need to branch on repo presence (e.g. formatters printing "Target is not a git repository")
+- Managers implement `is_git_repo()` by delegating to their internal `git_manager`
+- `git_manager` is an internal implementation detail of each manager — not part of the protocol surface
 
 **Result Types:**
 - All result types come from `link_strategy_protocol.py`

@@ -161,9 +161,7 @@ class SyncOperation(CmdOperation):
             manager = SymlinkManager(symlink_items, unit.target_project_path)
             link_result = manager.create_links(self.ask_callback)
 
-            git_result = None
-            if manager.git_manager.is_git_repo():
-                git_result = manager.add_git_excludes()
+            git_result = manager.add_git_excludes()
 
             LinkSyncFormatter(unit.managed_project_path, link_result, git_result).print(unit.target_project_path)
 
@@ -174,9 +172,7 @@ class SyncOperation(CmdOperation):
             copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir)
             link_result = copy_mgr.create_links(self.conflict_callback)
 
-            git_result = None
-            if copy_mgr.git_manager.is_git_repo():
-                git_result = copy_mgr.add_git_excludes()
+            git_result = copy_mgr.add_git_excludes()
 
             LinkSyncFormatter(unit.managed_project_path, link_result, git_result).print(unit.target_project_path)
 

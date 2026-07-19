@@ -132,16 +132,27 @@ class SymlinkManager:
 
         return result
 
-    def add_git_excludes(self) -> GitExcludeAddResult:
-        """Add git exclude entries for all managed items (protocol method).
-
-        PRECONDITION: This method is guaranteed to be called only when the target
-        directory is inside a git repository. Callers must check git repo status
-        before invoking this method.
+    def is_git_repo(self) -> bool:
+        """Return whether the target directory is inside a git repository.
 
         Returns:
-            GitExcludeAddResult with added count, existing entries, and progress tracking.
+            True if the target is a git repository root, False otherwise.
         """
+        return self.git_manager.is_git_repo()
+
+    def add_git_excludes(self) -> GitExcludeAddResult | None:
+        """Add git exclude entries for all managed items.
+
+        Returns ``None`` when the target directory is not inside a git
+        repository; no entries are written in that case.
+
+        Returns:
+            GitExcludeAddResult with added count, existing entries, and progress
+            tracking, or ``None`` if the target is not a git repository.
+        """
+        if not self.git_manager.is_git_repo():
+            return None
+
         item_names = {i.name for i in self.symlink_items}
         result = GitExcludeAddResult(progress=OperationProgress(total_items=len(item_names)))
 
@@ -153,20 +164,23 @@ class SymlinkManager:
 
         return result
 
-    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
-        """Check git exclude status for managed items (protocol method).
+    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult | None:
+        """Check git exclude status for managed items.
 
-        PRECONDITION: This method is guaranteed to be called only when the target
-        directory is inside a git repository. Callers must check git repo status
-        before invoking this method.
+        Returns ``None`` when the target directory is not inside a git
+        repository.
 
         Args:
             all_valid_entries: Set of ALL valid entry names from all managers.
                              Used to identify extra/stale entries.
 
         Returns:
-            GitExcludeCheckResult with present, missing, extra entries.
+            GitExcludeCheckResult with present, missing, extra entries, or
+            ``None`` if the target is not a git repository.
         """
+        if not self.git_manager.is_git_repo():
+            return None
+
         result = GitExcludeCheckResult()
 
         exclude_entries = self.git_manager.read_entries()

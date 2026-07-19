@@ -464,16 +464,14 @@ class CheckOperation(CmdOperation):
         """
         if symlink_mgr:
             link_result = symlink_mgr.check_links()
-            git_result = (
-                symlink_mgr.check_git_excludes(all_valid_entries) if symlink_mgr.git_manager.is_git_repo() else None
-            )
+            git_result = symlink_mgr.check_git_excludes(all_valid_entries)
             LinkCheckFormatter(link_result, git_result, self.show_extra).print(
                 unit.display_name, unit.target_project_path
             )
 
         if copy_mgr:
             link_result = copy_mgr.check_links()
-            git_result = copy_mgr.check_git_excludes(all_valid_entries) if copy_mgr.git_manager.is_git_repo() else None
+            git_result = copy_mgr.check_git_excludes(all_valid_entries)
             LinkCheckFormatter(link_result, git_result, self.show_extra).print(
                 unit.display_name, unit.target_project_path
             )
@@ -497,15 +495,13 @@ class CheckOperation(CmdOperation):
         symlink_git_result = None
         if symlink_mgr:
             symlink_link_result = symlink_mgr.check_links()
-            if symlink_mgr.git_manager.is_git_repo():
-                symlink_git_result = symlink_mgr.check_git_excludes(all_valid_entries)
+            symlink_git_result = symlink_mgr.check_git_excludes(all_valid_entries)
 
         copy_link_result = None
         copy_git_result = None
         if copy_mgr:
             copy_link_result = copy_mgr.check_links()
-            if copy_mgr.git_manager.is_git_repo():
-                copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
+            copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
 
         self._results.append(
             ProcessingUnitResults(

@@ -110,6 +110,7 @@ def test_symlink_manager_implements_protocol(
     assert hasattr(manager, "get_managed_items")
     assert hasattr(manager, "create_links")
     assert hasattr(manager, "check_links")
+    assert hasattr(manager, "is_git_repo")
     assert hasattr(manager, "add_git_excludes")
     assert hasattr(manager, "check_git_excludes")
 
@@ -117,6 +118,7 @@ def test_symlink_manager_implements_protocol(
     assert callable(manager.get_managed_items)
     assert callable(manager.create_links)
     assert callable(manager.check_links)
+    assert callable(manager.is_git_repo)
     assert callable(manager.add_git_excludes)
     assert callable(manager.check_git_excludes)
 
@@ -147,6 +149,7 @@ def test_copy_manager_implements_protocol(
     assert hasattr(manager, "get_managed_items")
     assert hasattr(manager, "create_links")
     assert hasattr(manager, "check_links")
+    assert hasattr(manager, "is_git_repo")
     assert hasattr(manager, "add_git_excludes")
     assert hasattr(manager, "check_git_excludes")
 
@@ -154,8 +157,14 @@ def test_copy_manager_implements_protocol(
     assert callable(manager.get_managed_items)
     assert callable(manager.create_links)
     assert callable(manager.check_links)
+    assert callable(manager.is_git_repo)
     assert callable(manager.add_git_excludes)
     assert callable(manager.check_git_excludes)
+
+
+def test_protocol_defines_is_git_repo_method() -> None:
+    """Test that the protocol defines is_git_repo method."""
+    assert hasattr(LinkStrategyManager, "is_git_repo")
 
 
 def test_protocol_methods_return_unified_types(
@@ -164,9 +173,11 @@ def test_protocol_methods_return_unified_types(
 ) -> None:
     """Test that protocol methods return unified result types.
 
+    Uses a non-git target directory — git methods must return None.
+
     Args:
         sample_items: Sample managed project items fixture.
-        temp_target_dir: Temporary target directory fixture.
+        temp_target_dir: Temporary target directory (not a git repo).
     """
     manager = SymlinkManager(sample_items, temp_target_dir)
 
@@ -193,13 +204,39 @@ def test_protocol_methods_return_unified_types(
     assert hasattr(check_result, "incorrect")
     assert hasattr(check_result, "details")
 
-    # Test add_git_excludes returns GitExcludeAddResult
+    # is_git_repo must return False for a plain temp directory
+    assert manager.is_git_repo() is False
+
+    # git methods return None when target is not a git repo
+    assert manager.add_git_excludes() is None
+    assert manager.check_git_excludes({"file1.txt"}) is None
+
+
+def test_protocol_git_methods_return_results_in_git_repo(
+    sample_items: list[ManagedProjectItem],
+    tmp_path: Path,
+) -> None:
+    """Test that git methods return result types when target is a git repo.
+
+    Args:
+        sample_items: Sample managed project items fixture.
+        tmp_path: Pytest temporary directory (used as git repo root).
+    """
+    import subprocess  # noqa: PLC0415 -- local import for test setup only
+
+    git_root = tmp_path / "git_target"
+    git_root.mkdir()
+    subprocess.run(["git", "init", str(git_root)], check=True, capture_output=True)
+
+    manager = SymlinkManager(sample_items, git_root)
+
+    assert manager.is_git_repo() is True
+
     git_add_result = manager.add_git_excludes()
     assert isinstance(git_add_result, GitExcludeAddResult)
     assert hasattr(git_add_result, "added")
     assert hasattr(git_add_result, "existing")
 
-    # Test check_git_excludes returns GitExcludeCheckResult
     git_check_result = manager.check_git_excludes({"file1.txt"})
     assert isinstance(git_check_result, GitExcludeCheckResult)
     assert hasattr(git_check_result, "present")
