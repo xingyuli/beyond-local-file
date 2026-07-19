@@ -2,8 +2,14 @@
 
 This module translates configuration models (reflecting YAML structure)
 into processing units (reflecting execution structure).
+
+The public entry point is :func:`translate_config_to_processing`.  Filesystem
+I/O is isolated behind the ``item_loader`` seam so the translation logic (M x N
+expansion, display-name generation) can be exercised in tests without touching
+the disk.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +20,70 @@ from .processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 
 # Padding threshold for display names
 _PADDING_THRESHOLD = 10
+
+
+def _load_items(
+    managed_project_path: Path,
+    subpaths: list[str] | None,
+    copy_paths: set[str] | None,
+) -> list[ManagedProjectItem]:
+    """Load project items based on subpaths configuration.
+
+    This is the default filesystem adapter used by
+    :func:`translate_config_to_processing`.  Pass a custom callable via the
+    ``item_loader`` parameter to substitute a different implementation (e.g.
+    an in-memory stub in tests).
+
+    Args:
+        managed_project_path: Path to the managed project directory.
+        subpaths: Optional list of relative subpaths to sync.
+        copy_paths: Optional set of subpath names that use copy strategy.
+
+    Returns:
+        List of ManagedProjectItem instances. Empty list if no items found.
+
+    Raises:
+        ValueError: If copy strategy is used on a directory.
+    """
+    # No subpaths: expand all files/directories as symlinks
+    if subpaths is None:
+        items: list[ManagedProjectItem] = []
+        if managed_project_path.exists() and managed_project_path.is_dir():
+            for item_path in managed_project_path.iterdir():
+                items.append(
+                    ManagedProjectItem(
+                        name=item_path.name,
+                        path=item_path,
+                        strategy=LinkStrategy.SYMLINK,
+                    )
+                )
+        return items
+
+    # Subpaths specified: create items for each valid subpath
+    copy_set = copy_paths or set()
+    items_list: list[ManagedProjectItem] = []
+
+    for subpath in subpaths:
+        source_path = managed_project_path / subpath
+        if source_path.exists():
+            strategy = LinkStrategy.COPY if subpath in copy_set else LinkStrategy.SYMLINK
+
+            # Validate: copy strategy only for files
+            if strategy == LinkStrategy.COPY and source_path.is_dir():
+                raise ValueError(f"Copy strategy is not supported for directories: {subpath}")
+
+            items_list.append(
+                ManagedProjectItem(
+                    name=subpath,
+                    path=source_path,
+                    strategy=strategy,
+                )
+            )
+
+    return items_list
+
+
+type ItemLoader = Callable[[Path, list[str] | None, set[str] | None], list[ManagedProjectItem]]
 
 
 @dataclass
@@ -32,6 +102,8 @@ class _DisplayNameContext:
 
 def translate_config_to_processing(
     config_projects: dict[str, ConfigProject],
+    *,
+    item_loader: ItemLoader = _load_items,
 ) -> list[ProcessingUnit]:
     """Translate config model to processing units.
 
@@ -40,7 +112,7 @@ def translate_config_to_processing(
       - For each mapping, iterate through its targets (target_index = 0, 1, 2, ...)
       - Create one ProcessingUnit per (mapping, target) combination
       - Compute display_name based on total mappings and targets per mapping
-      - Load items based on mapping's subpaths (None if no subpath, list if subpath specified)
+      - Load items via ``item_loader`` based on mapping's subpaths
 
     Display name logic:
       - If total processing units == 1: use project name as-is
@@ -50,12 +122,16 @@ def translate_config_to_processing(
       - Use zero-padding when any index >= 10 (e.g., #01, #01-01)
 
     Items loading:
-      - If mapping has no subpaths: expand all files/directories as symlinks
-      - If mapping has subpaths: load only specified items with their strategies
-      - Empty managed projects are reported and skipped
+      - Delegated to ``item_loader`` — the default is :func:`_load_items` which
+        reads from the filesystem.  Pass a custom callable in tests to exercise
+        display-name and mapping-expansion logic without touching the disk.
+      - Units whose item list is empty are skipped with an informational message.
 
     Args:
         config_projects: Dictionary of project name to ConfigProject.
+        item_loader: Callable that accepts ``(managed_project_path, subpaths,
+            copy_paths)`` and returns the list of items for that mapping.
+            Defaults to :func:`_load_items` (real filesystem walk).
 
     Returns:
         List of ProcessingUnit instances ready for execution.
@@ -95,11 +171,11 @@ def translate_config_to_processing(
                 )
                 display_name = _compute_display_name(ctx)
 
-                # Load items based on subpaths
-                items = _load_items(
-                    managed_project_path=config_project.managed_project_path,
-                    subpaths=mapping.subpaths,
-                    copy_paths=mapping.copy_paths,
+                # Load items via the injected loader
+                items = item_loader(
+                    config_project.managed_project_path,
+                    mapping.subpaths,
+                    mapping.copy_paths,
                 )
 
                 # Skip if no items found (empty managed project)
@@ -158,59 +234,3 @@ def _compute_display_name(ctx: _DisplayNameContext) -> str:
 
     # Single target in mapping: use only mapping index
     return f"{ctx.project_name}#{mapping_str}"
-
-
-def _load_items(
-    managed_project_path: Path,
-    subpaths: list[str] | None,
-    copy_paths: set[str] | None,
-) -> list[ManagedProjectItem]:
-    """Load project items based on subpaths configuration.
-
-    Args:
-        managed_project_path: Path to the managed project directory.
-        subpaths: Optional list of relative subpaths to sync.
-        copy_paths: Optional set of subpath names that use copy strategy.
-
-    Returns:
-        List of ManagedProjectItem instances. Empty list if no items found.
-
-    Raises:
-        ValueError: If copy strategy is used on a directory.
-    """
-    # No subpaths: expand all files/directories as symlinks
-    if subpaths is None:
-        items: list[ManagedProjectItem] = []
-        if managed_project_path.exists() and managed_project_path.is_dir():
-            for item_path in managed_project_path.iterdir():
-                items.append(
-                    ManagedProjectItem(
-                        name=item_path.name,
-                        path=item_path,
-                        strategy=LinkStrategy.SYMLINK,
-                    )
-                )
-        return items
-
-    # Subpaths specified: create items for each valid subpath
-    copy_set = copy_paths or set()
-    items: list[ManagedProjectItem] = []
-
-    for subpath in subpaths:
-        source_path = managed_project_path / subpath
-        if source_path.exists():
-            strategy = LinkStrategy.COPY if subpath in copy_set else LinkStrategy.SYMLINK
-
-            # Validate: copy strategy only for files
-            if strategy == LinkStrategy.COPY and source_path.is_dir():
-                raise ValueError(f"Copy strategy is not supported for directories: {subpath}")
-
-            items.append(
-                ManagedProjectItem(
-                    name=subpath,
-                    path=source_path,
-                    strategy=strategy,
-                )
-            )
-
-    return items
