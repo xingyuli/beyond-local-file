@@ -290,6 +290,8 @@ class ConfigUpdater:
         self._config_path = config_path
         self._yaml = YAML()
         self._yaml.preserve_quotes = True
+        # Prevent ruamel.yaml from line-wrapping long path values (default is 80).
+        self._yaml.width = 4096
 
     def add_subpath_entry(
         self,
@@ -299,9 +301,10 @@ class ConfigUpdater:
     ) -> bool:
         """Add *entry_name* to the subpath list of the mapping that targets *cwd*.
 
-        Loads the raw YAML while preserving comments and formatting, locates
-        the correct mapping for *project_name* and *cwd*, appends *entry_name*
-        to its ``subpath`` list, and writes the file back in-place.
+        Locates the correct mapping for *project_name* and *cwd*, then inserts
+        *entry_name* immediately after the last existing subpath item using a
+        raw text splice.  This preserves the original indentation and all other
+        content in the file exactly — no re-indentation or formatting changes.
 
         Does nothing and returns ``False`` when:
 
@@ -325,14 +328,58 @@ class ConfigUpdater:
         if project_value is None:
             return False
 
-        changed = self._patch_value(project_value, cwd, entry_name)
-        if changed:
-            with self._config_path.open("w") as fh:
-                self._yaml.dump(data, fh)
-        return changed
+        insert_line = self._find_insert_line(project_value, cwd, entry_name)
+        if insert_line is None:
+            return False
 
-    def _patch_value(self, value: str | CommentedMap | CommentedSeq, cwd: Path, entry_name: str) -> bool:
-        """Mutate *value* in-place to add *entry_name* to the right subpath list.
+        source_lines = self._config_path.read_text().splitlines(keepends=True)
+
+        if insert_line < 0:
+            # Empty subpath list: find the ``subpath:`` key line and replace it
+            # with a block sequence containing the new entry.
+            # insert_line encodes the key's 0-based line as -(line + 1).
+            key_line_idx = -(insert_line + 1)
+            key_line = source_lines[key_line_idx]
+            key_indent = len(key_line) - len(key_line.lstrip())
+            item_indent = key_indent + 2
+            source_lines[key_line_idx] = " " * key_indent + "subpath:\n"
+            source_lines.insert(key_line_idx + 1, " " * item_indent + f"- {entry_name}\n")
+            self._config_path.write_text("".join(source_lines))
+            return True
+
+        last_item_line = source_lines[insert_line]
+        indent = len(last_item_line) - len(last_item_line.lstrip())
+        new_line = " " * indent + f"- {entry_name}\n"
+        source_lines.insert(insert_line + 1, new_line)
+        # Remove any blank lines that were between the old last item and the
+        # next content — they now sit between the new item and the next
+        # content, which is unexpected.  A blank line at this position only
+        # arises when the original file had one as a section separator; in
+        # that case the blank line belongs *after* the new item, not before
+        # the next section, so we leave it.  But a trailing blank line at EOF
+        # (nothing follows) must be removed to avoid an orphaned blank line.
+        new_item_pos = insert_line + 1
+        end = new_item_pos + 1
+        while end < len(source_lines) and source_lines[end].strip() == "":
+            end += 1
+        # Only strip blanks when they run all the way to EOF.
+        if end == len(source_lines):
+            del source_lines[new_item_pos + 1 : end]
+        self._config_path.write_text("".join(source_lines))
+        return True
+
+    def _find_insert_line(
+        self,
+        value: str | CommentedMap | CommentedSeq,
+        cwd: Path,
+        entry_name: str,
+    ) -> int | None:
+        """Return the 0-based source line of the last subpath item to insert after.
+
+        Uses ``seq.lc.data[last_idx][0]`` (ruamel.yaml's line/column tracking)
+        to locate the exact source line of the last item.  Returns ``None``
+        when no insertion is needed (no subpath key, already present, or
+        no matching target).
 
         Args:
             value: Raw YAML value for the project (string, dict, or list).
@@ -340,14 +387,13 @@ class ConfigUpdater:
             entry_name: Subpath entry to add.
 
         Returns:
-            ``True`` if a subpath list was found and updated.
+            0-based line index to insert after, or ``None`` if no change needed.
         """
         if isinstance(value, str):
-            # String mapping — syncs everything, nothing to do.
-            return False
+            return None
 
         if isinstance(value, dict) and _KEY_TARGET in value:
-            return self._patch_dict_mapping(value, entry_name)
+            return self._insert_line_for_mapping(value, entry_name)
 
         if isinstance(value, list):
             for item in value:
@@ -356,35 +402,44 @@ class ConfigUpdater:
                     if isinstance(targets, str):
                         targets = [targets]
                     if any(Path(t).resolve() == cwd for t in targets):
-                        return self._patch_dict_mapping(item, entry_name)
-            # List of string mappings — syncs everything, nothing to do.
-            return False
+                        return self._insert_line_for_mapping(item, entry_name)
+            return None
 
-        return False
+        return None
 
-    def _patch_dict_mapping(self, mapping: CommentedMap, entry_name: str) -> bool:
-        """Add *entry_name* to the ``subpath`` list of *mapping* if one exists.
+    def _insert_line_for_mapping(self, mapping: CommentedMap, entry_name: str) -> int | None:
+        """Return the 0-based source line of the last subpath item in *mapping*.
+
+        Returns ``None`` when the mapping has no subpath key or *entry_name*
+        is already present.
+
+        PRECONDITION: ``mapping`` is a ``CommentedMap`` from a ruamel.yaml
+        round-trip load, so ``lc`` line/column data is available.
 
         Args:
             mapping: A dict-mapping node from the round-trip YAML parse.
             entry_name: Subpath entry to add.
 
         Returns:
-            ``True`` if the subpath list was updated, ``False`` otherwise.
+            0-based line index of the last subpath item, or ``None``.
         """
         if _KEY_SUBPATH not in mapping:
-            # No subpath key — mapping syncs everything, nothing to do.
-            return False
+            return None
 
         subpath_list = mapping[_KEY_SUBPATH]
-
-        # Collect existing plain-string entries and path-dict entries.
+        if not subpath_list:
+            # Empty subpath list: return the 0-based line of the subpath key
+            # encoded as a negative value -(line + 1) so the caller can
+            # rewrite the inline ``subpath: []`` form to a block sequence.
+            key_line = mapping.lc.value(_KEY_SUBPATH)[0]
+            return -(key_line + 1)
         existing = {e if isinstance(e, str) else e.get("path", "") for e in subpath_list}
         if entry_name in existing:
-            return False
+            return None
 
-        subpath_list.append(entry_name)
-        return True
+        last_idx = len(subpath_list) - 1
+        # lc.data[i] is (line, col, ...) — 0-based line in the source file.
+        return subpath_list.lc.data[last_idx][0]
 
     def remove_subpath_entry(
         self,
@@ -394,9 +449,10 @@ class ConfigUpdater:
     ) -> bool:
         """Remove *entry_name* from the subpath list of the mapping that targets *cwd*.
 
-        Loads the raw YAML while preserving comments and formatting, locates
-        the correct mapping for *project_name* and *cwd*, removes *entry_name*
-        from its ``subpath`` list, and writes the file back in-place.
+        Locates the correct mapping for *project_name* and *cwd*, then deletes
+        the source line(s) for *entry_name* using a raw text splice.  This
+        preserves the original indentation and all other content in the file
+        exactly — no re-indentation or blank-line loss.
 
         Does nothing and returns ``False`` when:
 
@@ -404,9 +460,9 @@ class ConfigUpdater:
           needed).
         - *entry_name* is not present in the subpath list.
 
-        When the subpath list becomes empty after removal, the empty list is
-        left in place — removing the ``subpath`` key entirely would change the
-        mapping semantics from selective sync to sync-all.
+        When the subpath list becomes empty after removal, the block sequence
+        is replaced with an inline ``subpath: []`` to preserve selective-sync
+        semantics without removing the key.
 
         Args:
             project_name: The project key as it appears in the config file.
@@ -424,14 +480,48 @@ class ConfigUpdater:
         if project_value is None:
             return False
 
-        changed = self._unpatch_value(project_value, cwd, entry_name)
-        if changed:
-            with self._config_path.open("w") as fh:
-                self._yaml.dump(data, fh)
-        return changed
+        removal = self._find_removal_lines(project_value, cwd, entry_name)
+        if removal is None:
+            return False
 
-    def _unpatch_value(self, value: str | CommentedMap | CommentedSeq, cwd: Path, entry_name: str) -> bool:
-        """Mutate *value* in-place to remove *entry_name* from the right subpath list.
+        delete_start, delete_end, becomes_empty, key_indent, key_line_0based = removal
+        source_lines = self._config_path.read_text().splitlines(keepends=True)
+
+        if becomes_empty:
+            # Replace the ``subpath:`` key line AND the sole item line(s) with
+            # ``subpath: []``.  key_line_0based is the 0-based index of the
+            # ``subpath:`` key line, which is always one or more lines before
+            # delete_start.
+            source_lines[key_line_0based:delete_end] = [" " * key_indent + "subpath: []\n"]
+        else:
+            del source_lines[delete_start:delete_end]
+
+        self._config_path.write_text("".join(source_lines))
+        return True
+
+    def _find_removal_lines(
+        self,
+        value: str | CommentedMap | CommentedSeq,
+        cwd: Path,
+        entry_name: str,
+    ) -> tuple[int, int, bool, int, int] | None:
+        """Locate the source line range to delete for *entry_name*.
+
+        Returns a 5-tuple ``(delete_start, delete_end, becomes_empty,
+        key_indent, key_line_0based)`` where:
+
+        - ``delete_start``: 0-based index of the first line to delete
+          (inclusive).
+        - ``delete_end``: 0-based index of the line after the last line to
+          delete (exclusive).
+        - ``becomes_empty``: ``True`` when removing this entry empties the
+          subpath list; the caller should replace ``source_lines[key_line_0based
+          :delete_end]`` with ``subpath: []``.
+        - ``key_indent``: number of leading spaces on the ``subpath:`` key
+          line; used to reconstruct ``subpath: []`` at the right depth.
+        - ``key_line_0based``: 0-based line index of the ``subpath:`` key.
+
+        Returns ``None`` when no removal is needed.
 
         Args:
             value: Raw YAML value for the project (string, dict, or list).
@@ -439,14 +529,14 @@ class ConfigUpdater:
             entry_name: Subpath entry to remove.
 
         Returns:
-            ``True`` if a subpath list was found and updated.
+            ``(delete_start, delete_end, becomes_empty, key_indent,
+            key_line_0based)`` or ``None``.
         """
         if isinstance(value, str):
-            # String mapping — syncs everything, nothing to do.
-            return False
+            return None
 
         if isinstance(value, dict) and _KEY_TARGET in value:
-            return self._unpatch_dict_mapping(value, entry_name)
+            return self._removal_lines_for_mapping(value, entry_name)
 
         if isinstance(value, list):
             for item in value:
@@ -455,36 +545,46 @@ class ConfigUpdater:
                     if isinstance(targets, str):
                         targets = [targets]
                     if any(Path(t).resolve() == cwd for t in targets):
-                        return self._unpatch_dict_mapping(item, entry_name)
-            # List of string mappings — syncs everything, nothing to do.
-            return False
+                        return self._removal_lines_for_mapping(item, entry_name)
+            return None
 
-        return False
+        return None
 
-    def _unpatch_dict_mapping(self, mapping: CommentedMap, entry_name: str) -> bool:
-        """Remove *entry_name* from the ``subpath`` list of *mapping* if present.
+    def _removal_lines_for_mapping(
+        self,
+        mapping: CommentedMap,
+        entry_name: str,
+    ) -> tuple[int, int, bool, int, int] | None:
+        """Return removal line range for *entry_name* inside *mapping*.
 
-        When the subpath list becomes empty after removal, the empty list is
-        left in place to preserve selective-sync semantics.
+        Uses ``subpath_list.lc.data[i]`` (ruamel.yaml's line/column tracking)
+        to locate the exact source lines of each entry.
+
+        For a plain string entry the range covers exactly one line.  For a
+        path-dict entry (``{path: ..., copy: true}``) the range extends from
+        the ``- path:`` line up to but not including the next entry's first
+        line (or the next sibling key in the same mapping if this is the last
+        entry).
+
+        PRECONDITION: ``mapping`` is a ``CommentedMap`` from a ruamel.yaml
+        round-trip load, so ``lc`` line/column data is available.
 
         Args:
             mapping: A dict-mapping node from the round-trip YAML parse.
             entry_name: Subpath entry to remove.
 
         Returns:
-            ``True`` if the subpath list was updated, ``False`` otherwise.
+            ``(delete_start, delete_end, becomes_empty, key_indent,
+            key_line_0based)`` or ``None``.
         """
         if _KEY_SUBPATH not in mapping:
-            # No subpath key — mapping syncs everything, nothing to do.
-            return False
+            return None
 
         subpath_list = mapping[_KEY_SUBPATH]
-
         if not subpath_list:
-            # Subpath key is present but the list is empty or None — nothing to remove.
-            return False
+            return None
 
-        # Find the index of the matching entry (plain string or {"path": ...} dict).
+        # Find the index of the matching entry.
         index_to_remove = None
         for i, entry in enumerate(subpath_list):
             if isinstance(entry, str) and entry == entry_name:
@@ -495,7 +595,50 @@ class ConfigUpdater:
                 break
 
         if index_to_remove is None:
-            return False
+            return None
 
-        del subpath_list[index_to_remove]
-        return True
+        # 0-based source line of the entry to remove.
+        delete_start = subpath_list.lc.data[index_to_remove][0]
+
+        becomes_empty = len(subpath_list) == 1
+
+        # Key indent: number of spaces before ``subpath:`` in the source.
+        # lc.key() gives the (line, col) of the key itself; lc.value() gives
+        # the position of the first value element, which for a single-item
+        # block sequence equals the entry's line — not the key line.
+        key_line_0based = mapping.lc.key(_KEY_SUBPATH)[0]
+        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        key_line_text = source_lines[key_line_0based]
+        key_indent = len(key_line_text) - len(key_line_text.lstrip())
+
+        # Determine delete_end: the line immediately after this entry's last
+        # source line.
+        #
+        # For a non-last entry: the next entry's lc.data gives its start line.
+        # For the last entry we scan forward from delete_start + 1 to find the
+        # first line whose indentation is <= the entry's indent (the ``- ``
+        # prefix), which marks the start of the next sibling.  This correctly
+        # handles both single-line (plain string) and multi-line (path-dict)
+        # entries without needing to know the entry type upfront.
+        if index_to_remove < len(subpath_list) - 1:
+            delete_end = subpath_list.lc.data[index_to_remove + 1][0]
+        else:
+            # Last entry: scan forward to find where this entry's indented
+            # block ends.  The entry line starts with ``    - `` (entry_indent
+            # spaces then ``-``).  Any subsequent line with indentation <=
+            # entry_indent that is non-blank belongs to an outer scope.
+            entry_indent = len(source_lines[delete_start]) - len(source_lines[delete_start].lstrip())
+            delete_end = delete_start + 1
+            while delete_end < len(source_lines):
+                line = source_lines[delete_end]
+                stripped = line.lstrip()
+                if not stripped:
+                    # Blank line — belongs to outer scope, stop here.
+                    break
+                line_indent = len(line) - len(stripped)
+                if line_indent <= entry_indent:
+                    # Back to same or outer indent — stop here.
+                    break
+                delete_end += 1
+
+        return delete_start, delete_end, becomes_empty, key_indent, key_line_0based

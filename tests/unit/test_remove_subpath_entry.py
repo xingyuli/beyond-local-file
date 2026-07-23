@@ -1,12 +1,12 @@
 """Unit tests for ConfigUpdater.remove_subpath_entry.
 
-Covers task 3.3:
-- Removes plain string entry when present
+Covers:
+- Removes plain string entry when present (full-content assertion)
 - Removes {"path": entry_name, ...} dict entry when present
 - Returns False when entry is absent
 - Returns False when mapping has no subpath key
 - Leaves empty list in place when last entry is removed
-- Preserves YAML comments and formatting (round-trip)
+- Zero-noise guarantee: indentation and blank lines preserved byte-for-byte
 
 Requirements: 6.2, 6.3, 6.4, 6.5, 6.6, 6.7
 """
@@ -388,3 +388,213 @@ class TestUnknownProject:
 
         assert changed is False
         assert config_path.read_text() == original
+
+
+# ---------------------------------------------------------------------------
+# Zero-noise guarantee
+#
+# These tests use full file-content comparison (same style as add_subpath_entry
+# tests in test_config.py) to verify that remove_subpath_entry is byte-for-byte
+# identical outside the deleted line — no re-indentation, no blank-line loss.
+# ---------------------------------------------------------------------------
+
+
+class TestZeroNoise:
+    """remove_subpath_entry must not alter any line except the one deleted.
+
+    Full file content is compared in every test — no substring checks.
+    """
+
+    def test_removes_middle_entry_preserves_4space_indent_and_surrounding_content(self, tmp_path: Path) -> None:
+        """Removing a middle entry preserves 4-space indentation and all other lines.
+
+        The file uses 4-space indentation for subpath items.  After removal
+        every remaining line must be byte-for-byte identical to the original.
+        """
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            """\
+my-project:
+  target: /tmp/ta
+  subpath:
+    - alpha.txt
+    - beta.txt
+    - gamma.txt
+"""
+        )
+
+        ConfigUpdater(config_path).remove_subpath_entry("my-project", Path("/tmp/ta"), "beta.txt")
+
+        assert config_path.read_text() == (
+            """\
+my-project:
+  target: /tmp/ta
+  subpath:
+    - alpha.txt
+    - gamma.txt
+"""
+        )
+
+    def test_removes_entry_preserves_blank_line_between_projects(self, tmp_path: Path) -> None:
+        """Removing an entry preserves the blank line separating two projects.
+
+        Reproduces the noise observed in the wild: ruamel.yaml dump strips
+        the blank line between projects.  The blank line must survive.
+        """
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            """\
+project-a:
+  target: /tmp/ta
+  subpath:
+    - foo
+    - bar
+
+project-b:
+  target: /tmp/tb
+  subpath:
+    - other
+"""
+        )
+
+        ConfigUpdater(config_path).remove_subpath_entry("project-a", Path("/tmp/ta"), "bar")
+
+        assert config_path.read_text() == (
+            """\
+project-a:
+  target: /tmp/ta
+  subpath:
+    - foo
+
+project-b:
+  target: /tmp/tb
+  subpath:
+    - other
+"""
+        )
+
+    def test_removes_last_entry_and_leaves_empty_inline_list(self, tmp_path: Path) -> None:
+        """Removing the sole entry in a 4-space indented list leaves ``subpath: []``.
+
+        The block sequence is collapsed back to an inline empty list so the
+        mapping is still in selective-sync mode.  No re-indentation of
+        surrounding keys.
+        """
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            """\
+my-project:
+  target: /tmp/ta
+  subpath:
+    - only.txt
+"""
+        )
+
+        ConfigUpdater(config_path).remove_subpath_entry("my-project", Path("/tmp/ta"), "only.txt")
+
+        assert config_path.read_text() == (
+            """\
+my-project:
+  target: /tmp/ta
+  subpath: []
+"""
+        )
+
+    def test_removes_last_entry_with_blank_line_after_preserves_blank_line(self, tmp_path: Path) -> None:
+        """Removing the sole entry when a blank line follows preserves that blank line.
+
+        The blank line is a project separator and must not be consumed.
+        """
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            """\
+project-a:
+  target: /tmp/ta
+  subpath:
+    - only.txt
+
+project-b:
+  target: /tmp/tb
+"""
+        )
+
+        ConfigUpdater(config_path).remove_subpath_entry("project-a", Path("/tmp/ta"), "only.txt")
+
+        assert config_path.read_text() == (
+            """\
+project-a:
+  target: /tmp/ta
+  subpath: []
+
+project-b:
+  target: /tmp/tb
+"""
+        )
+
+    def test_removes_path_dict_entry_full_content(self, tmp_path: Path) -> None:
+        """Removing a path-dict entry leaves the file byte-for-byte correct.
+
+        Shape (B) + variant (2): ``{path: rules.md, copy: true}`` spans two
+        lines in the YAML source.  Both lines must be deleted; all other lines
+        must be preserved with their original indentation.
+        """
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            """\
+my-project:
+  target: /tmp/ta
+  subpath:
+    - keep.txt
+    - path: rules.md
+      copy: true
+"""
+        )
+
+        ConfigUpdater(config_path).remove_subpath_entry("my-project", Path("/tmp/ta"), "rules.md")
+
+        assert config_path.read_text() == (
+            """\
+my-project:
+  target: /tmp/ta
+  subpath:
+    - keep.txt
+"""
+        )
+
+    def test_shape_c_removes_entry_preserves_blank_line_between_list_items(self, tmp_path: Path) -> None:
+        """Shape (C): removing an entry in the matching mapping preserves the blank separator.
+
+        The unrelated mapping and the blank line between the two list items
+        must be preserved byte-for-byte.
+        """
+        config_path = tmp_path / "config.yml"
+        t1 = tmp_path / "t1"
+        t2 = tmp_path / "t2"
+        config_path.write_text(
+            f"""\
+my-project:
+  - target: {t1}
+    subpath:
+      - foo
+      - bar
+
+  - target: {t2}
+    subpath:
+      - other
+"""
+        )
+
+        ConfigUpdater(config_path).remove_subpath_entry("my-project", t1, "bar")
+
+        assert config_path.read_text() == (
+            f"""\
+my-project:
+  - target: {t1}
+    subpath:
+      - foo
+
+  - target: {t2}
+    subpath:
+      - other
+"""
+        )
