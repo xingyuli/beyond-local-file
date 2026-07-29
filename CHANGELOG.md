@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-07-29
+
+### Fixed
+- **Fix ConfigUpdater: noise-free subpath edits** — `revlink create` and `revlink restore` no longer corrupt indentation or blank lines in `config.yml` when editing subpath entries. Previously, ruamel.yaml's round-trip dump would re-indent sequence items and strip blank lines between projects, producing noisy diffs on every config change. Both operations now use raw text splicing so only the targeted line changes — everything else is byte-for-byte identical to the original file.
+
+### Changed
+- **Deepen translator: extract item-loader seam** — `translate_config_to_processing` now accepts an injectable `item_loader` parameter (defaulting to the real `_load_items` adapter), making the translation logic a pure function testable without disk I/O. Tests that verify display-name or mapping-expansion logic no longer need to materialise real directories on disk.
+- **Deepen LinkStrategyManager: surface git seam in protocol** — Added `is_git_repo()` to the `LinkStrategyManager` protocol. `add_git_excludes()` and `check_git_excludes()` now return `None` when not in a git repo, eliminating the duplicated caller-side `git_manager.is_git_repo()` guards that were spread across `link_sync.py` and `link_check.py`.
+
+[0.3.2]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.3.2
+
 ## [0.3.1] - 2026-07-16
 
 ### Fixed
