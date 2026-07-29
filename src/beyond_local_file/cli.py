@@ -16,12 +16,13 @@ from .operations import (
     SyncOperation,
     run_upgrade,
 )
-from .operations.revlink import CreateFormatter, RestoreFormatter, RestoreOperation, RevlinkContext
+from .operations.revlink import CreateFormatter, RestoreFormatter, RestoreOperation
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
 from .project_processor import (
     ProjectProcessor,
+    RevlinkResolveError,
     load_config_projects,
-    resolve_project_from_cwd,
+    resolve_revlink_context,
 )
 
 
@@ -184,6 +185,18 @@ def revlink():
     pass
 
 
+def _exit_on_revlink_error(ctx: click.Context, result: RevlinkResolveError) -> None:
+    """Emit the error message (if any) and call ctx.exit with the error's exit code.
+
+    Args:
+        ctx: The active Click context; used to exit with the correct code.
+        result: The resolution error returned by :func:`resolve_revlink_context`.
+    """
+    if result.message is not None:
+        click.echo(result.message)
+    ctx.exit(result.exit_code)
+
+
 @revlink.command("create")
 @click.argument("path")
 @click.option("--dry-run", is_flag=True, help="Preview actions without modifying the filesystem.")
@@ -206,52 +219,19 @@ def revlink_create(ctx, path, dry_run, force):
         ctx.exit(1)
         return
 
-    config = ctx.obj["config"]
-
-    result = load_config_projects(config)
-    if result is None:
-        ctx.exit(1)
+    ctx_result = resolve_revlink_context(ctx.obj["config"], cwd)
+    if isinstance(ctx_result, RevlinkResolveError):
+        _exit_on_revlink_error(ctx, ctx_result)
         return
-
-    project = resolve_project_from_cwd(result.projects, cwd)
-
-    if project is None:
-        hint = (
-            "Hint: add a target entry for this directory in your config, "
-            "or use --config to specify the correct config file."
-        )
-        click.echo(f"No managed project found for current directory: {cwd}\n{hint}")
-        ctx.exit(1)
-        return
-
-    if isinstance(project, list):
-        names = ", ".join(p.managed_project_name for p in project)
-        click.echo(f"Ambiguous: multiple projects target {cwd}: {names}")
-        ctx.exit(1)
-        return
-
-    # Find the specific mapping whose targets include CWD — needed for config update
-    matched_mapping = next((m for m in project.mappings if cwd in m.targets), None)
-
-    ctx_obj = (
-        RevlinkContext(
-            config_path=result.config_file,
-            project_name=project.managed_project_name,
-            matched_mapping=matched_mapping,
-            cwd=cwd,
-        )
-        if matched_mapping is not None
-        else None
-    )
 
     exit_code = CreateOperation(
         source=source,
-        dest_root=project.managed_project_path,
+        dest_root=ctx_result.managed_project_path,
         rel_path=rel_path,
         dry_run=dry_run,
         force=force,
         formatter=CreateFormatter(dry_run=dry_run),
-        context=ctx_obj,
+        context=ctx_result,
     ).run()
     ctx.exit(exit_code)
 
@@ -279,51 +259,18 @@ def revlink_restore(ctx, path, dry_run):
         ctx.exit(1)
         return
 
-    config = ctx.obj["config"]
-
-    result = load_config_projects(config)
-    if result is None:
-        ctx.exit(1)
+    ctx_result = resolve_revlink_context(ctx.obj["config"], cwd)
+    if isinstance(ctx_result, RevlinkResolveError):
+        _exit_on_revlink_error(ctx, ctx_result)
         return
-
-    project = resolve_project_from_cwd(result.projects, cwd)
-
-    if project is None:
-        hint = (
-            "Hint: add a target entry for this directory in your config, "
-            "or use --config to specify the correct config file."
-        )
-        click.echo(f"No managed project found for current directory: {cwd}\n{hint}")
-        ctx.exit(1)
-        return
-
-    if isinstance(project, list):
-        names = ", ".join(p.managed_project_name for p in project)
-        click.echo(f"Ambiguous: multiple projects target {cwd}: {names}")
-        ctx.exit(1)
-        return
-
-    # Find the specific mapping whose targets include CWD — needed for config removal
-    matched_mapping = next((m for m in project.mappings if cwd in m.targets), None)
-
-    ctx_obj = (
-        RevlinkContext(
-            config_path=result.config_file,
-            project_name=project.managed_project_name,
-            matched_mapping=matched_mapping,
-            cwd=cwd,
-        )
-        if matched_mapping is not None
-        else None
-    )
 
     exit_code = RestoreOperation(
         source=source,
-        dest_root=project.managed_project_path,
+        dest_root=ctx_result.managed_project_path,
         rel_path=rel_path,
         dry_run=dry_run,
         formatter=RestoreFormatter(dry_run=dry_run),
-        context=ctx_obj,
+        context=ctx_result,
     ).run()
     ctx.exit(exit_code)
 

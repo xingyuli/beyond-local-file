@@ -6,7 +6,7 @@ Operation logic lives in the ``operations`` package — one module per subcomman
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
@@ -18,6 +18,7 @@ from .constants import DEFAULT_CONFIG_FILE
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_processing
 from .operations import CmdOperation
+from .operations.revlink import RevlinkContext
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,85 @@ class ConfigLoadResult:
 
     projects: dict[str, ConfigProject]
     config_file: Path
+
+
+@dataclass(frozen=True)
+class RevlinkResolveError:
+    """Terminal error from revlink context resolution.
+
+    Returned by :func:`resolve_revlink_context` when the resolution sequence
+    cannot produce a :class:`~beyond_local_file.operations.revlink.RevlinkContext`.
+    The caller should print ``message`` (if not ``None``) and exit with
+    ``exit_code``.
+
+    Attributes:
+        message: Human-readable error message to display to the user.
+            ``None`` when :func:`load_config_projects` already printed the
+            diagnostic — the caller must skip ``click.echo`` in that case.
+        exit_code: Suggested process exit code (always 1 for errors).
+    """
+
+    message: str | None
+    exit_code: int = field(default=1)
+
+
+def resolve_revlink_context(
+    config: str | None,
+    cwd: Path,
+) -> RevlinkContext | RevlinkResolveError:
+    """Resolve config, match CWD to a project, and build a RevlinkContext.
+
+    Encapsulates the full resolution sequence shared by ``revlink create`` and
+    ``revlink restore``: load the config, match ``cwd`` to exactly one managed
+    project, find the mapping whose targets include ``cwd``, and return a
+    :class:`~beyond_local_file.operations.revlink.RevlinkContext` ready for
+    the caller to pass to :class:`~beyond_local_file.operations.revlink.CreateOperation`
+    or :class:`~beyond_local_file.operations.revlink.RestoreOperation`.
+
+    Args:
+        config: Path to the YAML config file (from ``--config``), or ``None``
+            to use the default resolution order (``~/.blfrc`` → ``config.yml``).
+        cwd: The current working directory to match against each mapping's
+            target paths.
+
+    Returns:
+        A :class:`~beyond_local_file.operations.revlink.RevlinkContext` when a
+        unique project is found and its mapping is resolved.  A
+        :class:`RevlinkResolveError` when config loading fails, no project
+        matches ``cwd``, or multiple projects match ``cwd`` (ambiguous).
+        When the error message is empty, :func:`load_config_projects` has
+        already printed the diagnostic; callers must skip ``click.echo``.
+    """
+    result = load_config_projects(config)
+    if result is None:
+        return RevlinkResolveError(message=None)
+
+    project = _resolve_project_from_cwd(result.projects, cwd)
+
+    if project is None:
+        hint = (
+            "Hint: add a target entry for this directory in your config, "
+            "or use --config to specify the correct config file."
+        )
+        return RevlinkResolveError(
+            message=f"No managed project found for current directory: {cwd}\n{hint}"
+        )
+
+    if isinstance(project, list):
+        names = ", ".join(p.managed_project_name for p in project)
+        return RevlinkResolveError(
+            message=f"Ambiguous: multiple projects target {cwd}: {names}"
+        )
+
+    matched_mapping = next(m for m in project.mappings if cwd in m.targets)
+
+    return RevlinkContext(
+        config_path=result.config_file,
+        project_name=project.managed_project_name,
+        matched_mapping=matched_mapping,
+        cwd=cwd,
+        managed_project_path=project.managed_project_path,
+    )
 
 
 class ProjectProcessor:
@@ -212,7 +292,7 @@ def _load_and_combine_configs(config_paths: list[Path], project_name: str | None
         return None
 
 
-def resolve_project_from_cwd(
+def _resolve_project_from_cwd(
     config_projects: dict[str, ConfigProject],
     cwd: Path,
 ) -> ConfigProject | None | list[ConfigProject]:

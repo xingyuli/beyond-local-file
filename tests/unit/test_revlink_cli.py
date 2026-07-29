@@ -10,7 +10,8 @@ from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
 from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.project_processor import ConfigLoadResult
+from beyond_local_file.operations.revlink import RevlinkContext
+from beyond_local_file.project_processor import RevlinkResolveError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,6 +32,27 @@ def _make_config_project(managed_path: Path, target_path: Path) -> ConfigProject
         managed_project_name="test-project",
         managed_project_path=managed_path,
         mappings=[Mapping(targets=[target_path], subpaths=None, copy_paths=None)],
+    )
+
+
+def _make_revlink_context(managed_path: Path, target_path: Path, config_path: Path) -> RevlinkContext:
+    """Build a RevlinkContext for use in tests.
+
+    Args:
+        managed_path: The managed project path (destination root).
+        target_path: The CWD / target directory.
+        config_path: The config file path.
+
+    Returns:
+        A RevlinkContext with a single mapping targeting ``target_path``.
+    """
+    mapping = Mapping(targets=[target_path], subpaths=None, copy_paths=None)
+    return RevlinkContext(
+        config_path=config_path,
+        project_name="test-project",
+        matched_mapping=mapping,
+        cwd=target_path,
+        managed_project_path=managed_path,
     )
 
 
@@ -136,19 +158,12 @@ def test_revlink_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
     target_dir = tmp_path / "target"
     target_dir.mkdir()
 
-    project = _make_config_project(managed_dir, target_dir)
+    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"test-project": project},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = project
-
         nonexistent = target_dir / "does_not_exist.txt"
         result = runner.invoke(cli, ["revlink", "create", str(nonexistent)])
 
@@ -185,7 +200,7 @@ def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
     symlink_path = target_dir / "link.txt"
     symlink_path.symlink_to(real_file)
 
-    project = _make_config_project(managed_dir, target_dir)
+    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
 
     # Patch Path.resolve so the CLI sees the symlink path (not its target)
     original_resolve = Path.resolve
@@ -196,17 +211,10 @@ def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
         return original_resolve(self, **kwargs)
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
         patch.object(Path, "resolve", _resolve_no_follow),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"test-project": project},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = project
-
         result = runner.invoke(cli, ["revlink", "create", str(symlink_path)])
 
     assert result.exit_code == 1
@@ -240,19 +248,12 @@ def test_revlink_dest_exists_without_force_exits_with_error(tmp_path: Path) -> N
     dest_file = managed_dir / "myfile.txt"
     dest_file.write_text("old content")
 
-    project = _make_config_project(managed_dir, target_dir)
+    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"test-project": project},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = project
-
         result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
     assert result.exit_code == 1
@@ -285,19 +286,12 @@ def test_revlink_force_allows_overwrite_when_dest_exists(tmp_path: Path) -> None
     dest_file = managed_dir / "myfile.txt"
     dest_file.write_text("old content")
 
-    project = _make_config_project(managed_dir, target_dir)
+    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"test-project": project},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = project
-
         result = runner.invoke(cli, ["revlink", "create", "--force", str(source_file)])
 
     # With --force the validation passes; operation proceeds past pre-flight.
@@ -328,19 +322,12 @@ def test_revlink_dry_run_does_not_modify_filesystem(tmp_path: Path) -> None:
     source_file = target_dir / "myfile.txt"
     source_file.write_text("content")
 
-    project = _make_config_project(managed_dir, target_dir)
+    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"test-project": project},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = project
-
         result = runner.invoke(cli, ["revlink", "create", "--dry-run", str(source_file)])
 
     assert result.exit_code == 0
@@ -366,19 +353,12 @@ def test_revlink_dry_run_prints_preview_output(tmp_path: Path) -> None:
     source_file = target_dir / "myfile.txt"
     source_file.write_text("content")
 
-    project = _make_config_project(managed_dir, target_dir)
+    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"test-project": project},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = project
-
         result = runner.invoke(cli, ["revlink", "create", "--dry-run", str(source_file)])
 
     assert result.exit_code == 0
@@ -403,22 +383,18 @@ def test_revlink_no_matching_project_exits_with_error(tmp_path: Path) -> None:
     THE Revlink_Command SHALL print a descriptive error message and exit 1.
     """
     runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
     target_dir = tmp_path / "target"
     target_dir.mkdir()
 
     source_file = target_dir / "myfile.txt"
     source_file.write_text("content")
 
+    error = RevlinkResolveError(message=f"No managed project found for current directory: {target_dir}\nHint: ...")
+
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=error),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(projects={}, config_file=tmp_path / "config.yml")
-        mock_resolve.return_value = None  # no match
-
         result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
     assert result.exit_code == 1
@@ -439,29 +415,14 @@ def test_revlink_ambiguous_project_exits_with_error(tmp_path: Path) -> None:
     source_file = target_dir / "myfile.txt"
     source_file.write_text("content")
 
-    project_a = _make_config_project(tmp_path / "managed-a", target_dir)
-    project_a = ConfigProject(
-        managed_project_name="project-a",
-        managed_project_path=tmp_path / "managed-a",
-        mappings=[Mapping(targets=[target_dir], subpaths=None, copy_paths=None)],
-    )
-    project_b = ConfigProject(
-        managed_project_name="project-b",
-        managed_project_path=tmp_path / "managed-b",
-        mappings=[Mapping(targets=[target_dir], subpaths=None, copy_paths=None)],
+    error = RevlinkResolveError(
+        message=f"Ambiguous: multiple projects target {target_dir}: project-a, project-b"
     )
 
     with (
-        patch("beyond_local_file.cli.load_config_projects") as mock_load,
-        patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+        patch("beyond_local_file.cli.resolve_revlink_context", return_value=error),
         patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
     ):
-        mock_load.return_value = ConfigLoadResult(
-            projects={"project-a": project_a, "project-b": project_b},
-            config_file=tmp_path / "config.yml",
-        )
-        mock_resolve.return_value = [project_a, project_b]  # ambiguous
-
         result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
     assert result.exit_code == 1

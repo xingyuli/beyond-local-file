@@ -364,12 +364,18 @@ class RevlinkContext:
             to determine whether a config update is needed.
         cwd: The current working directory; used to locate the correct mapping
             node when the project has multiple mappings.
+        managed_project_path: Absolute path to the managed project directory.
+            Populated by :func:`~beyond_local_file.project_processor.resolve_revlink_context`
+            so that CLI handlers can retrieve the destination root without an
+            additional config load.  ``None`` when constructed manually in
+            tests that do not exercise the destination-root path.
     """
 
     config_path: Path
     project_name: str
     matched_mapping: Mapping
     cwd: Path
+    managed_project_path: Path | None = field(default=None)
 
 
 # ---------------------------------------------------------------------------

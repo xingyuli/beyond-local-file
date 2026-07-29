@@ -15,7 +15,7 @@ from hypothesis import strategies as st
 
 from beyond_local_file.cli import cli
 from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.project_processor import ConfigLoadResult
+from beyond_local_file.operations.revlink import RevlinkContext
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -710,20 +710,20 @@ class TestRevlinkNestedPath:
         source_file = source_dir / "foo"
         source_file.write_text("spec content")
 
-        project = self._make_config_project(managed_dir, target_dir)
+        mapping = Mapping(targets=[target_dir], subpaths=[], copy_paths=None)
+        ctx = RevlinkContext(
+            config_path=config_path,
+            project_name="test-project",
+            matched_mapping=mapping,
+            cwd=target_dir,
+            managed_project_path=managed_dir,
+        )
 
         runner = CliRunner()
         with (
-            patch("beyond_local_file.cli.load_config_projects") as mock_load,
-            patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+            patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
             patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
         ):
-            mock_load.return_value = ConfigLoadResult(
-                projects={"test-project": project},
-                config_file=config_path,
-            )
-            mock_resolve.return_value = project
-
             # Act — invoke with the absolute path (Path.cwd is mocked, so
             # Path(path).resolve() in cli.py will resolve against the real OS
             # CWD; passing the absolute path avoids that ambiguity)
@@ -768,24 +768,20 @@ class TestRevlinkNestedPath:
         source_file = source_dir / "foo"
         source_file.write_text("spec content")
 
-        project = ConfigProject(
-            managed_project_name="test-project",
+        mapping = Mapping(targets=[target_dir], subpaths=[], copy_paths=None)
+        ctx = RevlinkContext(
+            config_path=config_path,
+            project_name="test-project",
+            matched_mapping=mapping,
+            cwd=target_dir,
             managed_project_path=managed_dir,
-            mappings=[Mapping(targets=[target_dir], subpaths=[], copy_paths=None)],
         )
 
         runner = CliRunner()
         with (
-            patch("beyond_local_file.cli.load_config_projects") as mock_load,
-            patch("beyond_local_file.cli.resolve_project_from_cwd") as mock_resolve,
+            patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
             patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
         ):
-            mock_load.return_value = ConfigLoadResult(
-                projects={"test-project": project},
-                config_file=config_path,
-            )
-            mock_resolve.return_value = project
-
             # Act — pass the absolute path (same reason as the first test)
             result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 

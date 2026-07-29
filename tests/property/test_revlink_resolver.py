@@ -1,7 +1,7 @@
 """Property-based tests for the revlink project resolver.
 
 This module contains property-based tests that verify the correctness of
-``resolve_project_from_cwd`` across a wide range of generated inputs.
+``_resolve_project_from_cwd`` across a wide range of generated inputs.
 """
 
 from pathlib import Path
@@ -10,7 +10,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.project_processor import resolve_project_from_cwd
+from beyond_local_file.project_processor import _resolve_project_from_cwd
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -119,7 +119,7 @@ def test_resolver_returns_unique_matching_project(
     **Validates: Requirements 2.2, 2.3, 2.5**
 
     For any set of ConfigProject instances and any Path that appears as a
-    target in exactly one project's mappings, ``resolve_project_from_cwd``
+    target in exactly one project's mappings, ``_resolve_project_from_cwd``
     must return that project and only that project.
 
     Args:
@@ -146,7 +146,7 @@ def test_resolver_returns_unique_matching_project(
     )
     config_projects["matching-project"] = matching_project
 
-    result = resolve_project_from_cwd(config_projects, cwd)
+    result = _resolve_project_from_cwd(config_projects, cwd)
 
     assert result is matching_project, f"Expected the unique matching ConfigProject, got {result!r}"
 
@@ -171,7 +171,7 @@ def test_resolver_returns_none_when_no_project_matches(
     **Validates: Requirements 2.4**
 
     For any set of ConfigProject instances and any Path that does not appear
-    as a target in any project's mappings, ``resolve_project_from_cwd`` must
+    as a target in any project's mappings, ``_resolve_project_from_cwd`` must
     return ``None``.
 
     Args:
@@ -184,7 +184,7 @@ def test_resolver_returns_none_when_no_project_matches(
 
     config_projects = _build_config_projects(filtered_specs)
 
-    result = resolve_project_from_cwd(config_projects, cwd)
+    result = _resolve_project_from_cwd(config_projects, cwd)
 
     assert result is None, f"Expected None when cwd is absent from all mappings, got {result!r}"
 
@@ -222,7 +222,7 @@ def test_resolver_returns_list_when_multiple_projects_match(
     **Validates: Requirements 2.6**
 
     For any set of ConfigProject instances where two or more projects share
-    the same target path, ``resolve_project_from_cwd`` must return a list
+    the same target path, ``_resolve_project_from_cwd`` must return a list
     containing all matching projects.
 
     Args:
@@ -253,7 +253,7 @@ def test_resolver_returns_list_when_multiple_projects_match(
         config_projects[f"ambiguous-project-{idx}"] = project
         matching_projects.append(project)
 
-    result = resolve_project_from_cwd(config_projects, cwd)
+    result = _resolve_project_from_cwd(config_projects, cwd)
 
     assert isinstance(result, list), (
         f"Expected a list when multiple projects match cwd, got {type(result).__name__!r}: {result!r}"
