@@ -30,6 +30,51 @@ blf --config /path/to/config.yml link check
 
 ## Commands
 
+### `remove` — Permanently Remove a Managed Item
+
+Permanently remove one managed item from the current target project and every validated projection.
+
+#### Syntax
+
+```bash
+blf remove [OPTIONS] PATH
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `PATH` | Yes | Path to the managed file or directory to remove; it must be inside the current working directory. |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--dry-run` | Flag | Off | Preview validation and cleanup without modifying files, Git excludes, or configuration. |
+
+#### Behavior
+
+1. Resolves the managed project whose configured target includes the current working directory.
+2. Normalizes `PATH` and rejects paths outside the current working directory.
+3. Preflights every configured projection that manages the exact item. A symlink must point to the managed copy, and a copy-strategy projection must match it before removal begins.
+4. Deletes every validated projection, removes its matching `.git/info/exclude` entry when applicable, then deletes the managed copy.
+5. Removes the item from participating selective `subpath` lists in the configuration. See the [Configuration Reference](configuration-reference.md) for mapping syntax.
+
+If any projection fails preflight validation, the command leaves all managed items and projections unchanged. If cleanup fails after preflight, it reports the recovery state and retains later destructive phases when possible.
+
+#### Examples
+
+```bash
+# Permanently remove a managed file from the current target project
+blf remove .vscode/settings.json
+
+# Preview the validation and cleanup actions
+blf remove --dry-run .vscode/settings.json
+
+# Use an explicit configuration file
+blf --config ~/my-dev-files/config.yml remove .vscode/settings.json
+```
+
 ### `link` — Link Management
 
 Manage symlinks and physical copies between managed projects and target locations.

@@ -369,6 +369,9 @@ class RevlinkContext:
             so that CLI handlers can retrieve the destination root without an
             additional config load.  ``None`` when constructed manually in
             tests that do not exercise the destination-root path.
+        mappings: Every mapping in the resolved project.  Standalone commands
+            that must inspect project-wide scope, such as ``remove``, use this
+            collection rather than only ``matched_mapping``.
     """
 
     config_path: Path
@@ -376,6 +379,7 @@ class RevlinkContext:
     matched_mapping: Mapping
     cwd: Path
     managed_project_path: Path | None = field(default=None)
+    mappings: list[Mapping] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

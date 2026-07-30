@@ -231,6 +231,7 @@ See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order)
 | `blf link check [PROJECT]` | Check link status and Git excludes |
 | `blf revlink create PATH` | Adopt an existing file or directory into the managed workflow |
 | `blf revlink restore PATH` | Dissolve a managed symlink and recover the real file |
+| `blf remove PATH` | Permanently remove a managed item and its validated projections |
 | `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
 
 ### Progress Tracking

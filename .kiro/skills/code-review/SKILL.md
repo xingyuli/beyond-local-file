@@ -79,6 +79,10 @@ Present the two reports under `## Standards` and `## Spec` headings, verbatim or
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
 
+### 6. Check documentation gaps
+
+After presenting the review, invoke `/documentation-gap` with the same `<fixed-point>...HEAD` comparison range. It owns documentation-gap discovery and obtains per-file approval before updating the README, `docs/`, or `.kiro/steering/`.
+
 ## Why two axes
 
 A change can pass one axis and fail the other:

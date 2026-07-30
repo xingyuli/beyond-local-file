@@ -4,6 +4,9 @@ This tool provides commands to synchronize symlinks (and physical file copies)
 and check their status, with automatic Git exclude file management.
 """
 
+import os
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 import click
@@ -16,6 +19,7 @@ from .operations import (
     SyncOperation,
     run_upgrade,
 )
+from .operations.remove import RemoveFormatter, RemoveOperation
 from .operations.revlink import CreateFormatter, RestoreFormatter, RestoreOperation
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
 from .project_processor import (
@@ -176,6 +180,46 @@ def upgrade(ctx, dry_run):
     preview the command without executing it.
     """
     exit_code = run_upgrade(dry_run=dry_run)
+    ctx.exit(exit_code)
+
+
+@cli.command("remove")
+@click.argument("path")
+@click.option("--dry-run", is_flag=True, help="Preview permanent removal without modifying the filesystem.")
+@click.pass_context
+def remove(ctx, path, dry_run):
+    """Permanently remove one managed item and every validated projection."""
+    formatter = RemoveFormatter(dry_run=dry_run)
+    cwd = Path.cwd()
+    candidate = Path(path)
+    candidate = candidate if candidate.is_absolute() else cwd / candidate
+    source = Path(os.path.normpath(candidate))
+
+    try:
+        rel_path = source.relative_to(cwd)
+    except ValueError:
+        formatter.error(f"PATH must be inside the current directory: {path}")
+        ctx.exit(1)
+        return
+
+    resolver_output = StringIO()
+    with redirect_stdout(resolver_output):
+        ctx_result = resolve_revlink_context(ctx.obj["config"], cwd)
+    for line in resolver_output.getvalue().splitlines():
+        formatter.info(line)
+    if isinstance(ctx_result, RevlinkResolveError):
+        if ctx_result.message is not None:
+            formatter.error(ctx_result.message)
+        ctx.exit(ctx_result.exit_code)
+        return
+
+    exit_code = RemoveOperation(
+        source=source,
+        rel_path=rel_path,
+        dry_run=dry_run,
+        formatter=formatter,
+        context=ctx_result,
+    ).run()
     ctx.exit(exit_code)
 
 

@@ -170,6 +170,7 @@ def test_returns_revlink_context_on_unique_match() -> None:
     assert result.project_name == "test-project"
     assert result.cwd == _CWD
     assert result.managed_project_path == _MANAGED_PATH
+    assert result.mappings == project.mappings
     # matched_mapping must be the one whose targets include _CWD
     assert _CWD in result.matched_mapping.targets
 

@@ -137,3 +137,23 @@ def test_error_message_with_custom_config_not_found() -> None:
 
         assert "Config file not found" in result.output
         assert "nonexistent.yml" in result.output
+
+
+def test_remove_is_destructive_top_level_command_with_required_path() -> None:
+    """The top-level non-interactive remove command documents PATH and dry-run.
+
+    ``Click`` supplies usage and a non-zero exit when the required positional
+    path is omitted, so scripts cannot accidentally invoke an unspecified
+    removal operation.
+    """
+    runner = CliRunner()
+
+    help_result = runner.invoke(cli, ["remove", "--help"])
+    missing_path_result = runner.invoke(cli, ["remove"])
+
+    assert help_result.exit_code == 0
+    assert "PATH" in help_result.output
+    assert "--dry-run" in help_result.output
+    assert "permanently" in help_result.output.lower()
+    assert missing_path_result.exit_code != 0
+    assert "Usage:" in missing_path_result.output

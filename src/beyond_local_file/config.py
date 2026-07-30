@@ -1,6 +1,7 @@
 """Configuration management for the link CLI tool."""
 
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 import yaml
@@ -174,7 +175,7 @@ class Config:
                 if entry.get("copy", False):
                     copy_paths.add(path)
 
-        return subpaths or None, copy_paths or None
+        return subpaths, copy_paths or None
 
     def _build_config_project(self, name: str, value: str | list | dict) -> ConfigProject:
         """Build a ConfigProject from raw YAML value according to grammar.
@@ -266,15 +267,13 @@ class Config:
 
 
 class ConfigUpdater:
-    """Manages subpath entries in an existing config file for the revlink workflow.
+    """Round-trip-preserving writer for revlink and removal subpath updates.
 
-    Used by ``revlink create`` to register a newly adopted item in the config so
-    that ``link sync`` and ``link check`` will manage it going forward, and by
-    ``revlink restore`` to de-register the item when the symlink is dissolved.
-
-    Only acts when the matched mapping already has a ``subpath`` list.  When
-    the mapping syncs everything (no ``subpath``), the item is already covered
-    and no update is required.
+    ``revlink create`` registers one adopted subpath and ``revlink restore``
+    de-registers it from the invocation mapping.  ``blf remove`` stages the
+    same exact-entry removal across every selected selective mapping and
+    persists the result atomically.  Sync-all mappings have no ``subpath`` key
+    and remain unchanged.
 
     Uses ``ruamel.yaml`` for round-trip editing so that comments, blank lines,
     and indentation in the original file are preserved.
@@ -550,7 +549,7 @@ class ConfigUpdater:
 
         return None
 
-    def _removal_lines_for_mapping(
+    def _removal_lines_for_mapping(  # noqa: PLR0912 -- scalar and sequence YAML forms need distinct source-range handling
         self,
         mapping: CommentedMap,
         entry_name: str,
@@ -584,6 +583,17 @@ class ConfigUpdater:
         if not subpath_list:
             return None
 
+        # A scalar subpath is a one-item selective list written inline.  Replace
+        # the complete key/value line with an empty list when it matches.
+        key_line_0based = mapping.lc.key(_KEY_SUBPATH)[0]
+        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        key_line_text = source_lines[key_line_0based]
+        key_indent = len(key_line_text) - len(key_line_text.lstrip())
+        if isinstance(subpath_list, str):
+            if subpath_list != entry_name:
+                return None
+            return key_line_0based, key_line_0based + 1, True, key_indent, key_line_0based
+
         # Find the index of the matching entry.
         index_to_remove = None
         for i, entry in enumerate(subpath_list):
@@ -602,14 +612,8 @@ class ConfigUpdater:
 
         becomes_empty = len(subpath_list) == 1
 
-        # Key indent: number of spaces before ``subpath:`` in the source.
-        # lc.key() gives the (line, col) of the key itself; lc.value() gives
-        # the position of the first value element, which for a single-item
-        # block sequence equals the entry's line — not the key line.
-        key_line_0based = mapping.lc.key(_KEY_SUBPATH)[0]
-        source_lines = self._config_path.read_text().splitlines(keepends=True)
-        key_line_text = source_lines[key_line_0based]
-        key_indent = len(key_line_text) - len(key_line_text.lstrip())
+        # Key indent and source position were calculated before scalar/list
+        # handling so both representations preserve their original indentation.
 
         # Determine delete_end: the line immediately after this entry's last
         # source line.
@@ -642,3 +646,103 @@ class ConfigUpdater:
                 delete_end += 1
 
         return delete_start, delete_end, becomes_empty, key_indent, key_line_0based
+
+    def remove_subpath_entries(
+        self,
+        project_name: str,
+        target_paths: set[Path],
+        entry_name: str,
+    ) -> bool:
+        """Atomically remove one subpath from every selected project mapping.
+
+        The update is staged against a single round-trip parse and persisted by
+        replacing the original only after all source-level changes are ready.
+        Empty selective lists remain represented as ``subpath: []``.
+
+        Args:
+            project_name: Project key containing the mappings to update.
+            target_paths: Target directories identifying the selective mappings.
+            entry_name: Exact relative item path to remove from each mapping.
+
+        Returns:
+            True when one or more selected mappings changed; False when no
+            selected mapping contains the entry.
+
+        Raises:
+            OSError: If the single atomic configuration replacement fails.
+        """
+        data = self._yaml.load(self._config_path)
+        project_value = data.get(project_name)
+        if project_value is None:
+            return False
+
+        removals = self._find_removals_for_targets(project_value, target_paths, entry_name)
+        if not removals:
+            return False
+
+        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        for delete_start, delete_end, becomes_empty, key_indent, key_line in sorted(removals, reverse=True):
+            if becomes_empty:
+                source_lines[key_line:delete_end] = [" " * key_indent + "subpath: []\n"]
+            else:
+                del source_lines[delete_start:delete_end]
+
+        self._write_atomically("".join(source_lines))
+        return True
+
+    def _find_removals_for_targets(
+        self,
+        value: str | CommentedMap | CommentedSeq,
+        target_paths: set[Path],
+        entry_name: str,
+    ) -> list[tuple[int, int, bool, int, int]]:
+        """Collect removal locations for mappings that target one requested path.
+
+        Args:
+            value: Raw round-trip YAML value for one project.
+            target_paths: Resolved target directories that participate.
+            entry_name: Exact subpath entry to remove.
+
+        Returns:
+            Source line ranges for every matching selective mapping.
+        """
+        mappings: list[CommentedMap] = []
+        if isinstance(value, dict) and _KEY_TARGET in value:
+            mappings.append(value)
+        elif isinstance(value, list):
+            mappings.extend(item for item in value if isinstance(item, dict) and _KEY_TARGET in item)
+
+        removals: list[tuple[int, int, bool, int, int]] = []
+        for mapping in mappings:
+            targets = mapping[_KEY_TARGET]
+            target_values = [targets] if isinstance(targets, str) else targets
+            if not any(Path(target).resolve() in target_paths for target in target_values):
+                continue
+            removal = self._removal_lines_for_mapping(mapping, entry_name)
+            if removal is not None:
+                removals.append(removal)
+        return removals
+
+    def _write_atomically(self, content: str) -> None:
+        """Replace the configuration file only after a complete staged write.
+
+        Args:
+            content: Fully assembled replacement configuration text.
+
+        Raises:
+            OSError: If the temporary write or atomic replacement fails.
+        """
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=self._config_path.parent,
+            prefix=f".{self._config_path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary_path = Path(temporary.name)
+        try:
+            temporary_path.replace(self._config_path)
+        except OSError:
+            temporary_path.unlink(missing_ok=True)
+            raise

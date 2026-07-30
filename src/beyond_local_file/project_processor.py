@@ -62,12 +62,12 @@ def resolve_revlink_context(
 ) -> RevlinkContext | RevlinkResolveError:
     """Resolve config, match CWD to a project, and build a RevlinkContext.
 
-    Encapsulates the full resolution sequence shared by ``revlink create`` and
-    ``revlink restore``: load the config, match ``cwd`` to exactly one managed
-    project, find the mapping whose targets include ``cwd``, and return a
+    Encapsulates the full resolution sequence shared by ``revlink create``,
+    ``revlink restore``, and ``remove``: load the config, match ``cwd`` to
+    exactly one managed project, find the mapping whose targets include
+    ``cwd``, and return a
     :class:`~beyond_local_file.operations.revlink.RevlinkContext` ready for
-    the caller to pass to :class:`~beyond_local_file.operations.revlink.CreateOperation`
-    or :class:`~beyond_local_file.operations.revlink.RestoreOperation`.
+    the caller to pass to a standalone reverse-link or removal operation.
 
     Args:
         config: Path to the YAML config file (from ``--config``), or ``None``
@@ -94,15 +94,11 @@ def resolve_revlink_context(
             "Hint: add a target entry for this directory in your config, "
             "or use --config to specify the correct config file."
         )
-        return RevlinkResolveError(
-            message=f"No managed project found for current directory: {cwd}\n{hint}"
-        )
+        return RevlinkResolveError(message=f"No managed project found for current directory: {cwd}\n{hint}")
 
     if isinstance(project, list):
         names = ", ".join(p.managed_project_name for p in project)
-        return RevlinkResolveError(
-            message=f"Ambiguous: multiple projects target {cwd}: {names}"
-        )
+        return RevlinkResolveError(message=f"Ambiguous: multiple projects target {cwd}: {names}")
 
     matched_mapping = next(m for m in project.mappings if cwd in m.targets)
 
@@ -112,6 +108,7 @@ def resolve_revlink_context(
         matched_mapping=matched_mapping,
         cwd=cwd,
         managed_project_path=project.managed_project_path,
+        mappings=project.mappings,
     )
 
 
