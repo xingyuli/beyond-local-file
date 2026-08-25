@@ -250,7 +250,7 @@ project-d:
 - No encryption or secrets management
 - No built-in remote sync (intentionally)
 - Copy mode only supports single files, not directories
-- Windows support implemented but not yet tested
+- Windows support tested on Windows 11 (Developer Mode or Admin still required for symlinks)
 
 ### When to Use beyond-local-file
 
