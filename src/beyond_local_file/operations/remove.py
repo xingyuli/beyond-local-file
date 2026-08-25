@@ -63,7 +63,7 @@ class RemoveFormatter:
             artifact: Removed target-side item path.
             strategy: Projection strategy represented by the deleted item.
         """
-        self._echo(f"Removed {strategy} artifact: {artifact}")
+        self._echo(f"Removed {strategy} artifact: {artifact.as_posix()}")
 
     def artifact_absent(self, artifact: Path) -> None:
         """Report that a missing expected target artifact needs no cleanup.
@@ -71,7 +71,7 @@ class RemoveFormatter:
         Args:
             artifact: Expected projection path that is absent.
         """
-        self._echo(f"Skipping absent artifact: {artifact}")
+        self._echo(f"Skipping absent artifact: {artifact.as_posix()}")
 
     def exclude_removed(self, entry: str, exclude_file: Path) -> None:
         """Report deletion of one Git-exclude entry.
@@ -80,7 +80,7 @@ class RemoveFormatter:
             entry: Relative item path removed from the exclude file.
             exclude_file: Repository exclude file updated by the removal.
         """
-        self._echo(f"Removed Git exclude entry {entry!r} from {exclude_file}")
+        self._echo(f"Removed Git exclude entry {entry!r} from {exclude_file.as_posix()}")
 
     def exclude_absent(self, entry: str, exclude_file: Path) -> None:
         """Report that an absent Git-exclude entry needs no cleanup.
@@ -89,7 +89,7 @@ class RemoveFormatter:
             entry: Relative item path that was not present.
             exclude_file: Repository exclude file that was inspected.
         """
-        self._echo(f"Skipping absent Git exclude entry {entry!r} in {exclude_file}")
+        self._echo(f"Skipping absent Git exclude entry {entry!r} in {exclude_file.as_posix()}")
 
     def managed_copy_deleted(self, managed_copy: Path) -> None:
         """Report permanent deletion of the authoritative managed item.
@@ -97,7 +97,7 @@ class RemoveFormatter:
         Args:
             managed_copy: Removed canonical managed item path.
         """
-        self._echo(f"Deleted managed copy: {managed_copy}")
+        self._echo(f"Deleted managed copy: {managed_copy.as_posix()}")
 
     def config_updated(self, entry: str, config_path: Path) -> None:
         """Report removal of selective-sync configuration entries.
@@ -106,7 +106,7 @@ class RemoveFormatter:
             entry: Relative item path removed from selective mappings.
             config_path: Updated configuration file.
         """
-        self._echo(f"Removed {entry!r} from selective-sync configuration: {config_path}")
+        self._echo(f"Removed {entry!r} from selective-sync configuration: {config_path.as_posix()}")
 
     def config_skipped(self) -> None:
         """Report that no participating selective mapping needs updating."""
@@ -123,7 +123,7 @@ class RemoveFormatter:
             managed_copy: Managed item already deleted before the failed write.
             entry: Configuration entry that may require manual removal.
         """
-        self._echo(f"Managed copy {managed_copy} was deleted; remove {entry!r} from configuration manually.")
+        self._echo(f"Managed copy {managed_copy.as_posix()} was deleted; remove {entry!r} from configuration manually.")
 
 
 @dataclass(frozen=True)
@@ -207,7 +207,7 @@ class RemoveOperation:
             self.formatter.error(f"Invocation path does not exist: {self.source}")
             return False
 
-        entry = str(self.rel_path)
+        entry = self.rel_path.as_posix()
         mapping = self.context.matched_mapping
         if mapping.subpaths is not None and entry not in mapping.subpaths:
             self.formatter.error(f"Invocation mapping does not manage {entry!r}")
@@ -273,7 +273,7 @@ class RemoveOperation:
         Returns:
             Every sync-all mapping plus selective mappings containing Rel_Path.
         """
-        entry = str(self.rel_path)
+        entry = self.rel_path.as_posix()
         return [mapping for mapping in self.context.mappings if mapping.subpaths is None or entry in mapping.subpaths]
 
     def _uses_copy_strategy(self, mapping: Mapping) -> bool:
@@ -285,7 +285,7 @@ class RemoveOperation:
         Returns:
             True only when this exact relative item path has copy strategy.
         """
-        return mapping.copy_paths is not None and str(self.rel_path) in mapping.copy_paths
+        return mapping.copy_paths is not None and self.rel_path.as_posix() in mapping.copy_paths
 
     def _validate_symlink_artifact(self, artifact: Path, managed_copy: Path, label: str) -> bool:
         """Verify that a target artifact is the expected non-dangling symlink.
@@ -348,7 +348,7 @@ class RemoveOperation:
             return False
         self.formatter.managed_copy_deleted(managed_copy)
         if self._selective_targets():
-            self.formatter.config_updated(str(self.rel_path), self.context.config_path)
+            self.formatter.config_updated(self.rel_path.as_posix(), self.context.config_path)
         else:
             self.formatter.config_skipped()
         return True
@@ -367,7 +367,7 @@ class RemoveOperation:
             manager = GitExcludeManager(target)
             if not manager.is_git_repo():
                 continue
-            entry = str(self.rel_path)
+            entry = self.rel_path.as_posix()
             try:
                 entries = manager.read_entries()
             except OSError as error:
@@ -420,7 +420,7 @@ class RemoveOperation:
         manager = GitExcludeManager(target)
         if not manager.is_git_repo():
             return True
-        entry = str(self.rel_path)
+        entry = self.rel_path.as_posix()
         try:
             entries = manager.read_entries()
         except OSError as error:
@@ -493,18 +493,19 @@ class RemoveOperation:
             return 0
         try:
             changed = ConfigUpdater(self.context.config_path).remove_subpath_entries(
-                self.context.project_name, targets, str(self.rel_path)
+                self.context.project_name, targets, self.rel_path.as_posix()
             )
         except OSError as error:
             self.formatter.error(f"Could not update configuration {self.context.config_path}: {error}")
             self.formatter.config_repair_needed(
                 managed_copy=self.context.managed_project_path / self.rel_path,
-                entry=str(self.rel_path),
+                entry=self.rel_path.as_posix(),
             )
             return 1
         if not changed:
             self.formatter.error(f"Could not remove {self.rel_path!s} from participating selective mappings")
-            self.formatter.config_repair_needed(self.context.managed_project_path / self.rel_path, str(self.rel_path))
+            managed_copy = self.context.managed_project_path / self.rel_path
+            self.formatter.config_repair_needed(managed_copy, self.rel_path.as_posix())
             return 1
-        self.formatter.config_updated(str(self.rel_path), self.context.config_path)
+        self.formatter.config_updated(self.rel_path.as_posix(), self.context.config_path)
         return 0

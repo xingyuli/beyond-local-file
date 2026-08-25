@@ -9,11 +9,12 @@ import tempfile
 from pathlib import Path
 
 import yaml
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from beyond_local_file.config import Config
 from beyond_local_file.project_processor import _get_absolute_path
+from tests.path_strategies import is_safe_fs_name, is_safe_relative_path
 
 
 # Feature: uvx-installable-tool, Property 1: Config File Path Resolution
@@ -25,7 +26,7 @@ from beyond_local_file.project_processor import _get_absolute_path
         ),
         min_size=1,
         max_size=50,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
     cwd_suffix=st.text(
         alphabet=st.characters(
             whitelist_categories=("Lu", "Ll", "Nd"),
@@ -33,7 +34,7 @@ from beyond_local_file.project_processor import _get_absolute_path
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
 )
 def test_config_file_path_resolved_relative_to_cwd(
     relative_config_path: str,
@@ -87,7 +88,7 @@ def test_config_file_path_resolved_relative_to_cwd(
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x and "/" not in x),
+    ).filter(is_safe_fs_name),
     config_dir_suffix=st.text(
         alphabet=st.characters(
             whitelist_categories=("Lu", "Ll", "Nd"),
@@ -95,7 +96,7 @@ def test_config_file_path_resolved_relative_to_cwd(
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
 )
 def test_project_path_resolved_relative_to_config_file(
     relative_project_path: str,
@@ -170,7 +171,7 @@ def test_project_path_resolved_relative_to_config_file(
         ),
         min_size=1,
         max_size=50,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
     cwd_suffix=st.text(
         alphabet=st.characters(
             whitelist_categories=("Lu", "Ll", "Nd"),
@@ -178,7 +179,7 @@ def test_project_path_resolved_relative_to_config_file(
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
 )
 def test_target_path_resolved_relative_to_cwd(
     relative_target_path: str,
@@ -254,7 +255,7 @@ def test_target_path_resolved_relative_to_cwd(
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
     execution_dir_suffix=st.text(
         alphabet=st.characters(
             whitelist_categories=("Lu", "Ll", "Nd"),
@@ -262,7 +263,7 @@ def test_target_path_resolved_relative_to_cwd(
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x),
+    ).filter(is_safe_relative_path),
     project_name=st.text(
         alphabet=st.characters(
             whitelist_categories=("Lu", "Ll", "Nd"),
@@ -270,7 +271,7 @@ def test_target_path_resolved_relative_to_cwd(
         ),
         min_size=1,
         max_size=20,
-    ).filter(lambda x: x and not x.startswith("/") and ".." not in x and "/" not in x),
+    ).filter(is_safe_fs_name),
 )
 def test_working_directory_independence(
     config_dir_suffix: str,
@@ -289,6 +290,9 @@ def test_working_directory_independence(
         execution_dir_suffix: A randomly generated directory suffix for execution location.
         project_name: A randomly generated project name.
     """
+    # Suffixes must differ so the test actually exercises CWD independence.
+    assume(config_dir_suffix != execution_dir_suffix)
+
     # Save original CWD
     original_cwd = os.getcwd()
 

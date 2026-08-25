@@ -14,21 +14,20 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.config import ConfigUpdater
+from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
 # Strategies
 # ---------------------------------------------------------------------------
 
-# Safe entry names: alphanumeric plus hyphens, underscores, and dots.
-# Filter out empty strings and the special names "." and "..".
+# Safe entry names: ASCII alphanumeric plus hyphens, underscores, and dots.
+# ASCII-only avoids locale/encoding issues when writing YAML on non-UTF-8 Windows.
+# Also excludes Windows reserved device names (NUL, COM1, …).
 _entry_name = st.text(
-    alphabet=st.characters(
-        whitelist_categories=("Lu", "Ll", "Nd"),
-        whitelist_characters="-_.",
-    ),
+    alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.",
     min_size=1,
     max_size=40,
-).filter(lambda s: s not in (".", ".."))
+).filter(is_safe_fs_name)
 
 # A list of subpath entries (plain strings) for the config YAML.
 _subpath_entries = st.lists(
@@ -109,18 +108,18 @@ def test_remove_subpath_entry_is_idempotent(
         cwd = tmp_path / "target"
         cwd.mkdir()
 
-        # Write the initial config YAML.
-        config_file.write_text(_build_config_yaml(str(cwd), subpath_entries))
+        # Write the initial config YAML (UTF-8; as_posix avoids YAML/Windows issues).
+        config_file.write_text(_build_config_yaml(cwd.as_posix(), subpath_entries), encoding="utf-8")
 
         updater = ConfigUpdater(config_file)
 
         # First call — may or may not remove the entry.
         updater.remove_subpath_entry("test-project", cwd, entry_name)
-        content_after_first = config_file.read_text()
+        content_after_first = config_file.read_text(encoding="utf-8")
 
         # Second call — must be a no-op; file content must not change.
         updater.remove_subpath_entry("test-project", cwd, entry_name)
-        content_after_second = config_file.read_text()
+        content_after_second = config_file.read_text(encoding="utf-8")
 
         assert content_after_first == content_after_second, (
             f"remove_subpath_entry is not idempotent.\n"

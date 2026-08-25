@@ -118,7 +118,7 @@ class TestRule5aDeclaredAncestorCopyExists:
         msg = formatter.error.call_args[0][0]
         assert "notes.txt" in msg
         assert "blf link sync" in msg
-        assert str(managed_copy) in msg
+        assert managed_copy.as_posix() in msg
 
     def test_ancestor_subpath_copy_exists_returns_1(self, tmp_path: Path) -> None:
         """Declared subpath is ancestor of rel_path and managed copy exists → exit 1.
@@ -178,7 +178,7 @@ class TestRule5aDeclaredAncestorCopyExists:
         op._validate(dest_root / rel_path)
 
         msg = formatter.error.call_args[0][0]
-        assert str(managed_copy) in msg
+        assert managed_copy.as_posix() in msg
         assert "already exists" in msg
 
 
@@ -264,8 +264,8 @@ class TestRule5aDeclaredAncestorCopyMissing:
         op._validate(dest_root / rel_path)
 
         msg = formatter.error.call_args[0][0]
-        assert str(source) in msg
-        assert str(managed_copy) in msg
+        assert source.as_posix() in msg
+        assert managed_copy.as_posix() in msg
         assert "manually" in msg
 
     def test_copy_missing_message_does_not_mention_already_exists(self, tmp_path: Path) -> None:

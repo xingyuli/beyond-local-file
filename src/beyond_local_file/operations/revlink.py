@@ -80,7 +80,8 @@ class ChecksumVerifier:
         md5 = hashlib.md5()
         for file in sorted(path.rglob("*")):
             if file.is_file():
-                md5.update(str(file.relative_to(path)).encode())
+                # as_posix() keeps digests identical across Windows and Unix.
+                md5.update(file.relative_to(path).as_posix().encode())
                 md5.update(file.read_bytes())
         return md5.hexdigest()
 
@@ -133,7 +134,7 @@ class CreateFormatter:
             source: Path to the file or directory whose checksum is being
                 computed.
         """
-        self._echo(f"Computing checksum of {source}")
+        self._echo(f"Computing checksum of {source.as_posix()}")
 
     def copying(self, source: Path, dest: Path) -> None:
         """Print a message showing the source and destination paths for the copy.
@@ -143,7 +144,7 @@ class CreateFormatter:
                 directory.
             dest: Path to the destination location in the managed project.
         """
-        self._echo(f"Copying {source} -> {dest}")
+        self._echo(f"Copying {source.as_posix()} -> {dest.as_posix()}")
 
     def checksum_ok(self) -> None:
         """Print a confirmation that the MD5 checksums of source and copy match."""
@@ -158,7 +159,7 @@ class CreateFormatter:
             target: Path the symlink points to (location in the managed
                 project).
         """
-        self._echo(f"✓ Symlink created: {link} -> {target}")
+        self._echo(f"✓ Symlink created: {link.as_posix()} -> {target.as_posix()}")
 
     def git_exclude_added(self, name: str) -> None:
         """Print a confirmation that *name* was added to ``.git/info/exclude``.
@@ -185,7 +186,7 @@ class CreateFormatter:
             dest: Path to the existing file or directory in the managed project
                 that will be overwritten.
         """
-        self._echo(f"Warning: overwriting existing managed copy at {dest}")
+        self._echo(f"Warning: overwriting existing managed copy at {dest.as_posix()}")
 
     def info(self, message: str) -> None:
         """Print an informational message (no ``Error:`` prefix).
@@ -262,7 +263,7 @@ class RestoreFormatter:
         Args:
             path: Path to the symlink that is about to be unlinked.
         """
-        self._echo(f"Removing symlink at {path}")
+        self._echo(f"Removing symlink at {path.as_posix()}")
 
     def copying_back(self, source: Path, dest: Path) -> None:
         """Print a message showing the managed copy source and the restore destination.
@@ -273,7 +274,7 @@ class RestoreFormatter:
             dest: Path to the destination in the current working directory where
                 the content is being restored.
         """
-        self._echo(f"Copying {source} -> {dest}")
+        self._echo(f"Copying {source.as_posix()} -> {dest.as_posix()}")
 
     def computing_checksum(self, source: Path) -> None:
         """Print a message indicating that the checksum of *source* is being computed.
@@ -282,7 +283,7 @@ class RestoreFormatter:
             source: Path to the file or directory whose checksum is being
                 computed.
         """
-        self._echo(f"Computing checksum of {source}")
+        self._echo(f"Computing checksum of {source.as_posix()}")
 
     def checksum_ok(self) -> None:
         """Print a confirmation that the MD5 checksums of the managed copy and restored copy match."""
@@ -294,7 +295,7 @@ class RestoreFormatter:
         Args:
             path: Path to the managed copy that was deleted.
         """
-        self._echo(f"✓ Managed copy deleted: {path}")
+        self._echo(f"✓ Managed copy deleted: {path.as_posix()}")
 
     def managed_copy_delete_failed(self, path: Path) -> None:
         """Print a warning that the managed copy at *path* could not be deleted.
@@ -305,7 +306,7 @@ class RestoreFormatter:
         Args:
             path: Path to the managed copy that could not be deleted.
         """
-        self._echo(f"Warning: could not delete managed copy at {path}")
+        self._echo(f"Warning: could not delete managed copy at {path.as_posix()}")
 
     def git_exclude_removed(self, name: str) -> None:
         """Print a confirmation that *name* was removed from ``.git/info/exclude``.
@@ -482,7 +483,7 @@ class CreateOperation:
         self.formatter.symlink_created(self.source, dest)
         self._git_exclude_preview()
         if self.context is not None and self.context.matched_mapping.subpaths is not None:
-            self.formatter.config_updated(str(self.rel_path))
+            self.formatter.config_updated(self.rel_path.as_posix())
 
     # ------------------------------------------------------------------
     # Internal steps
@@ -528,7 +529,7 @@ class CreateOperation:
             return 1
 
         if self.source.is_symlink():
-            self.formatter.error(f"Path is already a symlink: {self.source}")
+            self.formatter.error(f"Path is already a symlink: {self.source.as_posix()}")
             return 1
 
         # Rule 3 — no intermediate symlink in the path
@@ -541,13 +542,13 @@ class CreateOperation:
                     resolved = candidate.resolve()
                     if resolved.is_relative_to(self.dest_root):
                         self.formatter.info(
-                            f"'{anc}' is a managed symlink — '{self.rel_path}' is already"
+                            f"'{anc.as_posix()}' is a managed symlink — '{self.rel_path.as_posix()}' is already"
                             " managed through it. Nothing to do."
                         )
                         return 0
                     else:
                         self.formatter.error(
-                            f"'{anc}' is a symlink not managed by blf."
+                            f"'{anc.as_posix()}' is a symlink not managed by blf."
                             " Cannot adopt a path through an unmanaged symlink."
                         )
                         return 1
@@ -555,7 +556,7 @@ class CreateOperation:
         # Rule 4 — sync-all mapping rejects nested paths
         if self.context is not None and self.context.matched_mapping.subpaths is None and len(self.rel_path.parts) > 1:
             self.formatter.error(
-                f"'{self.rel_path}' is a nested path. This mapping uses sync-all"
+                f"'{self.rel_path.as_posix()}' is a nested path. This mapping uses sync-all"
                 " — only top-level paths can be adopted directly."
                 " Add a 'subpath' entry to your config mapping first."
             )
@@ -571,13 +572,13 @@ class CreateOperation:
                     if managed_copy.exists():
                         self.formatter.error(
                             f"'{declared}' is already a declared subpath that covers this path,"
-                            f" and the managed copy already exists at '{managed_copy}'."
+                            f" and the managed copy already exists at '{managed_copy.as_posix()}'."
                             " Run 'blf link sync' to create the symlink."
                         )
                     else:
                         self.formatter.error(
                             f"'{declared}' is already a declared subpath that covers this path."
-                            f" Copy '{self.source}' to '{managed_copy}' manually,"
+                            f" Copy '{self.source.as_posix()}' to '{managed_copy.as_posix()}' manually,"
                             " then run 'blf link sync' to create the symlink."
                         )
                     return 1
@@ -585,14 +586,16 @@ class CreateOperation:
                 if declared_path.is_relative_to(self.rel_path) and declared_path != self.rel_path:
                     self.formatter.error(
                         f"'{declared}' is a declared subpath under this path."
-                        f" Adopting '{self.rel_path}' would conflict with it."
+                        f" Adopting '{self.rel_path.as_posix()}' would conflict with it."
                         f" Remove '{declared}' from the config subpath list first,"
                         " or adopt a more specific path."
                     )
                     return 1
 
         if dest.exists() and not self.force:
-            self.formatter.error(f"Destination already exists: {dest}\nUse --force to overwrite.")
+            self.formatter.error(
+                f"Destination already exists: {dest.as_posix()}\nUse --force to overwrite."
+            )
             return 1
 
         return 0
@@ -700,7 +703,8 @@ class CreateOperation:
             self.source.symlink_to(dest)
         except OSError:
             self.formatter.error(
-                f"Failed to create symlink at {self.source} \u2192 {dest}. Filesystem may be in inconsistent state."
+                f"Failed to create symlink at {self.source.as_posix()} \u2192 "
+                f"{dest.as_posix()}. Filesystem may be in inconsistent state."
             )
             return 1
 
@@ -722,9 +726,9 @@ class CreateOperation:
             return
 
         updater = ConfigUpdater(self.context.config_path)
-        changed = updater.add_subpath_entry(self.context.project_name, self.context.cwd, str(self.rel_path))
+        changed = updater.add_subpath_entry(self.context.project_name, self.context.cwd, self.rel_path.as_posix())
         if changed:
-            self.formatter.config_updated(str(self.rel_path))
+            self.formatter.config_updated(self.rel_path.as_posix())
 
     def _git_exclude_preview(self) -> None:
         """Emit a dry-run preview for the git-exclude step.
@@ -733,7 +737,7 @@ class CreateOperation:
         and whether the entry already exists, then reports what would happen via
         the formatter — without writing anything.
 
-        The entry name is ``str(self.rel_path)`` (e.g. ``.kiro/specs/foo``)
+        The entry name is ``self.rel_path.as_posix()`` (e.g. ``.kiro/specs/foo``)
         rather than ``source.name`` so the exclude entry mirrors the full
         relative path used by ``link sync``.
         """
@@ -743,7 +747,7 @@ class CreateOperation:
         if not manager.is_git_repo():
             return
         existing = manager.read_entries()
-        entry_name = str(self.rel_path)
+        entry_name = self.rel_path.as_posix()
         if entry_name in existing:
             self.formatter.git_exclude_exists(entry_name)
         else:
@@ -756,10 +760,10 @@ class CreateOperation:
         for the project root (``context.cwd``).  If the directory is not a Git
         repository the step is silently skipped (Requirement 6.3).  Otherwise
         calls :meth:`~beyond_local_file.git_manager.GitExcludeManager.write_entries`
-        with a set containing ``str(rel_path)`` and reports the outcome via the
+        with a set containing ``rel_path.as_posix()`` and reports the outcome via the
         formatter.
 
-        The entry name is ``str(self.rel_path)`` (e.g. ``.kiro/specs/foo``)
+        The entry name is ``self.rel_path.as_posix()`` (e.g. ``.kiro/specs/foo``)
         rather than ``source.name`` so the exclude entry mirrors the full
         relative path used by ``link sync``.
 
@@ -777,7 +781,7 @@ class CreateOperation:
         if not manager.is_git_repo():
             return 0
 
-        entry_name = str(self.rel_path)
+        entry_name = self.rel_path.as_posix()
         added_count, already_existing = manager.write_entries({entry_name})
 
         if added_count > 0:
@@ -1013,7 +1017,7 @@ class RestoreOperation:
         for the project root (``context.cwd``).  If the directory is not a Git
         repository the step is silently skipped.  Otherwise calls
         :meth:`~beyond_local_file.git_manager.GitExcludeManager.remove_entries`
-        with a set containing ``str(rel_path)`` and reports the outcome via the
+        with a set containing ``rel_path.as_posix()`` and reports the outcome via the
         formatter.  Using ``rel_path`` rather than ``source.name`` ensures the
         entry matches what was written by :class:`CreateOperation` for nested
         paths (e.g. ``.kiro/specs/foo`` instead of just ``foo``).
@@ -1030,7 +1034,7 @@ class RestoreOperation:
         if not manager.is_git_repo():
             return 0
 
-        entry_name = str(self.rel_path)
+        entry_name = self.rel_path.as_posix()
         removed = manager.remove_entries({entry_name})
 
         if entry_name in removed:
@@ -1047,7 +1051,7 @@ class RestoreOperation:
         is already covered and no update is needed.  When a ``subpath`` list
         exists, the item must be de-registered so that ``link sync`` and
         ``link check`` will no longer manage it.  The entry name is
-        ``str(rel_path)`` rather than ``source.name`` so that nested paths
+        ``rel_path.as_posix()`` rather than ``source.name`` so that nested paths
         (e.g. ``.kiro/specs/foo``) are matched correctly in the config.
 
         This step is non-fatal: failures are silently ignored so that a config
@@ -1056,7 +1060,7 @@ class RestoreOperation:
         if self.context is None or self.context.matched_mapping.subpaths is None:
             return
 
-        entry_name = str(self.rel_path)
+        entry_name = self.rel_path.as_posix()
         updater = ConfigUpdater(self.context.config_path)
         changed = updater.remove_subpath_entry(self.context.project_name, self.context.cwd, entry_name)
         if changed:

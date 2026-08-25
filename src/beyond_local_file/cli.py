@@ -190,7 +190,9 @@ def upgrade(ctx, dry_run):
 def remove(ctx, path, dry_run):
     """Permanently remove one managed item and every validated projection."""
     formatter = RemoveFormatter(dry_run=dry_run)
-    cwd = Path.cwd()
+    # resolve() normalises Windows short (8.3) vs long path forms so that
+    # relative_to and target matching stay consistent with config paths.
+    cwd = Path.cwd().resolve()
     candidate = Path(path)
     candidate = candidate if candidate.is_absolute() else cwd / candidate
     source = Path(os.path.normpath(candidate))
@@ -254,7 +256,9 @@ def revlink_create(ctx, path, dry_run, force):
     .git/info/exclude if the target directory is a Git repository.
     """
     source = Path(path).resolve()
-    cwd = Path.cwd()
+    # resolve() normalises Windows short (8.3) vs long path forms so that
+    # relative_to and target matching stay consistent with config paths.
+    cwd = Path.cwd().resolve()
 
     try:
         rel_path = source.relative_to(cwd)
@@ -291,9 +295,13 @@ def revlink_restore(ctx, path, dry_run):
     deletes the managed copy, removes the item from .git/info/exclude, and
     removes the entry from the config subpath list if selective sync is active.
     """
-    cwd = Path.cwd()
-    # Use absolute() instead of resolve() so that symlinks are not followed —
-    # the source must be the symlink path itself, not the managed copy it points to.
+    # resolve() normalises Windows short (8.3) vs long path forms so that
+    # relative_to and target matching stay consistent with config paths.
+    cwd = Path.cwd().resolve()
+    # Use absolute() instead of resolve() on the source so that symlinks are
+    # not followed — the source must be the symlink path itself, not the
+    # managed copy it points to.  Build from the already-resolved cwd so the
+    # absolute form shares the same prefix.
     source = (cwd / path).absolute()
 
     try:

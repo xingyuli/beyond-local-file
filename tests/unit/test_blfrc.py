@@ -1,5 +1,6 @@
 """Tests for .blfrc configuration file support."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,7 @@ class TestResolveConfigFromBlfrc:
 
         assert result == [config1, config2]
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod-based permission denial is ineffective on Windows")
     def test_error_on_permission_denied(self, temp_home):
         """Test that BlfrcError is raised when .blfrc is not readable."""
         blfrc = temp_home / ".blfrc"
@@ -227,6 +229,7 @@ class TestResolveConfigFromBlfrc:
         with pytest.raises(BlfrcError, match="is a directory"):
             resolve_config_from_blfrc()
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod-based permission denial is ineffective on Windows")
     def test_error_on_config_file_not_readable(self, temp_home):
         """Test that BlfrcError is raised when config file is not readable."""
         config = temp_home / "test.yml"

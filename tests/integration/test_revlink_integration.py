@@ -1162,7 +1162,7 @@ class TestRevlinkGitExcludeNestedPath:
             env = {"BLF_HOME": str(home_dir)}
 
             config_path = base / "config.yml"
-            config_path.write_text(f"my-project:\n  target: {target_dir}\n  subpath:\n    - .placeholder\n")
+            config_path.write_text(f"my-project:\n  target: {target_dir.as_posix()}\n  subpath:\n    - .placeholder\n")
 
             source_file = target_dir / filename
             source_file.write_text("content")
@@ -1218,7 +1218,7 @@ class TestRevlinkGitExcludeNestedPath:
             env = {"BLF_HOME": str(home_dir)}
 
             config_path = base / "config.yml"
-            config_path.write_text(f"my-project:\n  target: {target_dir}\n  subpath:\n    - {filename}\n")
+            config_path.write_text(f"my-project:\n  target: {target_dir.as_posix()}\n  subpath:\n    - {filename}\n")
 
             # Set up managed copy
             managed_copy = managed_dir / filename
