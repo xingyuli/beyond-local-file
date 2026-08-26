@@ -269,7 +269,7 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ## Platform Support
 
-Tested on macOS, Linux, and Windows 11. See [docs/platform-support.md](docs/platform-support.md) for details.
+Tested on macOS, Linux, and Windows 10. See [docs/platform-support.md](docs/platform-support.md) for details.
 
 On Windows, enable Developer Mode (Windows 10/11) or run with Administrator privileges so symlink creation is allowed. See [docs/windows-support.md](docs/windows-support.md) for setup instructions.
 

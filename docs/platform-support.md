@@ -20,11 +20,12 @@ beyond-local-file is designed to work across all major operating systems.
 |----------|--------|-------|
 | **macOS** | ✅ Tested & Supported | No special configuration needed |
 | **Linux** | ✅ Tested & Supported | No special configuration needed |
-| **Windows 10/11** | ✅ Tested & Supported | Requires Developer Mode or Admin privileges for symlinks |
+| **Windows 10** | ✅ Tested & Supported | Requires Developer Mode or Admin privileges for symlinks |
+| **Windows 11** | ✅ Supported | Same symlink requirements as Windows 10; not separately cross-tested |
 | **Windows 7/8** | ⚠️ Implemented, Not Tested | Should work with Administrator privileges |
 | **WSL** | ✅ Should Work | Works like native Linux |
 
-**Note:** Native Windows 11 has been cross-tested (full test suite). Symlink creation still needs Developer Mode (Windows 10 Build 1703+) or an elevated shell. Feedback on older Windows versions remains welcome.
+**Note:** Native Windows 10 has been cross-tested (full test suite). Symlink creation still needs Developer Mode (Windows 10 Build 1703+) or an elevated shell. Windows 11 is expected to behave the same; feedback is welcome.
 
 ## Quick Start by Platform
 
@@ -114,10 +115,10 @@ The project includes comprehensive tests:
 # Run tests
 uv run pytest
 
-# Full suite has been run on macOS, Linux, and Windows 11
+# Full suite has been run on macOS, Linux, and Windows 10
 ```
 
-**Windows Testing Status:** The full pytest suite (including Hypothesis property tests) has been run successfully on Windows 11 with Developer Mode enabled. Property-test path generators filter Windows reserved device names (`NUL`, `CON`, `COM1`, …) so the suite stays portable. Automated CI still runs on the publish workflow only — local or contributor runs on Windows remain useful.
+**Windows Testing Status:** The full pytest suite (including Hypothesis property tests) has been run successfully on Windows 10 with Developer Mode enabled. Property-test path generators filter Windows reserved device names (`NUL`, `CON`, `COM1`, …) so the suite stays portable. Automated CI still runs on the publish workflow only — local or contributor runs on Windows remain useful.
 
 ## Documentation
 

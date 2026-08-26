@@ -5,11 +5,26 @@ and check their status, with automatic Git exclude file management.
 """
 
 import os
+import sys
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
 import click
+
+
+def _configure_windows_console_encoding() -> None:
+    """Use UTF-8 for stdout/stderr so Rich and Unicode status glyphs render on Windows."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            pass
 
 from . import __version__
 from .completion import complete_project_names
@@ -112,6 +127,7 @@ def ask_user_for_conflict(managed_file: Path, target_file: Path) -> CopyConflict
 @click.pass_context
 def cli(ctx, config):
     """Manage links between project directories and target locations."""
+    _configure_windows_console_encoding()
     ctx.ensure_object(dict)
     ctx.obj["config"] = config
 

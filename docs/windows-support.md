@@ -1,6 +1,6 @@
 # Windows Support
 
-**Testing Status:** Native Windows 11 has been cross-tested with the full pytest suite. Symlink creation still requires Developer Mode (Windows 10 Build 1703+) or an elevated shell. Report remaining issues via GitHub.
+**Testing Status:** Native Windows 10 has been cross-tested with the full pytest suite. Symlink creation still requires Developer Mode (Windows 10 Build 1703+) or an elevated shell. Windows 11 is expected to work the same but has not been separately cross-tested. Report remaining issues via GitHub.
 
 ## Table of Contents
 
@@ -175,7 +175,7 @@ $env:Path += ";$env:USERPROFILE\.local\bin"
 
 ## Testing on Windows
 
-**Current Status:** Cross-tested on Windows 11 (full `uv run pytest` suite). Developer Mode should be enabled for symlink-related commands and tests.
+**Current Status:** Cross-tested on Windows 10 (full `uv run pytest` suite). Developer Mode should be enabled for symlink-related commands and tests.
 
 **Reproduce locally:**
 
