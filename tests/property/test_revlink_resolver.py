@@ -11,12 +11,14 @@ from hypothesis import strategies as st
 
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.project_processor import _resolve_project_from_cwd
+from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
 # Strategies
 # ---------------------------------------------------------------------------
 
-# Generate safe path components: alphanumeric + hyphens/underscores, no slashes
+# Generate safe path components: alphanumeric + hyphens/underscores, no slashes.
+# Also excludes Windows reserved device names (NUL, COM1, …).
 _path_component = st.text(
     alphabet=st.characters(
         whitelist_categories=("Lu", "Ll", "Nd"),
@@ -24,7 +26,7 @@ _path_component = st.text(
     ),
     min_size=1,
     max_size=20,
-).filter(lambda s: s not in (".", ".."))
+).filter(is_safe_fs_name)
 
 # Generate an absolute Path by building /component/component/...
 _absolute_path = st.lists(_path_component, min_size=1, max_size=4).map(lambda parts: Path("/" + "/".join(parts)))

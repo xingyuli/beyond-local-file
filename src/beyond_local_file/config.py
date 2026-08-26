@@ -72,7 +72,7 @@ class Config:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
 
-        with open(self.config_path) as f:
+        with open(self.config_path, encoding="utf-8") as f:
             self._data = yaml.safe_load(f)
 
         return self._data
@@ -331,7 +331,7 @@ class ConfigUpdater:
         if insert_line is None:
             return False
 
-        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        source_lines = self._config_path.read_text(encoding="utf-8").splitlines(keepends=True)
 
         if insert_line < 0:
             # Empty subpath list: find the ``subpath:`` key line and replace it
@@ -343,7 +343,7 @@ class ConfigUpdater:
             item_indent = key_indent + 2
             source_lines[key_line_idx] = " " * key_indent + "subpath:\n"
             source_lines.insert(key_line_idx + 1, " " * item_indent + f"- {entry_name}\n")
-            self._config_path.write_text("".join(source_lines))
+            self._config_path.write_text("".join(source_lines), encoding="utf-8")
             return True
 
         last_item_line = source_lines[insert_line]
@@ -364,7 +364,7 @@ class ConfigUpdater:
         # Only strip blanks when they run all the way to EOF.
         if end == len(source_lines):
             del source_lines[new_item_pos + 1 : end]
-        self._config_path.write_text("".join(source_lines))
+        self._config_path.write_text("".join(source_lines), encoding="utf-8")
         return True
 
     def _find_insert_line(
@@ -484,7 +484,7 @@ class ConfigUpdater:
             return False
 
         delete_start, delete_end, becomes_empty, key_indent, key_line_0based = removal
-        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        source_lines = self._config_path.read_text(encoding="utf-8").splitlines(keepends=True)
 
         if becomes_empty:
             # Replace the ``subpath:`` key line AND the sole item line(s) with
@@ -495,7 +495,7 @@ class ConfigUpdater:
         else:
             del source_lines[delete_start:delete_end]
 
-        self._config_path.write_text("".join(source_lines))
+        self._config_path.write_text("".join(source_lines), encoding="utf-8")
         return True
 
     def _find_removal_lines(
@@ -586,7 +586,7 @@ class ConfigUpdater:
         # A scalar subpath is a one-item selective list written inline.  Replace
         # the complete key/value line with an empty list when it matches.
         key_line_0based = mapping.lc.key(_KEY_SUBPATH)[0]
-        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        source_lines = self._config_path.read_text(encoding="utf-8").splitlines(keepends=True)
         key_line_text = source_lines[key_line_0based]
         key_indent = len(key_line_text) - len(key_line_text.lstrip())
         if isinstance(subpath_list, str):
@@ -680,7 +680,7 @@ class ConfigUpdater:
         if not removals:
             return False
 
-        source_lines = self._config_path.read_text().splitlines(keepends=True)
+        source_lines = self._config_path.read_text(encoding="utf-8").splitlines(keepends=True)
         for delete_start, delete_end, becomes_empty, key_indent, key_line in sorted(removals, reverse=True):
             if becomes_empty:
                 source_lines[key_line:delete_end] = [" " * key_indent + "subpath: []\n"]

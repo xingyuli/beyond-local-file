@@ -97,6 +97,8 @@ uv run pytest --cov=beyond_local_file
 uv run pytest -v
 ```
 
+The suite is intended to pass on macOS, Linux, and Windows 10. Property tests share filters in `tests/path_strategies.py` so Hypothesis does not generate Windows-reserved names (`NUL`, `CON`, `COM1`, …). On Windows, enable Developer Mode (or use an elevated shell) before running tests that create symlinks.
+
 ## Code Quality
 
 The project uses Ruff for linting and formatting. All code must pass these checks before committing.

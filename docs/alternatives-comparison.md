@@ -241,7 +241,7 @@ project-d:
 - Subpath selection for granular control
 - Simple and lightweight
 - No version control overhead
-- Tested on macOS and Linux
+- Tested on macOS, Linux, and Windows 10
 
 ### Limitations
 
@@ -250,7 +250,7 @@ project-d:
 - No encryption or secrets management
 - No built-in remote sync (intentionally)
 - Copy mode only supports single files, not directories
-- Windows support implemented but not yet tested
+- Windows support tested on Windows 10 (Developer Mode or Admin still required for symlinks)
 
 ### When to Use beyond-local-file
 
@@ -276,7 +276,7 @@ project-d:
 | **Link strategy** | Symlinks only | Copies files to target | Symlinks + physical copies |
 | **Complexity** | Simple | Feature-rich | Minimal |
 | **Learning curve** | Low | Medium-High | Low |
-| **Cross-platform** | Unix-like (Linux, macOS) | Yes (Linux, macOS, Windows) | Implemented (macOS/Linux tested, Windows untested) |
+| **Cross-platform** | Unix-like (Linux, macOS) | Yes (Linux, macOS, Windows) | Yes (macOS, Linux, Windows 10 tested) |
 
 ---
 

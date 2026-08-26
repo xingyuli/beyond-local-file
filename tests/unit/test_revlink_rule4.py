@@ -152,7 +152,7 @@ class TestRule4SyncAllNestedPath:
         op._validate(dest_root / rel_path)
 
         error_msg = formatter.error.call_args[0][0]
-        assert str(rel_path) in error_msg
+        assert rel_path.as_posix() in error_msg
 
     def test_deeply_nested_rel_path_returns_exit_1(self, tmp_path: Path) -> None:
         """sync-all mapping with a 3-part rel_path also exits with code 1.

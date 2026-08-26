@@ -14,14 +14,15 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.operations.revlink import ChecksumVerifier
+from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
 # Strategies
 # ---------------------------------------------------------------------------
 
 # Generate safe filename components: alphanumeric plus hyphens, underscores,
-# and dots. Filter out empty strings, path separators, null bytes, and the
-# special names "." and "..".
+# and dots. Filter out empty strings, path separators, null bytes, "." / "..",
+# and Windows reserved device names (NUL, COM1, …).
 _filename = st.text(
     alphabet=st.characters(
         whitelist_categories=("Lu", "Ll", "Nd"),
@@ -29,7 +30,7 @@ _filename = st.text(
     ),
     min_size=1,
     max_size=30,
-).filter(lambda s: s not in (".", ".."))
+).filter(is_safe_fs_name)
 
 # A flat list of (filename, content) pairs for building a directory tree.
 # unique_by on filename avoids duplicate filenames in the same directory.
@@ -114,7 +115,7 @@ def test_checksum_verifier_is_deterministic(
         ),
         min_size=1,
         max_size=30,
-    ).filter(lambda s: s not in (".", "..")),
+    ).filter(is_safe_fs_name),
     content=st.binary(),
 )
 def test_checksum_verifier_matches_for_copied_file(

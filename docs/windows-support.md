@@ -1,6 +1,6 @@
 # Windows Support
 
-**Testing Status:** Windows support is implemented but has not been tested on actual Windows systems yet. The code uses Python's standard `pathlib` library for cross-platform compatibility. If you're a Windows user, please try it out and report any issues!
+**Testing Status:** Native Windows 10 has been cross-tested with the full pytest suite. Symlink creation still requires Developer Mode (Windows 10 Build 1703+) or an elevated shell. Windows 11 is expected to work the same but has not been separately cross-tested. Report remaining issues via GitHub.
 
 ## Table of Contents
 
@@ -106,6 +106,8 @@ project-b: C:\\Users\\YourName\\workspace\\project-b
 project-c: ../workspace/project-c
 ```
 
+Relative item names written into `subpath` lists and `.git/info/exclude` always use forward slashes (e.g. `.kiro/hooks`), even on Windows. Config I/O uses UTF-8 explicitly so locale code pages do not corrupt edits.
+
 ### Example Windows Configuration
 
 ```yaml
@@ -173,9 +175,9 @@ $env:Path += ";$env:USERPROFILE\.local\bin"
 
 ## Testing on Windows
 
-**Current Status:** Not yet tested on actual Windows systems. The implementation uses Python's standard `pathlib.Path.symlink_to()` which should work on Windows with proper permissions, but real-world testing is needed.
+**Current Status:** Cross-tested on Windows 10 (full `uv run pytest` suite). Developer Mode should be enabled for symlink-related commands and tests.
 
-**If you're a Windows user, please help test:**
+**Reproduce locally:**
 
 ```powershell
 # 1. Create a test directory
@@ -203,7 +205,7 @@ dir ..\target
 # Should show: test.txt -> C:\Users\YourName\test-beyond-local-file\my-files\project-a\test.txt
 ```
 
-**Please report results** (success or failure) by [opening an issue](https://github.com/xingyuli/beyond-local-file/issues) with:
+**Please report regressions** by [opening an issue](https://github.com/xingyuli/beyond-local-file/issues) with:
 - Windows version
 - Python version
 - Whether Developer Mode is enabled
@@ -230,10 +232,10 @@ blf link sync
 
 ## Recommendations for Windows Users
 
-1. **Enable Developer Mode** - Makes everything easier
-2. **Use WSL** - If you're comfortable with Linux, WSL provides a better experience
+1. **Enable Developer Mode** - Required for non-elevated symlink creation
+2. **Use WSL** - If you're comfortable with Linux, WSL provides a Unix-like experience
 3. **Use Forward Slashes** - In config.yml for better cross-platform compatibility
-4. **Test First** - Try with a small test project before using on real projects
+4. **Smoke-test First** - Try with a small test project before using on real projects
 
 ## Further Reading
 

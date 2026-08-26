@@ -11,12 +11,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.cli import cli
+from tests.path_strategies import is_safe_fs_name
 
 _component = st.text(
     alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="-_"),
     min_size=1,
     max_size=12,
-).filter(lambda value: value not in {".", ".."})
+).filter(is_safe_fs_name)
 
 
 @settings(max_examples=30)
@@ -36,7 +37,7 @@ def test_remove_lexically_normalizes_contained_paths(item_name: str) -> None:
         (managed / item_name).write_text("content")
         (target / item_name).symlink_to(managed / item_name)
         config = root / "config.yml"
-        config.write_text(f"managed: {target}\n")
+        config.write_text(f"managed: {target.as_posix()}\n")
         previous_cwd = Path.cwd()
         try:
             os.chdir(target)
@@ -94,10 +95,10 @@ def test_remove_selects_only_generated_participating_mappings(participates: list
             target.mkdir()
         (targets[0] / "item.txt").symlink_to(managed_item)
 
-        mappings = [f"  - target: {targets[0]}\n    subpath:\n      - item.txt\n"]
+        mappings = [f"  - target: {targets[0].as_posix()}\n    subpath:\n      - item.txt\n"]
         for target, participates_for_target in zip(targets[1:], participates, strict=True):
             entry = "item.txt" if participates_for_target else "other.txt"
-            mappings.append(f"  - target: {target}\n    subpath:\n      - {entry}\n")
+            mappings.append(f"  - target: {target.as_posix()}\n    subpath:\n      - {entry}\n")
             item = target / "item.txt"
             if participates_for_target:
                 item.symlink_to(managed_item)
@@ -155,7 +156,7 @@ def test_remove_invalid_projection_never_mutates_persistent_state(invalid_kind: 
         exclude.parent.mkdir(parents=True)
         exclude.write_text("item.txt\n")
         config = root / "config.yml"
-        config.write_text(f"managed:\n  target: {target}\n  subpath:\n{subpath}")
+        config.write_text(f"managed:\n  target: {target.as_posix()}\n  subpath:\n{subpath}")
         before = {
             "config": config.read_bytes(),
             "exclude": exclude.read_bytes(),

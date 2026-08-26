@@ -15,13 +15,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.operations.revlink import RestoreFormatter, RestoreOperation
+from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
 # Strategies
 # ---------------------------------------------------------------------------
 
 # Safe ASCII filename characters: alphanumeric plus hyphens and underscores.
-# Filter out empty strings and the special names "." and "..".
+# Also excludes Windows reserved device names (NUL, COM1, …).
 _filename = st.text(
     alphabet=st.characters(
         whitelist_categories=("Lu", "Ll", "Nd"),
@@ -29,7 +30,7 @@ _filename = st.text(
     ),
     min_size=1,
     max_size=30,
-).filter(lambda s: s not in (".", ".."))
+).filter(is_safe_fs_name)
 
 # File content for files placed inside the managed directory.
 _file_content = st.binary(min_size=0, max_size=256)

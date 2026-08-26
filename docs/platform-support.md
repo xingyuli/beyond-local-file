@@ -20,11 +20,12 @@ beyond-local-file is designed to work across all major operating systems.
 |----------|--------|-------|
 | **macOS** | ✅ Tested & Supported | No special configuration needed |
 | **Linux** | ✅ Tested & Supported | No special configuration needed |
-| **Windows 10/11** | ⚠️ Implemented, Not Tested | Should work with Developer Mode or Admin privileges |
+| **Windows 10** | ✅ Tested & Supported | Requires Developer Mode or Admin privileges for symlinks |
+| **Windows 11** | ✅ Supported | Same symlink requirements as Windows 10; not separately cross-tested |
 | **Windows 7/8** | ⚠️ Implemented, Not Tested | Should work with Administrator privileges |
 | **WSL** | ✅ Should Work | Works like native Linux |
 
-**Note:** Windows support is implemented but has not been tested yet. The code uses Python's standard `pathlib` for symlink creation, which should work on Windows with proper permissions. Feedback from Windows users is welcome!
+**Note:** Native Windows 10 has been cross-tested (full test suite). Symlink creation still needs Developer Mode (Windows 10 Build 1703+) or an elevated shell. Windows 11 is expected to behave the same; feedback is welcome.
 
 ## Quick Start by Platform
 
@@ -90,6 +91,8 @@ project-c: C:\Users\User\workspace\project-c
 project-d: ../workspace/project-d
 ```
 
+Internally, relative item paths written to `config.yml` subpath lists and `.git/info/exclude` use forward slashes (`Path.as_posix()`), so the same entries compare correctly on Windows and Unix. Config files are always read and written as UTF-8. Working-directory matching for `remove` / `revlink` resolves the CWD so Windows short (8.3) vs long path forms do not break target matching.
+
 ## Known Limitations
 
 ### Windows-Specific
@@ -112,11 +115,10 @@ The project includes comprehensive tests:
 # Run tests
 uv run pytest
 
-# All tests pass on macOS and Linux
-# Windows testing status: Not yet tested, feedback welcome
+# Full suite has been run on macOS, Linux, and Windows 10
 ```
 
-**Windows Testing Status:** The codebase uses Python's standard library (`pathlib`) for cross-platform compatibility, and Windows-specific symlink handling is implemented. However, it has not been tested on actual Windows systems yet. If you're a Windows user, please try it out and report any issues!
+**Windows Testing Status:** The full pytest suite (including Hypothesis property tests) has been run successfully on Windows 10 with Developer Mode enabled. Property-test path generators filter Windows reserved device names (`NUL`, `CON`, `COM1`, …) so the suite stays portable. Automated CI still runs on the publish workflow only — local or contributor runs on Windows remain useful.
 
 ## Documentation
 
@@ -143,7 +145,7 @@ Potential enhancements for better cross-platform support:
 - [ ] Automatic detection of Windows Developer Mode status
 - [ ] Better error messages for Windows permission issues
 - [ ] Optional hard links or junctions on Windows (as fallback)
-- [ ] Cross-platform path normalization in config files
+- [x] Cross-platform path normalization for config/exclude/display paths (`as_posix()`, UTF-8 I/O, resolved CWD)
 - [ ] CI/CD testing on Windows, macOS, and Linux
 
 ## Contributing
