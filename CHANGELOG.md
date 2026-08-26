@@ -5,24 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-# Release v0.4.0
+## [0.4.0] - 2026-08-26
 
-Release Date: 2026-08-26
-
-v0.4.0 is a cross-platform support milestone: beyond-local-file is now fully tested on the maintainer's personal Windows 10 environment, alongside macOS and Linux.
-
-## Features
-
+### Added
 - **Add `blf remove` command** — Permanently remove a managed file or directory and its validated projections across linked target projects. The command also cleans up Git exclude entries and selective-sync configuration, with `--dry-run` support for safely previewing the operation.
 
-## Bug Fixes
+### Fixed
+- **Fix Windows test and path compatibility** — Normalize path handling and config I/O for Windows, prevent Windows-reserved names in property tests, and update platform documentation following successful Windows 10 validation. This release marks a cross-platform support milestone: beyond-local-file is now fully tested on the maintainer's personal Windows 10 environment, alongside macOS and Linux.
 
-- **Fix Windows test and path compatibility** — Normalize path handling and config I/O for Windows, prevent Windows-reserved names in property tests, and update platform documentation following successful Windows 10 validation. This ensures consistent target matching, forward-slash paths, and reliable tests on Windows.
-
-## Code Quality
-
+### Changed
 - **Extract revlink context resolver** — Consolidate shared project and CWD resolution from the `revlink create` and `revlink restore` handlers into `resolve_revlink_context()`, keeping CLI handlers focused on argument parsing and operation dispatch.
 
+[0.4.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.4.0
 
 ## [0.3.2] - 2026-07-29
 
