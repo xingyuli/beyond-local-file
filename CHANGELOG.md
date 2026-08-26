@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+# Release v0.3.3
+
+Release Date: 2026-08-26
+
+v0.3.3 is a cross-platform support milestone: beyond-local-file is now fully tested on the maintainer's personal Windows 10 environment, alongside macOS and Linux.
+
+## Bug Fixes
+
+- **Fix Windows test and path compatibility** — Normalize path handling and config I/O for Windows, prevent Windows-reserved names in property tests, and update platform documentation following successful Windows 10 validation. This ensures consistent target matching, forward-slash paths, and reliable tests on Windows.
+
+
 ## [0.3.2] - 2026-07-29
 
 ### Fixed
