@@ -11,7 +11,13 @@ import click
 
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.git_manager import GitExcludeManager
+from beyond_local_file.held import (
+    REASON_CREATE_OVERWRITE,
+    reason_clause,
+    store_held_copy,
+)
 from beyond_local_file.model.config import Mapping
+from beyond_local_file.sync_state import SyncState, compute_item_hash
 
 # ---------------------------------------------------------------------------
 # ChecksumVerifier
@@ -150,16 +156,13 @@ class CreateFormatter:
         """Print a confirmation that the MD5 checksums of source and copy match."""
         self._echo("✓ MD5 checksum verified")
 
-    def symlink_created(self, link: Path, target: Path) -> None:
-        """Print a confirmation that a symlink was created successfully.
+    def target_left_in_place(self, path: Path) -> None:
+        """Print a confirmation that the target path remains a real file or directory.
 
         Args:
-            link: Path where the symlink was created (original location in the
-                target directory).
-            target: Path the symlink points to (location in the managed
-                project).
+            path: Target-side path that was left in place as a projection.
         """
-        self._echo(f"✓ Symlink created: {link.as_posix()} -> {target.as_posix()}")
+        self._echo(f"✓ Target path left in place: {path.as_posix()}")
 
     def git_exclude_added(self, name: str) -> None:
         """Print a confirmation that *name* was added to ``.git/info/exclude``.
@@ -215,6 +218,25 @@ class CreateFormatter:
         """
         self._echo(f"Added {entry_name!r} to config subpath list")
 
+    def fan_out_copying(self, hub: Path, replica: Path) -> None:
+        """Print that the hub copy is being fanned out to a replica.
+
+        Args:
+            hub: Managed-project copy.
+            replica: Path on another target project.
+        """
+        self._echo(f"Fan-out {hub.as_posix()} -> {replica.as_posix()}")
+
+    def held_overwrite_warning(self, clause: str, held_slot: Path) -> None:
+        """Print the hold-reason clause and where the previous bytes were stored.
+
+        Args:
+            clause: Hold-reason clause for WARNINGs and the later resolve UI.
+            held_slot: Directory under ``.blf-held/`` that now holds the bytes.
+        """
+        self._echo(f"WARNING: {clause}")
+        self._echo(f"Held at {held_slot.as_posix()}")
+
 
 # ---------------------------------------------------------------------------
 # RestoreFormatter
@@ -257,11 +279,19 @@ class RestoreFormatter:
     # Public formatter methods
     # ------------------------------------------------------------------
 
-    def removing_symlink(self, path: Path) -> None:
-        """Print a message indicating that the symlink at *path* is being removed.
+    def leaving_target_file(self, path: Path) -> None:
+        """Print a confirmation that the target path is left as an unmanaged file.
 
         Args:
-            path: Path to the symlink that is about to be unlinked.
+            path: Target-side path that remains after the hub copy is deleted.
+        """
+        self._echo(f"Leaving target file in place: {path.as_posix()}")
+
+    def removing_symlink(self, path: Path) -> None:
+        """Print a message indicating that the leftover symlink at *path* is removed.
+
+        Args:
+            path: Path to the leftover symlink that is about to be unlinked.
         """
         self._echo(f"Removing symlink at {path.as_posix()}")
 
@@ -390,16 +420,16 @@ class RevlinkContext:
 
 @dataclass
 class CreateOperation:
-    """Orchestrates the copy-verify-replace workflow for a single source path.
+    """Orchestrates the copy-verify-register workflow for a single source path.
 
-    The operation proceeds through five internal steps — ``_validate``,
-    ``_copy``, ``_verify``, ``_replace``, and ``_git_exclude`` — each of
-    which returns early with exit code 1 on failure.  The public entry point
-    is :meth:`run`.
+    The operation proceeds through internal steps — ``_validate``,
+    ``_copy``, ``_verify``, ``_record_sync_state``, and ``_git_exclude`` —
+    each of which returns early with exit code 1 on failure.  The public
+    entry point is :meth:`run`.
 
     Attributes:
         source: Absolute path to the file or directory in the target directory
-            that will be converted into a managed symlink.
+            that will be adopted as a copy projection.
         dest_root: ``managed_project_path`` from the resolved
             ``ConfigProject``; the destination root for the copy.
         rel_path: Path of the source relative to CWD (e.g.
@@ -410,7 +440,7 @@ class CreateOperation:
         force: When ``True``, overwrite an existing destination in the managed
             project.  MD5 verification still applies.
         formatter: Formatter instance used for all user-facing output.
-        context: Config-resolution context used for the post-symlink config
+        context: Config-resolution context used for the post-copy config
             update step.  ``None`` skips the update (useful in tests).
     """
 
@@ -432,9 +462,9 @@ class CreateOperation:
         Derives ``dest`` as ``dest_root / rel_path``, preserving the full
         directory structure so the managed layout mirrors the target layout
         exactly.  Runs the pre-flight validation step, then proceeds through
-        copy, verify, replace, and git-exclude steps in order when not in
-        dry-run mode.  In dry-run mode, previews all steps via the formatter
-        without modifying the filesystem.
+        copy, verify, record-sync-state, and git-exclude steps in order when
+        not in dry-run mode.  In dry-run mode, previews all steps via the
+        formatter without modifying the filesystem.
 
         Returns:
             ``0`` on success, ``1`` if any step fails.
@@ -456,12 +486,11 @@ class CreateOperation:
             if result != 0:
                 return result
 
-            result = self._replace(dest)
-            if result != 0:
-                return result
-
-            self._git_exclude()
+            self.formatter.target_left_in_place(self.source)
+            self._record_sync_state(dest, self.source)
+            self._git_exclude(self.context.cwd if self.context is not None else None)
             self._update_config()
+            self._fan_out(dest)
 
         return 0
 
@@ -480,10 +509,12 @@ class CreateOperation:
         self.formatter.copying(self.source, dest)
         self.formatter.computing_checksum(self.source)
         self.formatter.checksum_ok()
-        self.formatter.symlink_created(self.source, dest)
+        self.formatter.target_left_in_place(self.source)
         self._git_exclude_preview()
         if self.context is not None and self.context.matched_mapping.subpaths is not None:
             self.formatter.config_updated(self.rel_path.as_posix())
+        for replica_root in self._other_replica_roots():
+            self.formatter.fan_out_copying(dest, replica_root / self.rel_path)
 
     # ------------------------------------------------------------------
     # Internal steps
@@ -573,13 +604,13 @@ class CreateOperation:
                         self.formatter.error(
                             f"'{declared}' is already a declared subpath that covers this path,"
                             f" and the managed copy already exists at '{managed_copy.as_posix()}'."
-                            " Run 'blf link sync' to create the symlink."
+                            " Run 'blf link sync' to project the copy."
                         )
                     else:
                         self.formatter.error(
                             f"'{declared}' is already a declared subpath that covers this path."
                             f" Copy '{self.source.as_posix()}' to '{managed_copy.as_posix()}' manually,"
-                            " then run 'blf link sync' to create the symlink."
+                            " then run 'blf link sync' to project the copy."
                         )
                     return 1
                 # 5b — rel_path is an ancestor of a declared subpath (reverse conflict)
@@ -593,9 +624,7 @@ class CreateOperation:
                     return 1
 
         if dest.exists() and not self.force:
-            self.formatter.error(
-                f"Destination already exists: {dest.as_posix()}\nUse --force to overwrite."
-            )
+            self.formatter.error(f"Destination already exists: {dest.as_posix()}\nUse --force to overwrite.")
             return 1
 
         return 0
@@ -667,68 +696,114 @@ class CreateOperation:
         self.formatter.checksum_ok()
         return 0
 
-    def _replace(self, dest: Path) -> int:
-        """Remove the source and create a symlink pointing to the managed copy.
-
-        Attempts to remove the original source path (file or directory) and
-        replace it with a symlink pointing to ``dest`` in the managed project.
-        Emits a success message on completion.
-
-        Two distinct failure modes are handled:
-
-        - **Permission error** during removal: the source is left untouched and
-          an error message is emitted.
-        - **OSError** during symlink creation: the source has already been
-          removed at this point, leaving the filesystem in an inconsistent
-          state.  An error message explicitly warns the user so they can
-          recover manually.
+    def _record_sync_state(self, dest: Path, replica: Path) -> None:
+        """Record a hub/replica pair as in-sync so a later catch-up is a no-op.
 
         Args:
-            dest: Derived destination path (``dest_root / rel_path``) that
-                the new symlink will point to.
+            dest: Managed-project copy path.
+            replica: Target-project path paired with *dest*.
+        """
+        if self.context is None:
+            return
+        sync_state = SyncState(self.context.config_path.parent)
+        sync_state.load()
+        sync_state.update_record(dest, replica)
+        sync_state.save()
+
+    def _other_replica_roots(self) -> list[Path]:
+        """Return other target-project roots for this managed project.
 
         Returns:
-            ``0`` on success, ``1`` if removal or symlink creation fails.
+            Unique target paths excluding the source replica (cwd).
         """
-        try:
-            if self.source.is_dir():
-                shutil.rmtree(self.source)
+        if self.context is None:
+            return []
+        source = self.context.cwd.resolve()
+        seen: set[Path] = set()
+        roots: list[Path] = []
+        mappings = self.context.mappings or [self.context.matched_mapping]
+        for mapping in mappings:
+            for target in mapping.targets:
+                resolved = target.resolve()
+                if resolved == source or resolved in seen:
+                    continue
+                seen.add(resolved)
+                roots.append(target)
+        return roots
+
+    def _copy_item(self, src: Path, dest: Path) -> None:
+        """Copy a file or directory tree from *src* to *dest*.
+
+        Args:
+            src: Existing file or directory.
+            dest: Destination path; parent directories are created.
+        """
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
             else:
-                self.source.unlink()
-        except PermissionError:
-            self.formatter.error(f"Permission denied removing {self.source}")
-            return 1
+                dest.unlink()
+        if src.is_dir():
+            shutil.copytree(src, dest)
+        else:
+            shutil.copy2(src, dest)
 
-        try:
-            self.source.symlink_to(dest)
-        except OSError:
-            self.formatter.error(
-                f"Failed to create symlink at {self.source.as_posix()} \u2192 "
-                f"{dest.as_posix()}. Filesystem may be in inconsistent state."
-            )
-            return 1
+    def _fan_out(self, dest: Path) -> None:
+        """Copy the hub item onto every non-source replica.
 
-        self.formatter.symlink_created(self.source, dest)
-        return 0
+        Equal bytes are left in place. Different bytes are held with reason
+        ``create-overwrite``, then overwritten from the hub.
+
+        Args:
+            dest: Managed-project copy to fan out.
+        """
+        if self.context is None:
+            return
+        rel = self.rel_path.as_posix()
+        for replica_root in self._other_replica_roots():
+            replica_path = replica_root / self.rel_path
+            self.formatter.fan_out_copying(dest, replica_path)
+            if replica_path.exists() and compute_item_hash(replica_path) != compute_item_hash(dest):
+                clause = reason_clause(
+                    REASON_CREATE_OVERWRITE,
+                    path=rel,
+                    replica=replica_root.as_posix(),
+                )
+                slot = store_held_copy(
+                    self.dest_root,
+                    rel_path=self.rel_path,
+                    source=replica_path,
+                    replica=replica_root,
+                    reason=REASON_CREATE_OVERWRITE,
+                )
+                self.formatter.held_overwrite_warning(clause, slot)
+            self._copy_item(dest, replica_path)
+            self._record_sync_state(dest, replica_path)
+            self._git_exclude(replica_root)
 
     def _update_config(self) -> None:
-        """Add the source item to the config subpath list if the mapping uses selective sync.
+        """Add the item to every selective mapping of this managed project.
 
-        When the matched mapping has no ``subpath`` list (sync-all), the item
-        is already covered and no update is needed.  When a ``subpath`` list
-        exists, the item must be registered so that ``link sync`` and
-        ``link check`` will manage it going forward.
-
-        This step is non-fatal: failures are silently ignored so that a config
-        write error does not undo the already-completed symlink creation.
+        Sync-all mappings have no subpath list and are left unchanged.
+        Failures are non-fatal so a config write error does not undo the copy.
         """
-        if self.context is None or self.context.matched_mapping.subpaths is None:
+        if self.context is None:
             return
-
+        mappings = self.context.mappings or [self.context.matched_mapping]
+        selective = [mapping for mapping in mappings if mapping.subpaths is not None]
+        if not selective:
+            return
         updater = ConfigUpdater(self.context.config_path)
-        changed = updater.add_subpath_entry(self.context.project_name, self.context.cwd, self.rel_path.as_posix())
+        entry_name = self.rel_path.as_posix()
+        changed = False
+        for mapping in selective:
+            targets = getattr(mapping, "targets", None) or [self.context.cwd]
+            for target in targets:
+                if updater.add_subpath_entry(self.context.project_name, target, entry_name):
+                    changed = True
         if changed:
-            self.formatter.config_updated(self.rel_path.as_posix())
+            self.formatter.config_updated(entry_name)
 
     def _git_exclude_preview(self) -> None:
         """Emit a dry-run preview for the git-exclude step.
@@ -753,30 +828,21 @@ class CreateOperation:
         else:
             self.formatter.git_exclude_added(entry_name)
 
-    def _git_exclude(self) -> int:
-        """Add the source item to ``.git/info/exclude`` if inside a Git repository.
+    def _git_exclude(self, replica_root: Path | None = None) -> int:
+        """Add the item to ``.git/info/exclude`` for *replica_root* if it is a Git repo.
 
-        Instantiates a :class:`~beyond_local_file.git_manager.GitExcludeManager`
-        for the project root (``context.cwd``).  If the directory is not a Git
-        repository the step is silently skipped (Requirement 6.3).  Otherwise
-        calls :meth:`~beyond_local_file.git_manager.GitExcludeManager.write_entries`
-        with a set containing ``rel_path.as_posix()`` and reports the outcome via the
-        formatter.
+        If *replica_root* is omitted, the source replica (cwd) is used.
 
-        The entry name is ``self.rel_path.as_posix()`` (e.g. ``.kiro/specs/foo``)
-        rather than ``source.name`` so the exclude entry mirrors the full
-        relative path used by ``link sync``.
-
-        This step is non-fatal: it always returns ``0`` regardless of whether
-        the entry was added, already existed, or the directory is not a Git
-        repository.
+        Args:
+            replica_root: Target-project root to exclude in.
 
         Returns:
             Always ``0``.
         """
         if self.context is None:
             return 0
-        manager = GitExcludeManager(self.context.cwd)
+        root = replica_root if replica_root is not None else self.context.cwd
+        manager = GitExcludeManager(root)
 
         if not manager.is_git_repo():
             return 0
@@ -799,11 +865,11 @@ class CreateOperation:
 
 @dataclass
 class RestoreOperation:
-    """Orchestrates the validate-replace-verify-cleanup workflow for a single symlink path.
+    """Orchestrates the validate-cleanup workflow for a single projection path.
 
-    The operation is the exact inverse of :class:`CreateOperation`. It dissolves
-    a managed symlink at ``source`` and recovers the real file or directory from
-    the managed project location.
+    The operation is the inverse of :class:`CreateOperation`. It deletes the
+    hub copy, leaves the requesting target's file in place, and leaves other
+    targets' copies as unmanaged files.
 
     The operation proceeds through internal steps — ``_validate``, ``_replace``,
     ``_verify``, ``_delete_managed``, ``_git_exclude``, and ``_remove_config`` —
@@ -811,8 +877,8 @@ class RestoreOperation:
     which are non-fatal). The public entry point is :meth:`run`.
 
     Attributes:
-        source: Absolute path to the symlink in the CWD that will be dissolved
-            and replaced with the real file or directory.
+        source: Absolute path to the projection in the CWD that will be left
+            in place as an unmanaged file or directory.
         dest_root: ``managed_project_path`` from the resolved
             ``ConfigProject``; the root under which the managed copy lives.
         rel_path: Path of the source relative to CWD (e.g.
@@ -858,13 +924,16 @@ class RestoreOperation:
         if self.dry_run:
             self._preview(managed)
         else:
-            result = self._replace(managed)
-            if result != 0:
-                return result
+            if self.source.is_symlink():
+                result = self._replace(managed)
+                if result != 0:
+                    return result
 
-            result = self._verify(managed)
-            if result != 0:
-                return result
+                result = self._verify(managed)
+                if result != 0:
+                    return result
+            else:
+                self.formatter.leaving_target_file(self.source)
 
             self._delete_managed(managed)
             self._git_exclude()
@@ -882,10 +951,13 @@ class RestoreOperation:
         Args:
             managed: Derived managed copy path (``dest_root / rel_path``).
         """
-        self.formatter.removing_symlink(self.source)
-        self.formatter.copying_back(managed, self.source)
-        self.formatter.computing_checksum(managed)
-        self.formatter.checksum_ok()
+        if self.source.is_symlink():
+            self.formatter.removing_symlink(self.source)
+            self.formatter.copying_back(managed, self.source)
+            self.formatter.computing_checksum(managed)
+            self.formatter.checksum_ok()
+        else:
+            self.formatter.leaving_target_file(self.source)
         self.formatter.managed_copy_deleted(managed)
 
     # ------------------------------------------------------------------
@@ -897,10 +969,10 @@ class RestoreOperation:
 
         Checks are performed in order:
 
-        1. ``source`` must exist as a real path or as a dangling symlink.
+        1. ``source`` must exist as a real path or as a dangling leftover symlink.
            A path that does not exist at all (not even as a symlink entry)
            is rejected here.
-        2. ``source`` must be a symlink.
+        2. ``source`` must be a regular file, a directory, or a leftover symlink.
         3. The managed copy at ``managed`` must exist.
 
         Args:
@@ -909,18 +981,22 @@ class RestoreOperation:
         Returns:
             ``0`` if all checks pass, ``1`` on the first failing check.
         """
-        # exists() follows symlinks and returns False for dangling symlinks, so
-        # both conditions are needed to distinguish "nothing here" from "dangling symlink".
+        # exists() follows symlinks and returns False for dangling leftover
+        # symlinks, so both conditions are needed to distinguish "nothing here"
+        # from "dangling leftover symlink".
         if not self.source.exists() and not self.source.is_symlink():
             self.formatter.error(f"Path does not exist: {self.source}")
             return 1
 
-        if not self.source.is_symlink():
-            self.formatter.error(f"Path is not a symlink: {self.source}\nUse 'revlink create' to adopt a real file.")
+        if not self.source.is_symlink() and not self.source.is_file() and not self.source.is_dir():
+            self.formatter.error(f"Path is not a restorable projection: {self.source}")
             return 1
 
         if not managed.exists():
-            self.formatter.error(f"Dangling symlink: managed copy does not exist at {managed}")
+            if self.source.is_symlink():
+                self.formatter.error(f"Dangling symlink: managed copy does not exist at {managed}")
+            else:
+                self.formatter.error(f"Managed copy does not exist at {managed}")
             return 1
 
         return 0
@@ -1045,23 +1121,31 @@ class RestoreOperation:
         return 0
 
     def _remove_config(self) -> None:
-        """Remove the source item from the config subpath list if the mapping uses selective sync.
+        """Remove the source item from every participating selective mapping.
 
-        When the matched mapping has no ``subpath`` list (sync-all), the item
-        is already covered and no update is needed.  When a ``subpath`` list
-        exists, the item must be de-registered so that ``link sync`` and
-        ``link check`` will no longer manage it.  The entry name is
-        ``rel_path.as_posix()`` rather than ``source.name`` so that nested paths
-        (e.g. ``.kiro/specs/foo``) are matched correctly in the config.
+        Other targets keep their files, but those copies become unmanaged once
+        the subpath is dropped. Sync-all mappings have no subpath list and are
+        left unchanged. Nested paths use ``rel_path.as_posix()`` so entries
+        such as ``.kiro/specs/foo`` match.
 
         This step is non-fatal: failures are silently ignored so that a config
         write error does not undo the already-completed restore.
         """
-        if self.context is None or self.context.matched_mapping.subpaths is None:
+        if self.context is None:
             return
 
         entry_name = self.rel_path.as_posix()
+        mappings = self.context.mappings or [self.context.matched_mapping]
+        targets = {
+            target
+            for mapping in mappings
+            if mapping.subpaths is not None and entry_name in mapping.subpaths
+            for target in mapping.targets
+        }
+        if not targets:
+            return
+
         updater = ConfigUpdater(self.context.config_path)
-        changed = updater.remove_subpath_entry(self.context.project_name, self.context.cwd, entry_name)
+        changed = updater.remove_subpath_entries(self.context.project_name, targets, entry_name)
         if changed:
             self.formatter.config_entry_removed(entry_name)

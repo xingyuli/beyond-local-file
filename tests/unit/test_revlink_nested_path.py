@@ -145,8 +145,8 @@ class TestRunDestPathWithNestedRelPath:
         assert result == 0
         assert (dest_root / ".kiro" / "specs").is_dir(), "Intermediate parent directories must be created"
 
-    def test_run_symlink_points_to_full_rel_path_dest(self, tmp_path: Path) -> None:
-        """The symlink at source points to dest_root / rel_path, not dest_root / basename.
+    def test_run_leaves_nested_source_and_copies_to_full_rel_path(self, tmp_path: Path) -> None:
+        """The nested source stays a real directory and the hub copy uses the full rel_path.
 
         Requirements: 1.4
         """
@@ -163,12 +163,12 @@ class TestRunDestPathWithNestedRelPath:
         result = op.run()
 
         assert result == 0
-        assert source.is_symlink(), "Source must have been replaced with a symlink"
-
-        expected_target = dest_root / ".kiro" / "specs" / "foo"
-        assert source.resolve() == expected_target.resolve(), (
-            f"Symlink must point to {expected_target}, not {dest_root / 'foo'}"
-        )
+        assert source.is_dir()
+        assert not source.is_symlink()
+        expected_dest = dest_root / ".kiro" / "specs" / "foo"
+        assert expected_dest.is_dir()
+        assert not (dest_root / "foo").exists()
+        assert (expected_dest / "data.txt").read_text() == "data"
 
     def test_run_file_at_nested_rel_path(self, tmp_path: Path) -> None:
         """run() works correctly for a file (not directory) at a nested rel_path.

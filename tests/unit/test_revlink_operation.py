@@ -219,14 +219,14 @@ class TestCreateFormatterNoDryRun:
             self.formatter.checksum_ok()
         mock_echo.assert_called_once_with("✓ MD5 checksum verified")
 
-    def test_symlink_created(self) -> None:
-        """symlink_created emits the expected message without prefix.
+    def test_target_left_in_place(self) -> None:
+        """target_left_in_place emits the expected message without prefix.
 
         Requirements: 7.4
         """
         with patch("click.echo") as mock_echo:
-            self.formatter.symlink_created(Path("/link"), Path("/target"))
-        mock_echo.assert_called_once_with("✓ Symlink created: /link -> /target")
+            self.formatter.target_left_in_place(Path("/link"))
+        mock_echo.assert_called_once_with("✓ Target path left in place: /link")
 
     def test_git_exclude_added(self) -> None:
         """git_exclude_added emits the expected message without prefix.
@@ -302,14 +302,14 @@ class TestCreateFormatterDryRun:
             self.formatter.checksum_ok()
         mock_echo.assert_called_once_with("[dry-run] ✓ MD5 checksum verified")
 
-    def test_symlink_created_dry_run(self) -> None:
-        """symlink_created emits [dry-run] prefix when dry_run=True.
+    def test_target_left_in_place_dry_run(self) -> None:
+        """target_left_in_place emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.4, 7.6
         """
         with patch("click.echo") as mock_echo:
-            self.formatter.symlink_created(Path("/link"), Path("/target"))
-        mock_echo.assert_called_once_with("[dry-run] ✓ Symlink created: /link -> /target")
+            self.formatter.target_left_in_place(Path("/link"))
+        mock_echo.assert_called_once_with("[dry-run] ✓ Target path left in place: /link")
 
     def test_git_exclude_added_dry_run(self) -> None:
         """git_exclude_added emits [dry-run] prefix when dry_run=True.

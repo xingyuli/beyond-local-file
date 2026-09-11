@@ -577,24 +577,13 @@ class TestRestoreDanglingSymlink:
         assert symlink_path.is_symlink(), "symlink should remain untouched after error"
 
 
-class TestRestoreNotASymlink:
-    """Integration tests for the not-a-symlink error path.
+class TestRestoreMissingHubCopy:
+    """Restore of a real file requires the managed copy to exist."""
 
-    Requirements: 3.2
-    """
-
-    def test_real_file_exits_with_error_and_suggests_create(
+    def test_real_file_without_hub_copy_exits_with_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
     ) -> None:
-        """Not a symlink: real file at path → error with revlink create suggestion.
-
-        Set up a real file (not a symlink) at the target path.
-        Restore should fail with exit code 1, mention "not a symlink",
-        suggest "revlink create", and leave the file unchanged.
-
-        Requirements 3.2.
-        """
-        # Arrange
+        """A real target file with no hub copy is rejected and left unchanged."""
         target_dir = tmp_path / "target"
         target_dir.mkdir()
 
@@ -604,16 +593,12 @@ class TestRestoreNotASymlink:
         config_path = tmp_path / "config.yml"
         _write_config(config_path, "my-project", target_dir)
 
-        # Create a real file (not a symlink)
         real_file = target_dir / "myfile.txt"
         original_content = "original content"
         real_file.write_text(original_content)
 
-        assert not real_file.is_symlink()
-
         monkeypatch.chdir(target_dir)
 
-        # Act
         runner = CliRunner()
         result = runner.invoke(
             cli,
@@ -621,14 +606,8 @@ class TestRestoreNotASymlink:
             env=isolated_home,
         )
 
-        # Assert
         assert result.exit_code == 1, result.output
-        assert "not a symlink" in result.output.lower(), f"Expected 'not a symlink' in output, got: {result.output!r}"
-        assert "revlink create" in result.output, (
-            f"Expected 'revlink create' suggestion in output, got: {result.output!r}"
-        )
-
-        # File must be unchanged
+        assert "managed copy does not exist" in result.output.lower()
         assert real_file.exists()
         assert not real_file.is_symlink()
         assert real_file.read_text() == original_content

@@ -221,6 +221,15 @@ class TestItemLoader:
         assert names == {"file1.txt", "file2.txt", ".kiro"}
         assert all(i.strategy == LinkStrategy.COPY for i in items)
 
+    def test_sync_all_skips_held_copy_directory(self, tmp_path: Path) -> None:
+        """``.blf-held`` is reserved and is not loaded as an item."""
+        managed = tmp_path / "managed"
+        managed.mkdir()
+        (managed / "file1.txt").write_text("ok")
+        (managed / ".blf-held").mkdir()
+        items = _load_items(managed, None, None)
+        assert {i.name for i in items} == {"file1.txt"}
+
     def test_sync_all_returns_empty_for_empty_directory(self, tmp_path: Path) -> None:
         """Empty directory with no subpaths → empty list (unit skipped by translator)."""
         empty = tmp_path / "empty"

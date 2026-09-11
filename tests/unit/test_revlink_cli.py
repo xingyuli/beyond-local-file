@@ -368,7 +368,7 @@ def test_revlink_dry_run_prints_preview_output(tmp_path: Path) -> None:
     assert "Copying" in result.output
     assert "Computing checksum" in result.output
     assert "MD5 checksum verified" in result.output
-    assert "Symlink created" in result.output
+    assert "Target path left in place" in result.output
 
 
 # ---------------------------------------------------------------------------

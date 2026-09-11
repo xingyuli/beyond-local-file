@@ -213,10 +213,9 @@ class RemoveOperation:
             self.formatter.error(f"Invocation mapping does not manage {entry!r}")
             return False
 
-        is_copy = mapping.copy_paths is not None and entry in mapping.copy_paths
-        if is_copy:
-            return self._validate_copy_artifact(self.source, managed_copy, "invocation path")
-        return self._validate_symlink_artifact(self.source, managed_copy, "invocation path")
+        if self.source.is_symlink():
+            return self._validate_symlink_artifact(self.source, managed_copy, "invocation path")
+        return self._validate_copy_artifact(self.source, managed_copy, "invocation path")
 
     def _has_symlink_ancestor(self) -> bool:
         """Reject a child reached by traversing a directory symlink.
@@ -247,10 +246,6 @@ class RemoveOperation:
         artifacts: list[_Artifact] = []
         valid = True
         for mapping in self._participating_mappings():
-            copy_strategy = self._uses_copy_strategy(mapping)
-            if copy_strategy and not managed_copy.is_file():
-                self.formatter.error(f"Copy strategy requires a file managed copy: {managed_copy}")
-                valid = False
             for target in mapping.targets:
                 if not target.is_dir() or not os.access(target, os.X_OK):
                     self.formatter.error(f"Participating target is inaccessible: {target}")
@@ -258,12 +253,13 @@ class RemoveOperation:
                     continue
                 artifact = target / self.rel_path
                 present = artifact.exists() or artifact.is_symlink()
+                copy_strategy = not artifact.is_symlink()
                 if present:
                     label = f"target artifact {artifact}"
-                    if copy_strategy:
-                        valid = self._validate_copy_artifact(artifact, managed_copy, label) and valid
-                    else:
+                    if artifact.is_symlink():
                         valid = self._validate_symlink_artifact(artifact, managed_copy, label) and valid
+                    else:
+                        valid = self._validate_copy_artifact(artifact, managed_copy, label) and valid
                 artifacts.append(_Artifact(target, artifact, copy_strategy, present))
         return artifacts if valid else None
 
@@ -275,17 +271,6 @@ class RemoveOperation:
         """
         entry = self.rel_path.as_posix()
         return [mapping for mapping in self.context.mappings if mapping.subpaths is None or entry in mapping.subpaths]
-
-    def _uses_copy_strategy(self, mapping: Mapping) -> bool:
-        """Determine whether a mapping materializes this item as a regular file.
-
-        Args:
-            mapping: Participating mapping to inspect.
-
-        Returns:
-            True only when this exact relative item path has copy strategy.
-        """
-        return mapping.copy_paths is not None and self.rel_path.as_posix() in mapping.copy_paths
 
     def _validate_symlink_artifact(self, artifact: Path, managed_copy: Path, label: str) -> bool:
         """Verify that a target artifact is the expected non-dangling symlink.
@@ -310,7 +295,7 @@ class RemoveOperation:
         return True
 
     def _validate_copy_artifact(self, artifact: Path, managed_copy: Path, label: str) -> bool:
-        """Verify that a target artifact is an identical regular-file copy.
+        """Verify that a target artifact is an identical file or directory copy.
 
         Args:
             artifact: Projection path to validate.
@@ -318,10 +303,11 @@ class RemoveOperation:
             label: Human-readable location description for diagnostics.
 
         Returns:
-            True when the artifact is a byte-identical regular file.
+            True when the artifact is a byte-identical file or directory.
         """
-        if artifact.is_symlink() or not artifact.is_file() or not managed_copy.is_file():
-            self.formatter.error(f"{label} must be a regular file matching managed copy: {artifact}")
+        same_kind = (artifact.is_file() and managed_copy.is_file()) or (artifact.is_dir() and managed_copy.is_dir())
+        if artifact.is_symlink() or not same_kind:
+            self.formatter.error(f"{label} must be a regular file or directory matching managed copy: {artifact}")
             return False
         if ChecksumVerifier.compute(artifact) != ChecksumVerifier.compute(managed_copy):
             self.formatter.error(f"Checksum mismatch for {label}: {artifact}")
@@ -395,7 +381,10 @@ class RemoveOperation:
                 self.formatter.artifact_absent(artifact.path)
                 continue
             try:
-                artifact.path.unlink()
+                if artifact.path.is_dir() and not artifact.path.is_symlink():
+                    shutil.rmtree(artifact.path)
+                else:
+                    artifact.path.unlink()
             except OSError as error:
                 self.formatter.error(f"Could not remove artifact {artifact.path}: {error}")
                 succeeded = False

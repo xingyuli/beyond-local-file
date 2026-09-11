@@ -14,13 +14,12 @@ class Mapping:
 
     A mapping defines one or more targets and optional rules for syncing.
     YAML no longer selects a link strategy; every projection is a copy.
-    ``copy_paths`` is retained for revlink/remove until those commands
-    are adapted.
+    ``copy_paths`` is unused by load and leftover on the dataclass.
 
     Attributes:
         targets: List of target paths (can have multiple from target: [t1, t2]).
         subpaths: Optional list of relative subpaths for selective sync.
-        copy_paths: Unused by config load (always None). Leftover for remove.
+        copy_paths: Unused by config load (always None).
 
     Examples:
         String mapping:

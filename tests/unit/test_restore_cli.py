@@ -193,13 +193,11 @@ def test_restore_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_restore_real_file_exits_with_error_and_suggests_create(tmp_path: Path) -> None:
-    """Test that a real file (not a symlink) produces an error suggesting revlink create.
+def test_restore_real_file_without_hub_copy_exits_with_error(tmp_path: Path) -> None:
+    """A real file with no managed copy is not restorable.
 
-    Requirement 3.2: WHEN the path argument exists but is not a symlink, THE
-    Restore_Command SHALL print a descriptive error message suggesting
-    ``revlink create`` instead, and exit with a non-zero status code without
-    modifying the filesystem.
+    Restore leaves a real projection in place, but only when the hub copy
+    exists. A lone target file is rejected without modifying the filesystem.
     """
     runner = CliRunner()
     managed_dir = tmp_path / "managed"
@@ -207,7 +205,6 @@ def test_restore_real_file_exits_with_error_and_suggests_create(tmp_path: Path) 
     target_dir = tmp_path / "target"
     target_dir.mkdir()
 
-    # A plain file — not a symlink
     real_file = target_dir / "myfile.txt"
     real_file.write_text("original content")
 
@@ -220,9 +217,7 @@ def test_restore_real_file_exits_with_error_and_suggests_create(tmp_path: Path) 
         result = runner.invoke(cli, ["revlink", "restore", str(real_file)])
 
     assert result.exit_code == 1
-    assert "not a symlink" in result.output.lower()
-    assert "revlink create" in result.output
-    # File must be untouched
+    assert "managed copy does not exist" in result.output.lower()
     assert real_file.read_text() == "original content"
 
 

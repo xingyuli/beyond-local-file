@@ -98,15 +98,13 @@ class TestRevlinkHappyPathFile:
         # Assert
         assert result.exit_code == 0, result.output
 
-        # The original path is now a symlink
-        assert source_file.is_symlink(), "source path should be a symlink"
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
+        assert source_file.read_text() == "hello world"
 
-        # The symlink points to the managed dir copy
         managed_copy = managed_dir / "myfile.txt"
-        assert source_file.resolve() == managed_copy.resolve()
-
-        # The managed copy exists with the original content
-        assert managed_copy.exists()
+        assert managed_copy.is_file()
+        assert not managed_copy.is_symlink()
         assert managed_copy.read_text() == "hello world"
 
         # .git/info/exclude contains the filename
@@ -114,14 +112,10 @@ class TestRevlinkHappyPathFile:
         assert exclude_file.exists()
         assert "myfile.txt" in exclude_file.read_text()
 
-    def test_symlink_target_is_absolute_path(
+    def test_target_path_stays_a_regular_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
     ) -> None:
-        """Test that the created symlink points to an absolute path.
-
-        Requirement 5.2: THE Revlink_Command SHALL create a symlink at the
-        original path pointing to the managed project copy.
-        """
+        """Create leaves the original path as a regular file, not a symlink."""
         target_dir = tmp_path / "target"
         target_dir.mkdir()
         _make_fake_git_repo(target_dir)
@@ -145,9 +139,10 @@ class TestRevlinkHappyPathFile:
         )
 
         assert result.exit_code == 0, result.output
-        assert source_file.is_symlink()
-        # The symlink target should be an absolute path
-        assert source_file.readlink().is_absolute()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
+        assert source_file.read_text() == "data"
+        assert (managed_dir / "data.txt").read_text() == "data"
 
 
 # ---------------------------------------------------------------------------
@@ -202,15 +197,12 @@ class TestRevlinkDirectoryTree:
         # Assert
         assert result.exit_code == 0, result.output
 
-        # The original path is now a symlink
-        assert source_dir.is_symlink(), "source directory should be a symlink"
+        assert source_dir.is_dir()
+        assert not source_dir.is_symlink()
 
-        # The symlink points to the managed dir copy
         managed_copy = managed_dir / "mydir"
-        assert source_dir.resolve() == managed_copy.resolve()
-
-        # The managed copy exists with all original files
         assert managed_copy.is_dir()
+        assert not managed_copy.is_symlink()
         assert (managed_copy / "file_a.txt").read_text() == "content a"
         assert (managed_copy / "file_b.txt").read_text() == "content b"
         assert (managed_copy / "subdir" / "nested.txt").read_text() == "nested content"
@@ -305,8 +297,9 @@ class TestRevlinkForce:
         # Assert
         assert result.exit_code == 0, result.output
 
-        # Symlink created at original location
-        assert source_file.is_symlink()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
+        assert source_file.read_text() == "new content"
 
         # Managed copy has the new content (old content was overwritten)
         assert dest_file.read_text() == "new content"
@@ -341,7 +334,8 @@ class TestRevlinkForce:
         )
 
         assert result.exit_code == 0, result.output
-        assert source_file.is_symlink()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
         assert (managed_dir / "fresh.txt").read_text() == "fresh content"
 
 
@@ -391,7 +385,8 @@ class TestRevlinkConfigResolution:
         )
 
         assert result.exit_code == 0, result.output
-        assert source_file.is_symlink()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
 
     def test_default_config_yml_in_cwd_resolves_correctly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
@@ -427,7 +422,8 @@ class TestRevlinkConfigResolution:
         )
 
         assert result.exit_code == 0, result.output
-        assert source_file.is_symlink()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
         assert (managed_dir / "notes.txt").read_text() == "my notes"
 
     def test_blfrc_config_resolves_correctly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -468,7 +464,8 @@ class TestRevlinkConfigResolution:
         )
 
         assert result.exit_code == 0, result.output
-        assert source_file.is_symlink()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
         assert (managed_dir / "readme.txt").read_text() == "readme content"
 
 
@@ -536,7 +533,8 @@ class TestRevlinkConfigUpdate:
         )
 
         assert result.exit_code == 0, result.output
-        assert source_file.is_symlink()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
 
         # Config must now contain the new entry
         updated = config_path.read_text()
@@ -737,9 +735,9 @@ class TestRevlinkNestedPath:
         assert managed_copy.exists(), f"managed copy not found at {managed_copy}"
         assert managed_copy.read_text() == "spec content"
 
-        # Assert: symlink at target/.kiro/specs/foo pointing to managed/.kiro/specs/foo
-        assert source_file.is_symlink(), "source path should be a symlink after revlink create"
-        assert source_file.resolve() == managed_copy.resolve()
+        assert source_file.is_file()
+        assert not source_file.is_symlink()
+        assert source_file.read_text() == "spec content"
 
         # Assert: config subpath list contains .kiro/specs/foo
         updated_config = config_path.read_text()
@@ -1142,8 +1140,6 @@ class TestRevlinkGitExcludeNestedPath:
         that each is written into ``.git/info/exclude`` after a successful
         ``create`` run.
 
-        **Validates: Requirements 3.1**
-
         EXPECTED TO PASS on unfixed code — this is the preserved baseline.
         """
         with tempfile.TemporaryDirectory() as _base:
@@ -1197,8 +1193,6 @@ class TestRevlinkGitExcludeNestedPath:
         must be identical before and after the fix.  Generates valid
         single-component filenames and verifies that each is removed from
         ``.git/info/exclude`` after a successful ``restore`` run.
-
-        **Validates: Requirements 3.3**
 
         EXPECTED TO PASS on unfixed code — this is the preserved baseline.
         """

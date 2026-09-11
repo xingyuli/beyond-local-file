@@ -1,11 +1,10 @@
 """Unit tests for CreateOperation failure modes.
 
-Covers task 7.2:
+Covers:
 - MD5 mismatch: failed copy is deleted, source is untouched, exit code 1
-- Permission error on remove: correct error message, no further changes
-- Symlink creation failure: inconsistent-state error message, exit code 1
+- Copy-only create leaves the target path as a regular file
 
-Requirements: 4.3, 4.4, 5.4, 5.5
+Requirements: 4.3, 4.4
 """
 
 from pathlib import Path
@@ -140,153 +139,26 @@ class TestMd5MismatchRecovery:
 
 
 # ---------------------------------------------------------------------------
-# Requirement 5.4 — Permission error on remove
+# Copy-only create leaves the target path in place
 # ---------------------------------------------------------------------------
 
 
-class TestPermissionErrorOnRemove:
-    """Tests for _replace() when removing the source raises PermissionError."""
+class TestCreateLeavesTargetInPlace:
+    """Create no longer replaces the source with a symlink."""
 
-    def test_permission_error_returns_1(self, tmp_path: Path) -> None:
-        """Exit code 1 is returned when source removal raises PermissionError.
-
-        Requirements: 5.4
-        """
+    def test_run_leaves_regular_file(self, tmp_path: Path) -> None:
+        """run() keeps the source as a regular file and reports it left in place."""
         source = tmp_path / "source.txt"
         source.write_text("data")
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
-        dest = dest_root / "source.txt"
-
-        op, _ = _make_operation(source, dest_root)
-
-        with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
-            result = op._replace(dest)
-
-        assert result == 1
-
-    def test_permission_error_emits_correct_message(self, tmp_path: Path) -> None:
-        """formatter.error is called with a permission-denied message.
-
-        Requirements: 5.4
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
 
         op, formatter = _make_operation(source, dest_root)
+        result = op.run()
 
-        with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
-            op._replace(dest)
-
-        formatter.error.assert_called_once()
-        assert "Permission denied" in formatter.error.call_args[0][0]
-
-    def test_permission_error_source_remains(self, tmp_path: Path) -> None:
-        """Source file is left untouched when removal raises PermissionError.
-
-        Requirements: 5.4
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
-
-        op, _ = _make_operation(source, dest_root)
-
-        with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
-            op._replace(dest)
-
-        assert source.exists(), "source must still exist after permission error"
-        assert not source.is_symlink(), "source must not have been replaced"
-
-    def test_permission_error_no_symlink_created(self, tmp_path: Path) -> None:
-        """No symlink is created when source removal fails with PermissionError.
-
-        Requirements: 5.4
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
-
-        op, formatter = _make_operation(source, dest_root)
-
-        with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
-            op._replace(dest)
-
-        # symlink_created must never be called
-        formatter.symlink_created.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Requirement 5.5 — Symlink creation failure (inconsistent state)
-# ---------------------------------------------------------------------------
-
-
-class TestSymlinkCreationFailure:
-    """Tests for _replace() when symlink_to raises OSError after source removal."""
-
-    def test_symlink_failure_returns_1(self, tmp_path: Path) -> None:
-        """Exit code 1 is returned when symlink creation raises OSError.
-
-        Requirements: 5.5
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
-
-        op, _ = _make_operation(source, dest_root)
-
-        with patch.object(Path, "symlink_to", side_effect=OSError("no symlinks")):
-            result = op._replace(dest)
-
-        assert result == 1
-
-    def test_symlink_failure_emits_inconsistent_state_message(self, tmp_path: Path) -> None:
-        """formatter.error is called with an inconsistent-state warning.
-
-        Requirements: 5.5
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
-
-        op, formatter = _make_operation(source, dest_root)
-
-        with patch.object(Path, "symlink_to", side_effect=OSError("no symlinks")):
-            op._replace(dest)
-
-        formatter.error.assert_called_once()
-        error_msg = formatter.error.call_args[0][0]
-        assert "inconsistent" in error_msg.lower() or "Failed to create symlink" in error_msg
-
-    def test_symlink_failure_source_is_gone(self, tmp_path: Path) -> None:
-        """Source has already been removed when symlink creation fails.
-
-        This confirms the inconsistent-state scenario described in Requirement 5.5:
-        the original was deleted but the symlink was not created.
-
-        Requirements: 5.5
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
-
-        op, _ = _make_operation(source, dest_root)
-
-        with patch.object(Path, "symlink_to", side_effect=OSError("no symlinks")):
-            op._replace(dest)
-
-        # Source was removed before symlink_to was attempted
-        assert not source.exists(), "source should have been removed before symlink_to failed"
+        assert result == 0
+        assert source.is_file()
+        assert not source.is_symlink()
+        assert source.read_text() == "data"
+        assert (dest_root / "source.txt").read_text() == "data"
+        formatter.target_left_in_place.assert_called_once_with(source)

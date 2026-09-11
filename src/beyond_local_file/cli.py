@@ -265,10 +265,10 @@ def _exit_on_revlink_error(ctx: click.Context, result: RevlinkResolveError) -> N
 @click.option("--force", is_flag=True, help="Overwrite existing destination in managed project.")
 @click.pass_context
 def revlink_create(ctx, path, dry_run, force):
-    """Convert an existing file or directory into a managed symlink.
+    """Adopt an existing file or directory as a copy projection.
 
     Copies PATH to the managed project, verifies the copy via MD5 checksum,
-    replaces the original with a symlink, and records the item in
+    leaves the original as a regular file or directory, and records the item in
     .git/info/exclude if the target directory is a Git repository.
     """
     source = Path(path).resolve()
@@ -305,11 +305,12 @@ def revlink_create(ctx, path, dry_run, force):
 @click.option("--dry-run", is_flag=True, help="Preview actions without modifying the filesystem.")
 @click.pass_context
 def revlink_restore(ctx, path, dry_run):
-    """Dissolve a managed symlink and recover the real file from the managed project.
+    """Stop managing PATH and leave the target file in place.
 
-    Copies the managed copy back to PATH, verifies integrity via MD5 checksum,
-    deletes the managed copy, removes the item from .git/info/exclude, and
-    removes the entry from the config subpath list if selective sync is active.
+    Deletes the managed copy, leaves PATH as a regular file or directory,
+    leaves other targets' copies as unmanaged files, removes the item from
+    .git/info/exclude, and removes the entry from the config subpath list if
+    selective sync is active.
     """
     # resolve() normalises Windows short (8.3) vs long path forms so that
     # relative_to and target matching stay consistent with config paths.

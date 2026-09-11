@@ -73,8 +73,12 @@ A per-path counter on the hub, incremented once per successful hub apply. A dele
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
-Hub bytes moved to `.blf-held/` in the managed project when a delete wins past the generation window, so the live path can go away without losing the file. That directory is reserved: it is not an item and is never projected. `daemon status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command in 0.5.0.
+Bytes kept under `.blf-held/` in the managed project so a live path can change without losing the previous file. That directory is reserved: it is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command in 0.5.0.
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal
+
+**Hold reason**:
+A stable clause naming why a held copy exists. WARNINGs and the later resolve UI show it. 0.5.0 reasons: `create-overwrite` (item-add fan-out replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
+_Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
 A replica is excluded from a path after its update lost compare-and-swap (hub generation/hash no longer matches its base). Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again. `status` lists these; `start` and `reload` warn and ack.

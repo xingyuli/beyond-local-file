@@ -15,6 +15,8 @@ from pathlib import Path
 
 import click
 
+from beyond_local_file.held import is_held_item_name
+
 from .config import ConfigProject
 from .processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 
@@ -51,6 +53,8 @@ def _load_items(
         items: list[ManagedProjectItem] = []
         if managed_project_path.exists() and managed_project_path.is_dir():
             for item_path in managed_project_path.iterdir():
+                if is_held_item_name(item_path.name):
+                    continue
                 items.append(
                     ManagedProjectItem(
                         name=item_path.name,
@@ -63,6 +67,8 @@ def _load_items(
     items_list: list[ManagedProjectItem] = []
 
     for subpath in subpaths:
+        if is_held_item_name(Path(subpath).parts[0]):
+            continue
         source_path = managed_project_path / subpath
         if source_path.exists():
             items_list.append(
