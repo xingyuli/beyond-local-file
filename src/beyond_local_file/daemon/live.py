@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from beyond_local_file.held import REASON_DELETE_GAP, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_processing
 
@@ -16,7 +17,15 @@ from .catchup import (
     scan_items,
     scan_path_state,
 )
-from .store import BaselineTrees, PathState, get_generation, get_state, path_state, state_equal
+from .store import (
+    BaselineTrees,
+    PathState,
+    get_generation,
+    get_state,
+    is_out_of_sync,
+    path_state,
+    state_equal,
+)
 
 DELETE_WINDOW = 3
 """Deletes win on the live path when hub_gen - base_gen is at most this value."""
@@ -57,6 +66,7 @@ class LiveSync:
         """
         self._baseline = baseline
         self._mailbox: dict[tuple[str, str], PathChange] = {}
+        self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
         self._watch_roots = _build_watch_roots(projects)
         self._last_seen = self._scan_all()
 
@@ -65,17 +75,24 @@ class LiveSync:
         """Return the in-memory baseline trees."""
         return self._baseline
 
+    @property
+    def out_of_sync(self) -> tuple[tuple[Path, str], ...]:
+        """Return replica/path pairs isolated after a lost update CAS."""
+        return tuple((Path(root), rel) for root, rel in sorted(self._oos))
+
     def tick(self) -> bool:
         """Observe current trees into the mailbox, then apply pending changes.
 
         Returns:
-            True if any mailbox entry was applied or attempted.
+            True if any mailbox entry was applied or attempted, or isolation
+            state changed (out-of-sync marked or cleared).
         """
+        before_oos = set(self._oos)
         self.observe()
-        if not self._mailbox:
-            return False
-        self.apply()
-        return True
+        if self._mailbox:
+            self.apply()
+            return True
+        return before_oos != self._oos
 
     def observe(self) -> None:
         """Queue create/update/delete for paths that differ from the last scan."""
@@ -87,11 +104,19 @@ class LiveSync:
                 old = last.get(rel) or path_state(False, None)
                 if state_equal(old, new):
                     continue
+                kind = _classify(old, new)
+                if self._is_oos(watch.root, rel):
+                    hub_now = scan_path_state(watch.hub, rel)
+                    if state_equal(new, hub_now):
+                        self._clear_oos(watch.root, rel, watch.hub)
+                        continue
+                    if kind != "delete":
+                        continue
                 self._mailbox[(rel, str(watch.root))] = PathChange(
                     rel=rel,
                     replica=watch.root,
                     hub=watch.hub,
-                    kind=_classify(old, new),
+                    kind=kind,
                     base_present=bool(old.get("present")),
                     base_hash=old.get("hash") if old.get("present") else None,
                     base_gen=get_generation(self._baseline, watch.root, rel),
@@ -113,6 +138,7 @@ class LiveSync:
             baseline: Baseline recorded after the mapping mutation.
         """
         self._baseline = baseline
+        self._oos = _oos_from_baseline(baseline)
         self._watch_roots = _build_watch_roots(projects)
         self._last_seen = self._scan_all()
         self._mailbox.clear()
@@ -127,14 +153,17 @@ class LiveSync:
         if change.replica == change.hub:
             self._commit_hub_source(change)
             return
+        if self._is_oos(change.replica, change.rel) and change.kind != "delete":
+            return
         old_hub = scan_path_state(change.hub, change.rel)
         old_hub_gen = get_generation(self._baseline, change.hub, change.rel)
         if change.kind == "delete":
             if not _delete_allowed(change, old_hub, old_hub_gen):
-                return
+                self._hold_delete_gap(change)
             remove_path(change.hub / change.rel)
         else:
             if not state_equal(old_hub, path_state(change.base_present, change.base_hash)):
+                self._mark_oos(change.replica, change.rel)
                 return
             source = change.replica / change.rel
             if not source.exists() and not source.is_symlink():
@@ -144,8 +173,10 @@ class LiveSync:
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
         self._record(change.replica, change.rel, scan_path_state(change.replica, change.rel), new_gen)
+        self._oos.discard((str(change.replica), change.rel))
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
+        self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
 
     def _commit_hub_source(self, change: PathChange) -> None:
         previous = get_state(self._baseline, change.hub, change.rel)
@@ -155,6 +186,7 @@ class LiveSync:
         self._record(change.hub, change.rel, new_hub, new_gen)
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
+        self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
 
     def _fan_out(self, change: PathChange, old_hub: PathState, new_hub: PathState, new_gen: int) -> None:
         for watch in self._watch_roots:
@@ -162,10 +194,13 @@ class LiveSync:
                 continue
             if not rel_in_items(change.rel, watch.item_names):
                 continue
+            if self._is_oos(watch.root, change.rel):
+                continue
             if (change.rel, str(watch.root)) in self._mailbox:
                 continue
             disk = scan_path_state(watch.root, change.rel)
             if not state_equal(disk, old_hub):
+                self._mark_oos(watch.root, change.rel)
                 continue
             destination = watch.root / change.rel
             if new_hub.get("present"):
@@ -188,6 +223,47 @@ class LiveSync:
             seen[rel] = path_state(True, digest)
         else:
             seen.pop(rel, None)
+
+    def _is_oos(self, replica: Path, rel: str) -> bool:
+        return (str(replica), rel) in self._oos
+
+    def _mark_oos(self, replica: Path, rel: str) -> None:
+        self._oos.add((str(replica), rel))
+        current = get_state(self._baseline, replica, rel)
+        present = bool(current.get("present"))
+        self._baseline.setdefault(str(replica), {})[rel] = path_state(
+            present,
+            current.get("hash") if present else None,
+            get_generation(self._baseline, replica, rel),
+            oos=True,
+        )
+
+    def _clear_oos(self, replica: Path, rel: str, hub: Path) -> None:
+        self._oos.discard((str(replica), rel))
+        self._record(replica, rel, scan_path_state(replica, rel), get_generation(self._baseline, hub, rel))
+
+    def _rejoin_equal_replicas(self, hub: Path, rel: str, new_hub: PathState) -> None:
+        for replica_str, oos_rel in list(self._oos):
+            if oos_rel != rel:
+                continue
+            replica = Path(replica_str)
+            if state_equal(scan_path_state(replica, rel), new_hub):
+                self._clear_oos(replica, rel, hub)
+
+    def _hold_delete_gap(self, change: PathChange) -> None:
+        hub_path = change.hub / change.rel
+        if not hub_path.exists() and not hub_path.is_symlink():
+            return
+        clause = reason_clause(REASON_DELETE_GAP, path=change.rel, replica=str(change.replica))
+        slot = store_held_copy(
+            change.hub,
+            rel_path=Path(change.rel),
+            source=hub_path,
+            replica=change.replica,
+            reason=REASON_DELETE_GAP,
+        )
+        print(f"WARNING: {clause}", flush=True)
+        print(f"Held at {slot.as_posix()}", flush=True)
 
 
 def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
@@ -233,3 +309,12 @@ def _delete_allowed(change: PathChange, hub: PathState, hub_gen: int) -> bool:
     if state_equal(hub, path_state(change.base_present, change.base_hash)):
         return True
     return hub_gen - change.base_gen <= DELETE_WINDOW
+
+
+def _oos_from_baseline(baseline: BaselineTrees) -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+    for root, paths in baseline.items():
+        for rel, state in paths.items():
+            if is_out_of_sync(state):
+                found.add((root, rel))
+    return found

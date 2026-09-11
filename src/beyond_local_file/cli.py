@@ -140,7 +140,7 @@ def daemon_stop(ctx):
 @daemon.command("status")
 @click.pass_context
 def daemon_status(ctx):
-    """Show whether the daemon is running."""
+    """Show whether the daemon is running, plus out-of-sync paths and held copies."""
     ctx.exit(status_daemon(ctx.obj["config"]))
 
 

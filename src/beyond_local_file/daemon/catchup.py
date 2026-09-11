@@ -78,18 +78,21 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
                 state["gen"] = int(prev.get("gen") or 0)
             except (TypeError, ValueError):
                 state["gen"] = 0
+            if prev.get("oos"):
+                state["oos"] = True
     for root, prev_paths in previous.items():
         slot = trees.setdefault(root, {})
         for rel, prev in prev_paths.items():
             if rel in slot:
                 continue
-            if prev.get("present"):
+            oos = bool(prev.get("oos"))
+            if prev.get("present") and not oos:
                 continue
             try:
                 gen = int(prev.get("gen") or 0)
             except (TypeError, ValueError):
                 gen = 0
-            slot[rel] = path_state(False, None, gen)
+            slot[rel] = path_state(False, None, gen, oos=oos)
 
 
 def _fresh_catch_up(projects: dict[str, ConfigProject], config_dir: Path) -> None:

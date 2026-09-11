@@ -172,18 +172,22 @@ def save_baseline(config_path: Path, trees: BaselineTrees) -> None:
         yaml.safe_dump({"trees": trees}, handle, default_flow_style=False, sort_keys=True)
 
 
-def path_state(present: bool, digest: str | None, gen: int = 0) -> PathState:
+def path_state(present: bool, digest: str | None, gen: int = 0, oos: bool = False) -> PathState:
     """Build a baseline entry for one path.
 
     Args:
         present: Whether the path exists.
         digest: File hash, or None for a directory or an absent path.
         gen: Per-path hub generation last applied to this replica.
+        oos: Whether this replica is out-of-sync for the path.
 
     Returns:
         Serialisable path state.
     """
-    return {"present": present, "hash": digest, "gen": gen}
+    state: PathState = {"present": present, "hash": digest, "gen": gen}
+    if oos:
+        state["oos"] = True
+    return state
 
 
 def state_equal(left: PathState | None, right: PathState | None) -> bool:
@@ -225,6 +229,35 @@ def get_generation(trees: BaselineTrees, root: Path, rel: str) -> int:
         Integer generation, defaulting to 0.
     """
     return _generation_of(get_state(trees, root, rel))
+
+
+def is_out_of_sync(state: PathState | None) -> bool:
+    """Return whether a path state is marked out-of-sync.
+
+    Args:
+        state: Baseline path state, or None.
+
+    Returns:
+        True when ``oos`` is set.
+    """
+    return bool(state and state.get("oos"))
+
+
+def iter_out_of_sync(trees: BaselineTrees) -> tuple[tuple[Path, str], ...]:
+    """Return replica/path pairs marked out-of-sync.
+
+    Args:
+        trees: Baseline trees.
+
+    Returns:
+        Sorted ``(replica_root, rel)`` pairs.
+    """
+    entries: list[tuple[Path, str]] = []
+    for root, paths in trees.items():
+        for rel, state in paths.items():
+            if is_out_of_sync(state):
+                entries.append((Path(root), rel))
+    return tuple(sorted(entries, key=lambda item: (str(item[0]), item[1])))
 
 
 def _generation_of(state: PathState | None) -> int:

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 
+from beyond_local_file.config import Config
 from beyond_local_file.daemon.client import DAEMON_DOWN_HINT, call_daemon
-from beyond_local_file.daemon.ingest import ingest_before_start, prepare_ingest
+from beyond_local_file.daemon.ingest import ingest_before_start, prepare_ingest, stdin_is_tty
 from beyond_local_file.daemon.process import (
     follow_log,
     is_running,
@@ -15,6 +18,9 @@ from beyond_local_file.daemon.process import (
     stop_process,
 )
 from beyond_local_file.daemon.runtime import run_worker
+from beyond_local_file.daemon.store import iter_out_of_sync, load_baseline, load_snapshot
+from beyond_local_file.held import list_held_copies
+from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.project_processor import load_config_projects
 
 
@@ -39,6 +45,7 @@ def start_daemon(config: str | None, *, worker: bool) -> int:
     ingest_code = ingest_before_start(result.config_file)
     if ingest_code != 0:
         return ingest_code
+    _warn_and_ack_isolation(result.config_file)
     return spawn_and_wait(result.config_file)
 
 
@@ -63,6 +70,7 @@ def reload_daemon(config: str | None) -> int:
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
         return 1
+    _warn_and_ack_isolation(result.config_file)
     if diff is None:
         click.echo("Mappings already match the snapshot")
         return 0
@@ -88,7 +96,7 @@ def stop_daemon(config: str | None) -> int:
 
 
 def status_daemon(config: str | None) -> int:
-    """Print whether the daemon is running.
+    """Print whether the daemon is running, plus out-of-sync paths and held copies.
 
     Args:
         config: Optional ``--config`` path.
@@ -99,7 +107,9 @@ def status_daemon(config: str | None) -> int:
     result = load_config_projects(config)
     if result is None:
         return 1
-    return print_status(result.config_file)
+    code = print_status(result.config_file)
+    _echo_isolation(result.config_file, warning=False)
+    return code
 
 
 def follow_daemon_logs(config: str | None) -> int:
@@ -115,3 +125,63 @@ def follow_daemon_logs(config: str | None) -> int:
     if result is None:
         return 1
     return follow_log(result.config_file)
+
+
+def _warn_and_ack_isolation(config_path: Path) -> None:
+    """Print held/out-of-sync WARNINGs and require ack without aborting."""
+    if not _echo_isolation(config_path, warning=True):
+        return
+    if stdin_is_tty():
+        click.confirm(
+            "Continue without resolving held copies and out-of-sync paths?",
+            default=True,
+        )
+
+
+def _echo_isolation(config_path: Path, *, warning: bool) -> bool:
+    """Print out-of-sync paths and held-copy clauses.
+
+    Args:
+        config_path: Path to the loaded config file.
+        warning: When True, prefix lines with ``WARNING:``.
+
+    Returns:
+        True when any out-of-sync path or held copy was printed.
+    """
+    oos = iter_out_of_sync(load_baseline(config_path) or {})
+    held = [
+        copy
+        for project in _projects_for_isolation(config_path).values()
+        for copy in list_held_copies(project.managed_project_path)
+    ]
+    prefix = "WARNING: " if warning else ""
+    if oos:
+        if not warning:
+            click.echo("Out-of-sync:")
+        for replica, rel in oos:
+            line = f"out-of-sync {replica.as_posix()} {rel}"
+            click.echo(f"{prefix}{line}" if warning else f"  {replica.as_posix()}  {rel}")
+    if held:
+        if not warning:
+            click.echo("Held copies:")
+        for copy in held:
+            click.echo(f"{prefix}{copy.clause}" if warning else f"  {copy.clause}")
+            click.echo(f"Held at {copy.slot.as_posix()}")
+    return bool(oos or held)
+
+
+def _projects_for_isolation(config_path: Path) -> dict[str, ConfigProject]:
+    """Return committed mappings, falling back to the config file.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        Config projects whose managed directories are scanned for held copies.
+    """
+    snapshot = load_snapshot(config_path)
+    if snapshot is not None:
+        return snapshot
+    cfg = Config(config_path)
+    cfg.load()
+    return cfg.get_config_projects()

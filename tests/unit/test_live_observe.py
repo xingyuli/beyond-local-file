@@ -220,10 +220,10 @@ def test_delete_within_generation_gap_removes_live_path_on_hub_and_other_replica
     assert not (target_b / "shared.txt").exists()
 
 
-def test_delete_past_generation_gap_does_not_remove_hub(
+def test_delete_past_generation_gap_holds_then_removes_live_path(
     live_workspace: tuple[LiveSync, Path, Path, Path],
 ) -> None:
-    """Gap greater than 3 does not delete the hub in this ticket (held copies are later)."""
+    """Gap greater than 3 holds hub bytes, then delete-wins the live path."""
     live, managed, target_a, target_b = live_workspace
     (target_b / "shared.txt").write_text("divergent")
     (target_a / "shared.txt").write_text("a1")
@@ -240,9 +240,12 @@ def test_delete_past_generation_gap_does_not_remove_hub(
     (target_b / "shared.txt").unlink()
     live.tick()
 
-    assert (managed / "shared.txt").read_text() == "a4"
-    assert (target_a / "shared.txt").read_text() == "a4"
+    assert not (managed / "shared.txt").exists()
+    assert not (target_a / "shared.txt").exists()
     assert not (target_b / "shared.txt").exists()
+    slots = [path for path in (managed / ".blf-held").iterdir() if path.is_dir()]
+    assert len(slots) == 1
+    assert (slots[0] / "content").read_text() == "a4"
 
 
 def test_fan_out_does_not_write_replica_whose_disk_hash_is_not_expected_base(
@@ -258,3 +261,4 @@ def test_fan_out_does_not_write_replica_whose_disk_hash_is_not_expected_base(
     assert (managed / "shared.txt").read_text() == "from-a"
     assert (target_a / "shared.txt").read_text() == "from-a"
     assert (target_b / "shared.txt").read_text() == "divergent"
+    assert (target_b, "shared.txt") in live.out_of_sync

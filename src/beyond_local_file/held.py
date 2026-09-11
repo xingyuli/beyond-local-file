@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +14,17 @@ REASON_CREATE_OVERWRITE = "create-overwrite"
 REASON_DELETE_GAP = "delete-gap"
 _CONTENT_NAME = "content"
 _META_NAME = "reason.yml"
+
+
+@dataclass(frozen=True)
+class HeldCopy:
+    """One held-copy slot under ``.blf-held/``."""
+
+    slot: Path
+    reason: str
+    path: str
+    replica: str
+    clause: str
 
 
 def is_held_item_name(name: str) -> bool:
@@ -77,5 +89,39 @@ def store_held_copy(
         "replica": replica.as_posix(),
         "clause": reason_clause(reason, path=rel_path.as_posix(), replica=replica.as_posix()),
     }
-    (slot / _META_NAME).write_text(yaml.safe_dump(meta, sort_keys=True), encoding="utf-8")
+    (slot / _META_NAME).write_text(yaml.safe_dump(meta, sort_keys=True, width=120), encoding="utf-8")
     return slot
+
+
+def list_held_copies(managed_root: Path) -> tuple[HeldCopy, ...]:
+    """Return held copies stored under ``.blf-held/`` in *managed_root*.
+
+    Args:
+        managed_root: Managed project directory.
+
+    Returns:
+        Held copies in slot-name order, each carrying the hold-reason clause.
+    """
+    root = managed_root / HELD_DIR
+    if not root.is_dir():
+        return ()
+    copies: list[HeldCopy] = []
+    for slot in sorted(root.iterdir(), key=lambda path: path.name):
+        if not slot.is_dir():
+            continue
+        meta_path = slot / _META_NAME
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(meta, dict):
+            continue
+        reason = str(meta.get("reason") or "")
+        path = str(meta.get("path") or "")
+        replica = str(meta.get("replica") or "")
+        stored = str(meta.get("clause") or "")
+        clause = stored or reason_clause(reason, path=path, replica=replica)
+        copies.append(HeldCopy(slot=slot, reason=reason, path=path, replica=replica, clause=clause))
+    return tuple(copies)
