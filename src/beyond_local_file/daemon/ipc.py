@@ -46,13 +46,21 @@ def send_request(config_path: Path, request: Request) -> Response:
         client.close()
 
 
-def serve_requests(config_path: Path, handler: RequestHandler, shutdown: Event) -> None:
+def serve_requests(
+    config_path: Path,
+    handler: RequestHandler,
+    shutdown: Event,
+    on_idle: Callable[[], None] | None = None,
+    before_request: Callable[[], None] | None = None,
+) -> None:
     """Bind a localhost port, mark ready, and handle requests until shutdown.
 
     Args:
         config_path: Path to the loaded config file.
         handler: Callback that turns a request into a response.
         shutdown: Event set when the worker should stop.
+        on_idle: Optional live-observe tick run when accept times out.
+        before_request: Optional live-observe tick run before each request.
     """
     path = port_path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,14 +78,25 @@ def serve_requests(config_path: Path, handler: RequestHandler, shutdown: Event) 
             try:
                 conn, _addr = server.accept()
             except TimeoutError:
+                _run_hook(on_idle)
                 continue
             except OSError:
                 continue
+            _run_hook(before_request)
             with conn:
                 _handle_connection(conn, config_path, handler)
     finally:
         server.close()
         path.unlink(missing_ok=True)
+
+
+def _run_hook(hook: Callable[[], None] | None) -> None:
+    if hook is None:
+        return
+    try:
+        hook()
+    except Exception as error:
+        print(f"live: observe error: {error}", flush=True)
 
 
 def _read_port(config_path: Path) -> int:

@@ -25,7 +25,7 @@ from beyond_local_file.project_processor import ProjectProcessor, RevlinkResolve
 
 from .catchup import record_baseline
 from .ipc import Request, Response
-from .store import load_snapshot, save_baseline, save_snapshot
+from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
 
 type Handler = Callable[[Path, Request], int]
 
@@ -182,4 +182,4 @@ def _persist_committed_state(config_path: Path) -> None:
     cfg.load()
     projects = cfg.get_config_projects()
     save_snapshot(config_path, projects)
-    save_baseline(config_path, record_baseline(projects))
+    save_baseline(config_path, record_baseline(projects, load_baseline(config_path)))

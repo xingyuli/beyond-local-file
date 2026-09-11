@@ -1,1 +1,1 @@
-"""Background daemon: one OS process for catch-up and later live projection."""
+"""Background daemon: one OS process for catch-up and live projection."""

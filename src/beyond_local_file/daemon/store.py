@@ -172,17 +172,18 @@ def save_baseline(config_path: Path, trees: BaselineTrees) -> None:
         yaml.safe_dump({"trees": trees}, handle, default_flow_style=False, sort_keys=True)
 
 
-def path_state(present: bool, digest: str | None) -> PathState:
+def path_state(present: bool, digest: str | None, gen: int = 0) -> PathState:
     """Build a baseline entry for one path.
 
     Args:
         present: Whether the path exists.
         digest: File hash, or None for a directory or an absent path.
+        gen: Per-path hub generation last applied to this replica.
 
     Returns:
         Serialisable path state.
     """
-    return {"present": present, "hash": digest}
+    return {"present": present, "hash": digest, "gen": gen}
 
 
 def state_equal(left: PathState | None, right: PathState | None) -> bool:
@@ -210,6 +211,29 @@ def get_state(trees: BaselineTrees, root: Path, rel: str) -> PathState:
         Stored or absent path state.
     """
     return trees.get(str(root), {}).get(rel) or path_state(False, None)
+
+
+def get_generation(trees: BaselineTrees, root: Path, rel: str) -> int:
+    """Return the stored generation for a path, or 0 when missing.
+
+    Args:
+        trees: Baseline trees.
+        root: Hub or replica root.
+        rel: Path relative to *root*.
+
+    Returns:
+        Integer generation, defaulting to 0.
+    """
+    return _generation_of(get_state(trees, root, rel))
+
+
+def _generation_of(state: PathState | None) -> int:
+    if not state:
+        return 0
+    try:
+        return int(state.get("gen") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _normalize_state(state: PathState | None) -> tuple[bool, str | None]:
