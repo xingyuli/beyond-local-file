@@ -1,7 +1,7 @@
-"""Physical file copy management with bidirectional sync support.
+"""Physical copy management with bidirectional sync support.
 
-Handles copying single files from managed projects to target directories,
-with hash-based change detection and conflict resolution.
+Handles copying files and directory trees from managed projects to target
+directories, with hash-based change detection and conflict resolution.
 """
 
 import shutil
@@ -24,9 +24,10 @@ from .sync_state import SyncState, SyncStatus
 
 
 class CopyManager:
-    """Manages physical file copies from a project to a target directory.
+    """Manages physical copies from a project to a target directory.
 
     Only operates on items whose strategy is ``LinkStrategy.COPY``.
+    Files and directory trees are both projected as real copies.
 
     Implements the LinkStrategyManager protocol.
 
@@ -75,9 +76,10 @@ class CopyManager:
     ) -> LinkCreateResult:
         """Create links for all managed items (protocol method).
 
-        Synchronizes copied files using bidirectional change detection.
+        Synchronizes copy projections using bidirectional change detection.
         For each copy item:
-        - If target does not exist: copy managed → target.
+        - If the projection path is a symlink: replace it with a real copy.
+        - If target does not exist: copy managed → target (file or directory tree).
         - If both exist and in sync: skip.
         - If only managed changed: copy managed → target.
         - If only target changed: copy target → managed (reverse sync).
@@ -98,10 +100,10 @@ class CopyManager:
             target_file = self.target_path / item.name
             managed_file = item.path
 
-            if not target_file.exists():
-                # First-time copy
-                if self._copy_file(managed_file, target_file):
-                    self.sync_state.update_record(managed_file, target_file)
+            if target_file.is_symlink() or not target_file.exists():
+                # Missing projection, or a leftover symlink at the projection
+                # path, is replaced with a real copy.
+                if self._copy_and_record(managed_file, target_file, managed_file, target_file):
                     result.created.add(item.name)
                 else:
                     result.failed.add(item.name)
@@ -171,9 +173,16 @@ class CopyManager:
         target_changed_list: list[str] = []
         both_changed_list: list[str] = []
         missing_list: list[str] = []
+        incorrect_list: list[str] = []
 
         for item in self.copy_items:
             target_file = self.target_path / item.name
+
+            if target_file.is_symlink():
+                # A symlink is not a copy projection, even if it points at
+                # the managed item.
+                incorrect_list.append(item.name)
+                continue
 
             if not target_file.exists():
                 missing_list.append(item.name)
@@ -201,12 +210,7 @@ class CopyManager:
         return LinkCheckResult(
             exists=in_sync_list + manually_synced_list,
             missing=missing_list,
-            # incorrect is intentionally left empty for copy strategy.
-            # Copy drift (managed_changed, target_changed, both_changed) is fully
-            # captured in CopyCheckDetails and surfaced by the copy-specific formatters.
-            # Populating incorrect would be redundant and would trigger the symlink-flavoured
-            # "points to wrong source" message in the verbose formatter, which is misleading
-            # for file copies.
+            incorrect=incorrect_list,
             details=details,
         )
 
@@ -274,7 +278,7 @@ class CopyManager:
     # -- internal helpers ------------------------------------------------------
 
     def _copy_and_record(self, source: Path, destination: Path, managed: Path, target: Path) -> bool:
-        """Copy a file and update the sync record on success.
+        """Copy an item and update the sync record on success.
 
         Args:
             source: File to read from.
@@ -285,25 +289,35 @@ class CopyManager:
         Returns:
             True on success, False on failure.
         """
-        if not self._copy_file(source, destination):
+        if not self._copy_item(source, destination):
             return False
         self.sync_state.update_record(managed, target)
         return True
 
     @staticmethod
-    def _copy_file(source: Path, destination: Path) -> bool:
-        """Copy a single file, creating parent directories as needed.
+    def _copy_item(source: Path, destination: Path) -> bool:
+        """Copy a file or directory tree, creating parent directories as needed.
+
+        Replaces a symlink or existing path at ``destination`` so the
+        projection is always a real copy.
 
         Args:
-            source: Source file path.
-            destination: Destination file path.
+            source: Source file or directory path.
+            destination: Destination file or directory path.
 
         Returns:
             True on success, False on failure.
         """
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+            if destination.is_symlink() or destination.is_file():
+                destination.unlink()
+            elif destination.is_dir():
+                shutil.rmtree(destination)
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            else:
+                shutil.copy2(source, destination)
             return True
         except OSError:
             return False

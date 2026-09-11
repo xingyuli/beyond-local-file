@@ -1,6 +1,6 @@
 """CLI tool for managing links between project directories and target locations.
 
-This tool provides commands to synchronize symlinks (and physical file copies)
+This tool provides commands to synchronize physical copies of managed items
 and check their status, with automatic Git exclude file management.
 """
 
@@ -25,6 +25,7 @@ def _configure_windows_console_encoding() -> None:
             reconfigure(encoding="utf-8")
         except (OSError, ValueError):
             pass
+
 
 from . import __version__
 from .completion import complete_project_names
@@ -134,7 +135,7 @@ def cli(ctx, config):
 
 @cli.group()
 def link():
-    """Link management commands (symlinks and file copies)."""
+    """Link management commands (physical copies of managed items)."""
     pass
 
 
@@ -144,9 +145,8 @@ def link():
 def sync(ctx, project_name):
     """Synchronize links from project directory to target locations.
 
-    Creates symlinks (or physical copies for items marked with copy: true)
-    for all items in the project directory to each target location specified
-    in the config.
+    Creates physical copies of managed items in each target location
+    specified in the config.
     """
     config = ctx.obj["config"]
     result = load_config_projects(config, project_name)
@@ -172,7 +172,7 @@ def sync(ctx, project_name):
 def check(ctx, project_name, extra_exclude, output_format):
     """Check link status and Git exclude configuration.
 
-    Displays the status of symlinks, file copies, and Git exclude entries
+    Displays the status of copy projections and Git exclude entries
     for each project and target location.
     """
     config = ctx.obj["config"]

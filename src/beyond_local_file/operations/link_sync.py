@@ -123,7 +123,7 @@ class LinkSyncFormatter:
 
 
 class SyncOperation(CmdOperation):
-    """Encapsulates the sync operation logic for both symlinks and copies."""
+    """Encapsulates the sync operation logic for copy projections."""
 
     def __init__(
         self,

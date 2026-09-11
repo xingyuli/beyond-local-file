@@ -12,12 +12,12 @@ from pathlib import Path
 class LinkStrategy(StrEnum):
     """Strategy for linking a project item to the target.
 
-    Derived from the YAML config (``copy: true`` → COPY, otherwise SYMLINK).
-    Never exposed as a CLI option.
+    Config translation always produces COPY. SYMLINK remains only so
+    leftover tests and revlink/remove code can name the old mechanism.
 
     Attributes:
-        SYMLINK: Create a symbolic link (default).
-        COPY: Create a physical file copy.
+        SYMLINK: Create a symbolic link (legacy; not produced from config).
+        COPY: Create a physical copy of a file or directory.
     """
 
     SYMLINK = "symlink"

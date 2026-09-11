@@ -13,12 +13,14 @@ class Mapping:
     """Represents a single mapping (string-mapping or dict-mapping).
 
     A mapping defines one or more targets and optional rules for syncing.
-    Each mapping can have its own subpaths and copy strategy settings.
+    YAML no longer selects a link strategy; every projection is a copy.
+    ``copy_paths`` is retained for revlink/remove until those commands
+    are adapted.
 
     Attributes:
         targets: List of target paths (can have multiple from target: [t1, t2]).
         subpaths: Optional list of relative subpaths for selective sync.
-        copy_paths: Optional set of subpath names that use copy strategy.
+        copy_paths: Unused by config load (always None). Leftover for remove.
 
     Examples:
         String mapping:

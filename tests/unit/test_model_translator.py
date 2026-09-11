@@ -214,12 +214,12 @@ class TestItemLoader:
     """Unit tests for _load_items (the real filesystem adapter)."""
 
     def test_sync_all_enumerates_top_level_items(self, project_dir: Path) -> None:
-        """No subpaths → all top-level entries returned as SYMLINK items."""
+        """No subpaths → all top-level entries returned as COPY items."""
         items = _load_items(project_dir, None, None)
 
         names = {i.name for i in items}
         assert names == {"file1.txt", "file2.txt", ".kiro"}
-        assert all(i.strategy == LinkStrategy.SYMLINK for i in items)
+        assert all(i.strategy == LinkStrategy.COPY for i in items)
 
     def test_sync_all_returns_empty_for_empty_directory(self, tmp_path: Path) -> None:
         """Empty directory with no subpaths → empty list (unit skipped by translator)."""
@@ -232,20 +232,20 @@ class TestItemLoader:
         assert _load_items(tmp_path / "ghost", None, None) == []
 
     def test_subpath_list_returns_only_named_items(self, project_dir: Path) -> None:
-        """Explicit subpaths → only those entries, all SYMLINK by default."""
+        """Explicit subpaths → only those entries, all COPY."""
         items = _load_items(project_dir, ["file1.txt", ".kiro/hooks"], None)
 
         names = {i.name for i in items}
         assert names == {"file1.txt", ".kiro/hooks"}
-        assert all(i.strategy == LinkStrategy.SYMLINK for i in items)
+        assert all(i.strategy == LinkStrategy.COPY for i in items)
 
-    def test_copy_paths_set_assigns_copy_strategy(self, project_dir: Path) -> None:
-        """Items in copy_paths get COPY strategy; others remain SYMLINK."""
+    def test_copy_paths_are_ignored_all_items_are_copies(self, project_dir: Path) -> None:
+        """copy_paths no longer selects a strategy; every item is a copy."""
         items = _load_items(project_dir, ["file1.txt", "file2.txt"], {"file1.txt"})
 
         by_name = {i.name: i for i in items}
         assert by_name["file1.txt"].strategy == LinkStrategy.COPY
-        assert by_name["file2.txt"].strategy == LinkStrategy.SYMLINK
+        assert by_name["file2.txt"].strategy == LinkStrategy.COPY
 
     def test_nonexistent_subpath_is_skipped(self, project_dir: Path) -> None:
         """Subpath entries that don't exist on disk are silently skipped."""
@@ -254,10 +254,14 @@ class TestItemLoader:
         assert len(items) == 1
         assert items[0].name == "file1.txt"
 
-    def test_copy_strategy_on_directory_raises(self, project_dir: Path) -> None:
-        """Copy strategy applied to a directory raises ValueError."""
-        with pytest.raises(ValueError, match="Copy strategy is not supported for directories"):
-            _load_items(project_dir, [".kiro/hooks"], {".kiro/hooks"})
+    def test_directory_subpath_is_a_copy_item(self, project_dir: Path) -> None:
+        """A directory item is loaded as a copy projection, not rejected."""
+        items = _load_items(project_dir, [".kiro/hooks"], {".kiro/hooks"})
+
+        assert len(items) == 1
+        assert items[0].name == ".kiro/hooks"
+        assert items[0].path.is_dir()
+        assert items[0].strategy == LinkStrategy.COPY
 
     def test_item_paths_are_absolute(self, project_dir: Path) -> None:
         """All returned item.path values are absolute."""
@@ -281,7 +285,7 @@ class TestItemsLoading:
     """Pipeline tests that use the real _load_items adapter via tmp_path."""
 
     def test_no_subpaths_expands_all_items(self, project_dir: Path) -> None:
-        """Sync-all mapping: all top-level items, all SYMLINK."""
+        """Sync-all mapping: all top-level items, all COPY."""
         projects = {
             "my-project": ConfigProject(
                 managed_project_name="my-project",
@@ -293,7 +297,7 @@ class TestItemsLoading:
 
         assert len(units) == 1
         assert len(units[0].items) == 3  # noqa: PLR2004
-        assert all(i.strategy == LinkStrategy.SYMLINK for i in units[0].items)
+        assert all(i.strategy == LinkStrategy.COPY for i in units[0].items)
         assert {i.name for i in units[0].items} == {"file1.txt", "file2.txt", ".kiro"}
 
     def test_with_subpaths_loads_named_items(self, project_dir: Path) -> None:
@@ -316,8 +320,8 @@ class TestItemsLoading:
         assert len(units) == 1
         assert {i.name for i in units[0].items} == {"file1.txt", ".kiro/hooks"}
 
-    def test_with_copy_paths_assigns_strategy(self, project_dir: Path) -> None:
-        """copy_paths membership drives COPY vs SYMLINK strategy."""
+    def test_mapping_without_copy_flag_projects_as_copies(self, project_dir: Path) -> None:
+        """Mappings without copy_paths still project every item as a copy."""
         projects = {
             "my-project": ConfigProject(
                 managed_project_name="my-project",
@@ -326,7 +330,7 @@ class TestItemsLoading:
                     Mapping(
                         targets=[Path("/t1")],
                         subpaths=["file1.txt", "file2.txt"],
-                        copy_paths={"file1.txt"},
+                        copy_paths=None,
                     )
                 ],
             )
@@ -335,10 +339,10 @@ class TestItemsLoading:
 
         by_name = {i.name: i for i in units[0].items}
         assert by_name["file1.txt"].strategy == LinkStrategy.COPY
-        assert by_name["file2.txt"].strategy == LinkStrategy.SYMLINK
+        assert by_name["file2.txt"].strategy == LinkStrategy.COPY
 
-    def test_copy_strategy_on_directory_raises(self, project_dir: Path) -> None:
-        """Copy strategy on a directory bubbles up from _load_items."""
+    def test_directory_item_is_projected_as_copy(self, project_dir: Path) -> None:
+        """A directory subpath becomes a copy item in the processing unit."""
         projects = {
             "my-project": ConfigProject(
                 managed_project_name="my-project",
@@ -347,13 +351,17 @@ class TestItemsLoading:
                     Mapping(
                         targets=[Path("/t1")],
                         subpaths=[".kiro/hooks"],
-                        copy_paths={".kiro/hooks"},
+                        copy_paths=None,
                     )
                 ],
             )
         }
-        with pytest.raises(ValueError, match="Copy strategy is not supported for directories"):
-            translate_config_to_processing(projects)
+        units = translate_config_to_processing(projects)
+
+        assert len(units) == 1
+        assert units[0].items[0].name == ".kiro/hooks"
+        assert units[0].items[0].strategy == LinkStrategy.COPY
+        assert units[0].items[0].path.is_dir()
 
     def test_nonexistent_subpath_skipped(self, project_dir: Path) -> None:
         """Missing subpath entries are silently skipped."""

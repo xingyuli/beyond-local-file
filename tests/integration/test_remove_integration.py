@@ -129,10 +129,10 @@ def test_remove_dry_run_validates_every_projection_without_mutation(
     assert second_exclude.read_bytes() == before["second_exclude"]
 
 
-def test_remove_rejects_mismatched_copy_without_mutation(
+def test_remove_rejects_copy_true_config_without_mutation(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
-    """A divergent copy projection blocks removal and leaves all state unchanged."""
+    """A leftover copy: true config fails to load and leaves all state unchanged."""
     managed = tmp_path / "managed"
     target = tmp_path / "target"
     managed.mkdir()
@@ -162,7 +162,9 @@ def test_remove_rejects_mismatched_copy_without_mutation(
     result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
 
     assert result.exit_code == 1
-    assert "checksum mismatch" in result.output.lower()
+    assert "project: managed" in result.output
+    assert "mapping: 1" in result.output
+    assert "key: copy" in result.output
     assert config_path.read_bytes() == before["config"]
     assert exclude_file.read_bytes() == before["exclude"]
     assert managed_item.read_bytes() == before["managed"]

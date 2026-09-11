@@ -50,13 +50,8 @@ class ProcessingUnitResults:
 class CheckRow:
     """A single row of check results ready for table rendering.
 
-    IMPORTANT: There is a hidden relationship between link strategies and table columns:
-    - symlink_link_result → "Symlink" column
-    - copy_link_result → "Copy" column
-    - git_result → "Exclude" column (shared across strategies)
-
-    This design is acceptable for now as we only have two strategies. If more strategies
-    are added in the future, consider a more flexible column mapping approach.
+    The Copy column is shown when the unit has copy items. The Symlink
+    column is omitted unless leftover symlink items are present.
 
     Attributes:
         project_name: Name of the project.
@@ -125,8 +120,11 @@ class LinkCheckFormatter:
                 click.echo(f"    ✓ {item}")
             if self.link_result.incorrect:
                 click.echo(f"  Incorrect: {len(self.link_result.incorrect)}")
+                reason = (
+                    "not a copy" if isinstance(self.link_result.details, CopyCheckDetails) else "points to wrong source"
+                )
                 for item in self.link_result.incorrect:
-                    click.echo(f"    ⚠ {item} (points to wrong source)")
+                    click.echo(f"    ⚠ {item} ({reason})")
             if self.link_result.missing:
                 click.echo(f"  Missing: {len(self.link_result.missing)}")
                 for item in self.link_result.missing:
@@ -255,6 +253,7 @@ class CheckTableFormatter:
         self.rows = rows
         self.show_extra = show_extra
         self._has_copy = any(row.copy_link_result is not None for row in rows)
+        self._has_symlink = any(row.symlink_link_result is not None for row in rows)
 
     def render(self) -> None:
         """Render the table and optional extra-exclude section to stdout."""
@@ -262,14 +261,18 @@ class CheckTableFormatter:
 
         table = Table(show_header=True, header_style="bold")
         table.add_column("Project")
-        table.add_column("Symlink", justify="center")
+        if self._has_symlink:
+            table.add_column("Symlink", justify="center")
         table.add_column("Exclude", justify="center")
         if self._has_copy:
             table.add_column("Copy", justify="center")
         table.add_column("Target Path")
 
         for row in self.rows:
-            cells = [row.project_name, self._symlink_cell(row.symlink_link_result), self._exclude_cell(row.git_result)]
+            cells = [row.project_name]
+            if self._has_symlink:
+                cells.append(self._symlink_cell(row.symlink_link_result))
+            cells.append(self._exclude_cell(row.git_result))
             if self._has_copy:
                 cells.append(self._copy_cell(row.copy_link_result))
             cells.append(str(row.target_path))
@@ -343,12 +346,15 @@ class CheckTableFormatter:
             + len(details.target_changed)
             + len(details.both_changed)
             + len(link_result.missing)
+            + len(link_result.incorrect)
         )
         manually_synced_count = len(details.manually_synced)
         if problems:
             parts: list[str] = []
             if link_result.missing:
                 parts.append(f"{len(link_result.missing)} missing")
+            if link_result.incorrect:
+                parts.append(f"{len(link_result.incorrect)} not a copy")
             if details.both_changed:
                 parts.append(f"{len(details.both_changed)} conflict")
             out_of_sync = len(details.managed_changed) + len(details.target_changed)

@@ -139,6 +139,72 @@ def test_error_message_with_custom_config_not_found() -> None:
         assert "nonexistent.yml" in result.output
 
 
+def test_link_sync_rejects_copy_true_and_names_project_mapping_and_key(
+    isolated_home,
+) -> None:
+    """Config load fails if copy: true is present, naming project, mapping, and key."""
+    runner = CliRunner()
+
+    with runner.isolated_filesystem() as td:
+        td_path = Path(td)
+        project_dir = td_path / "my-project"
+        project_dir.mkdir()
+        (project_dir / "rules.md").write_text("rules")
+        target_dir = td_path / "target"
+        target_dir.mkdir()
+        (td_path / "config.yml").write_text(
+            f"""my-project:
+  target: {target_dir}
+  subpath:
+    - path: rules.md
+      copy: true
+"""
+        )
+
+        result = runner.invoke(cli, ["link", "sync"], env=isolated_home)
+
+        assert result.exit_code != 0
+        assert "project: my-project" in result.output
+        assert "mapping: 1" in result.output
+        assert "key: copy" in result.output
+
+
+def test_link_sync_projects_mapping_without_copy_flag_as_copies(isolated_home) -> None:
+    """New and existing mappings without copy: true project as copies."""
+    runner = CliRunner()
+
+    with runner.isolated_filesystem() as td:
+        td_path = Path(td)
+        project_dir = td_path / "my-project"
+        project_dir.mkdir()
+        (project_dir / "file1.txt").write_text("content1")
+        hooks = project_dir / ".kiro" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "hook.json").write_text("{}")
+        target_dir = td_path / "target"
+        target_dir.mkdir()
+        (td_path / "config.yml").write_text(
+            f"""my-project:
+  target: {target_dir}
+  subpath:
+    - file1.txt
+    - .kiro/hooks
+"""
+        )
+
+        result = runner.invoke(cli, ["link", "sync"], env=isolated_home)
+
+        assert result.exit_code == 0, result.output
+        file_projection = target_dir / "file1.txt"
+        dir_projection = target_dir / ".kiro" / "hooks"
+        assert file_projection.is_file()
+        assert not file_projection.is_symlink()
+        assert file_projection.read_text() == "content1"
+        assert dir_projection.is_dir()
+        assert not dir_projection.is_symlink()
+        assert (dir_projection / "hook.json").read_text() == "{}"
+
+
 def test_remove_is_destructive_top_level_command_with_required_path() -> None:
     """The top-level non-interactive remove command documents PATH and dry-run.
 

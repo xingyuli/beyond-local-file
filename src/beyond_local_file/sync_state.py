@@ -1,10 +1,11 @@
 """Sync state tracking for physically copied files.
 
-Stores per-file SHA-256 hashes so that change detection can distinguish
+Stores per-item SHA-256 hashes so that change detection can distinguish
 which side (managed, target, or both) has been modified since the last sync.
 """
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -49,6 +50,43 @@ def compute_file_hash(filepath: Path) -> str:
     with open(filepath, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
             sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def compute_item_hash(path: Path) -> str:
+    """Compute a SHA-256 hash of a file or directory tree.
+
+    Args:
+        path: File or directory to hash.
+
+    Returns:
+        Hex-encoded SHA-256 digest of the file contents or of the
+        directory's relative paths and file contents.
+    """
+    if path.is_dir():
+        return _compute_directory_hash(path)
+    return compute_file_hash(path)
+
+
+def _compute_directory_hash(directory: Path) -> str:
+    """Hash a directory by walking relative paths and file contents."""
+    sha256 = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(directory, followlinks=False):
+        dirnames.sort()
+        filenames.sort()
+        rel_dir = Path(dirpath).relative_to(directory).as_posix()
+        sha256.update(b"dir:")
+        sha256.update(rel_dir.encode())
+        for name in filenames:
+            file_path = Path(dirpath) / name
+            rel_file = name if rel_dir == "." else f"{rel_dir}/{name}"
+            sha256.update(b"file:")
+            sha256.update(rel_file.encode())
+            if file_path.is_symlink():
+                sha256.update(b"symlink:")
+                sha256.update(os.fsencode(os.readlink(file_path)))
+            elif file_path.is_file():
+                sha256.update(compute_file_hash(file_path).encode())
     return sha256.hexdigest()
 
 
@@ -143,8 +181,8 @@ class SyncState:
         Returns:
             A SyncStatus value describing the relationship.
         """
-        managed_hash = compute_file_hash(managed_file)
-        target_hash = compute_file_hash(target_file)
+        managed_hash = compute_item_hash(managed_file)
+        target_hash = compute_item_hash(target_file)
 
         record = self.get_record(str(target_file))
 
@@ -177,7 +215,7 @@ class SyncState:
             managed_file: Absolute path to the managed (source) file.
             target_file: Absolute path to the target (copied) file.
         """
-        file_hash = compute_file_hash(target_file)
+        file_hash = compute_item_hash(target_file)
         self.records[str(target_file)] = SyncRecord(
             managed_path=str(managed_file),
             target_path=str(target_file),

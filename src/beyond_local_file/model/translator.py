@@ -34,18 +34,19 @@ def _load_items(
     ``item_loader`` parameter to substitute a different implementation (e.g.
     an in-memory stub in tests).
 
+    Every item is a copy projection. ``copy_paths`` is ignored and retained
+    only so existing ``item_loader`` call sites keep the same signature.
+
     Args:
         managed_project_path: Path to the managed project directory.
         subpaths: Optional list of relative subpaths to sync.
-        copy_paths: Optional set of subpath names that use copy strategy.
+        copy_paths: Ignored. Previously named copy-strategy subpaths.
 
     Returns:
         List of ManagedProjectItem instances. Empty list if no items found.
-
-    Raises:
-        ValueError: If copy strategy is used on a directory.
     """
-    # No subpaths: expand all files/directories as symlinks
+    del copy_paths
+    # No subpaths: expand all files/directories as copies
     if subpaths is None:
         items: list[ManagedProjectItem] = []
         if managed_project_path.exists() and managed_project_path.is_dir():
@@ -54,29 +55,21 @@ def _load_items(
                     ManagedProjectItem(
                         name=item_path.name,
                         path=item_path,
-                        strategy=LinkStrategy.SYMLINK,
+                        strategy=LinkStrategy.COPY,
                     )
                 )
         return items
 
-    # Subpaths specified: create items for each valid subpath
-    copy_set = copy_paths or set()
     items_list: list[ManagedProjectItem] = []
 
     for subpath in subpaths:
         source_path = managed_project_path / subpath
         if source_path.exists():
-            strategy = LinkStrategy.COPY if subpath in copy_set else LinkStrategy.SYMLINK
-
-            # Validate: copy strategy only for files
-            if strategy == LinkStrategy.COPY and source_path.is_dir():
-                raise ValueError(f"Copy strategy is not supported for directories: {subpath}")
-
             items_list.append(
                 ManagedProjectItem(
                     name=subpath,
                     path=source_path,
-                    strategy=strategy,
+                    strategy=LinkStrategy.COPY,
                 )
             )
 

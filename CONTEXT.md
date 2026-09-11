@@ -1,11 +1,11 @@
 # beyond-local-file
 
-A tool for projecting shared files from a single authoritative directory into many target project directories, using symlinks or physical copies.
+A tool for projecting shared files from a single managed directory into many target project directories as physical copies.
 
 ## Language
 
 **Managed project**:
-The authoritative directory whose contents are projected into target projects. Its contents are never modified by the tool.
+The directory that holds items projected into target projects. The tool may write it when adopting an item or when applying a change observed in a target project.
 _Avoid_: Source project, host project, origin
 
 **Target project**:
@@ -17,16 +17,72 @@ A single file or directory inside a managed project that is projected into one o
 _Avoid_: File, resource, artifact
 
 **Mapping**:
-A declared relationship between a managed project and one or more target projects, with optional rules governing which items are projected and how.
+A declared relationship between a managed project and one or more target projects, with optional subpaths governing which items are projected.
 _Avoid_: Configuration entry, rule, link definition
 
-**Projection**:
-The act of making an item from a managed project visible inside a target project, either as a symlink or a physical copy.
-_Avoid_: Sync, deploy, copy, link
+**Link**:
+The abstraction that makes a managed item visible in a target project. A link is always realized as a physical copy; it is not a symlink.
+_Avoid_: Symlink, shortcut, alias, strategy
 
-**Link strategy**:
-The mechanism used for a projection: symlink (the target sees a pointer to the managed item) or copy (the target receives an independent physical file).
-_Avoid_: Mode, type, method
+**Projection**:
+The physical copy of a managed item that lives inside a target project.
+_Avoid_: Sync, deploy, copy
+
+**Daemon**:
+The sole runtime for projecting, catching up, and applying mapping changes. It observes each managed project and its target projects, queues typed changes, writes the hub, fans out (excluding the source replica), and is the only writer of mappings that originate from blf commands.
+_Avoid_: Coordinator, watcher, syncer, service
+
+**Shell**:
+A blf command that sends a request to the daemon. It does not copy, delete, or write mappings itself.
+_Avoid_: Client, wrapper, frontend
+
+**Mapping snapshot**:
+The daemon's last committed mappings, persisted on disk so a crash still has a before-state. Start and reload diff the config file against it to see external mapping edits.
+_Avoid_: Cache, checkpoint, in-memory config
+
+**Baseline**:
+The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. No baseline means that managed project has never completed a catch-up.
+_Avoid_: Checkpoint, watermark, sync-state
+
+**Fresh catch-up**:
+Daemon start with no baseline: every projection is made to match the managed project, then observation begins.
+_Avoid_: Reset, initial sync, first sync
+
+**Update catch-up**:
+Daemon start (or reload) with a baseline: only paths that differ from the baseline are queued, then observation begins. This is the downtime window, not a reset.
+_Avoid_: Resync, full sync, recover
+
+**Reload**:
+Classify external mapping edits by diffing the config file against the mapping snapshot, then commit. Removals are confirmed as one plan, coarsest first (project-remove, then target-remove, then item-remove, with inner diffs subsumed); adds apply automatically after. `daemon start` runs this in the foreground when the file differs from the snapshot, then backgrounds; `daemon reload` runs it when the daemon is already up. Decline (or no TTY when removals exist) commits nothing. The daemon does not watch config files. Internal mapping edits do not go through reload.
+_Avoid_: Hot reload, config watch, live config
+
+**Path change**:
+A typed unit of work on a path under an item: create, update, or delete.
+_Avoid_: Event, delta, mutation
+
+**Mailbox**:
+At most one not-yet-applied path change per (path, replica). A later event from the same replica replaces the pending change. Two replicas dirty on the same path are not merged.
+_Avoid_: Debounce, batch, buffer, timeout
+
+**Fan-out**:
+After a successful hub apply, copy or delete that generation onto every in-sync replica except the source replica — the tree the change was observed on. The source already has the bytes.
+_Avoid_: Broadcast, replicate, push, echo
+
+**Generation**:
+A per-path counter on the hub, incremented once per successful hub apply. A delete wins on the live path if the hub generation is at most 3 ahead of the replica's base.
+_Avoid_: Version, clock, timestamp
+
+**Held copy**:
+Hub bytes moved to `.blf-held/` in the managed project when a delete wins past the generation window, so the live path can go away without losing the file. That directory is reserved: it is not an item and is never projected. `daemon status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command in 0.5.0.
+_Avoid_: Quarantine, trash, stash, lost+found, stale removal
+
+**Out-of-sync**:
+A replica is excluded from a path after its update lost compare-and-swap (hub generation/hash no longer matches its base). Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again. `status` lists these; `start` and `reload` warn and ack.
+_Avoid_: Freeze, conflict, diverge, partition
+
+**Mapping change**:
+A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove.
+_Avoid_: Config diff, reload delta
 
 **Subpath**:
 An item declared explicitly in a mapping for selective projection. When no subpaths are declared, all top-level items in the managed project are projected.
@@ -45,7 +101,7 @@ The pure structural transformation that converts a config with M mappings and N 
 _Avoid_: Translation, flattening, config parsing
 
 **Revlink**:
-The reverse adoption workflow: moving a file that already exists in a target project into the managed project and replacing the original with a symlink. The inverse dissolves the symlink and restores the file to the target.
+The reverse adoption workflow: copy an item that already exists in a target project into the managed project, leave the target path as a real file, and register it as a projection. The inverse unregisters the item and leaves the target file in place.
 _Avoid_: Adopt, import, reverse sync
 
 **Git exclude**:

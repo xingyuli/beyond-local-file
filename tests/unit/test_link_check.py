@@ -6,6 +6,7 @@ import pytest
 
 from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 from beyond_local_file.operations.link_check import CheckOperation
+from beyond_local_file.options import OutputFormat
 
 
 @pytest.fixture
@@ -57,7 +58,7 @@ def temp_config_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit:
-    """Create a sample processing unit with symlink items.
+    """Create a sample processing unit with copy items.
 
     Args:
         temp_project_dir: Temporary project directory fixture.
@@ -70,12 +71,12 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit
         ManagedProjectItem(
             name="file1.txt",
             path=temp_project_dir / "file1.txt",
-            strategy=LinkStrategy.SYMLINK,
+            strategy=LinkStrategy.COPY,
         ),
         ManagedProjectItem(
             name="file2.txt",
             path=temp_project_dir / "file2.txt",
-            strategy=LinkStrategy.SYMLINK,
+            strategy=LinkStrategy.COPY,
         ),
     ]
     return ProcessingUnit(
@@ -89,23 +90,61 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit
     )
 
 
-def test_check_operation_reports_status(
+def test_link_check_reports_copy_projections_not_symlink_health(
     sample_unit: ProcessingUnit,
     temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
 ) -> None:
-    """CheckOperation completes without error and returns True.
+    """link check reports copy projection status, not symlink health."""
+    (sample_unit.target_project_path / "file1.txt").write_text("content1")
 
-    Args:
-        sample_unit: Sample processing unit fixture.
-        temp_config_dir: Temporary config directory fixture.
-    """
-    # Create only one symlink so there is a mix of exists/missing
-    (sample_unit.target_project_path / "file1.txt").symlink_to(sample_unit.managed_project_path / "file1.txt")
-
-    operation = CheckOperation(temp_config_dir)
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
     success = operation.execute_unit(sample_unit)
 
     assert success
+    output = capsys.readouterr().out
+    assert "Copy Status" in output
+    assert "Copy Sync Status" in output
+    assert "Symlink Status" not in output
+    assert "file2.txt" in output
+
+
+def test_link_check_table_reports_copy_not_symlink(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """The compact table reports copy projections, not symlink health."""
+    (sample_unit.target_project_path / "file1.txt").write_text("content1")
+
+    operation = CheckOperation(temp_config_dir)
+    success = operation.execute_unit(sample_unit)
+    operation.render()
+
+    assert success
+    output = capsys.readouterr().out
+    assert "Copy" in output
+    assert "Symlink" not in output
+
+
+def test_link_check_treats_symlink_projection_as_not_a_copy(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A correct blf symlink at a projection path is not reported as a healthy copy."""
+    (sample_unit.target_project_path / "file1.txt").symlink_to(sample_unit.managed_project_path / "file1.txt")
+
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
+    success = operation.execute_unit(sample_unit)
+
+    assert success
+    output = capsys.readouterr().out
+    assert "Symlink Status" not in output
+    assert "file1.txt" in output
+    assert "(in sync)" not in output
+    assert "(manually synced)" not in output
+    assert "not a copy" in output.lower() or "incorrect" in output.lower()
 
 
 def test_check_operation_mixed_strategies_no_false_extra(

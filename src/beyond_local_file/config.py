@@ -12,12 +12,20 @@ from .model.config import ConfigProject, Mapping
 
 _KEY_TARGET = "target"
 _KEY_SUBPATH = "subpath"
+_KEY_COPY = "copy"
 
 
 class ConfigError(Exception):
     """Error related to configuration loading or validation."""
 
     pass
+
+
+def _unsupported_copy_option(project_name: str, mapping_index: int) -> ConfigError:
+    """Build the load error for a leftover ``copy: true`` option."""
+    return ConfigError(
+        f"Unsupported option 'copy: true' (project: {project_name}, mapping: {mapping_index}, key: {_KEY_COPY})"
+    )
 
 
 class Config:
@@ -30,14 +38,13 @@ class Config:
 
         project-a: /path/to/target
 
-    - **Dict mapping**: Supports selective subpath sync and copy strategy::
+    - **Dict mapping**: Supports selective subpath sync::
 
         project-b:
           target: /path/to/target
           subpath:
             - .kiro/hooks
             - path: .qoder/rules.md
-              copy: true
 
     Mappings can be combined in a list for multiple targets::
 
@@ -82,7 +89,7 @@ class Config:
 
         Parses YAML according to the formal grammar, preserving the mapping structure.
         Each project has a list of mappings, where each mapping defines targets and
-        optional sync rules (subpaths, copy strategy).
+        optional sync rules (subpaths).
 
         Grammar structure:
         - project-name: string-mapping | dict-mapping | list-of-mappings
@@ -144,18 +151,28 @@ class Config:
             targets = [targets]
         return [Path(t).resolve() for t in targets]
 
-    def _parse_subpaths(self, raw: str | list | None) -> tuple[list[str] | None, set[str] | None]:
-        """Parse subpath entries, extracting copy flags.
+    def _parse_subpaths(
+        self,
+        raw: str | list | None,
+        *,
+        project_name: str,
+        mapping_index: int,
+    ) -> tuple[list[str] | None, set[str] | None]:
+        """Parse subpath entries.
 
-        Each entry can be a plain string or a dict with ``path`` and
-        optional ``copy: true``.
+        Each entry can be a plain string or a dict with ``path``.
+        ``copy: true`` is rejected — every projection is a copy.
 
         Args:
             raw: Raw subpath value from YAML — string, list, or None.
+            project_name: Project key, used in the ``copy: true`` error.
+            mapping_index: 1-based mapping index, used in the ``copy: true`` error.
 
         Returns:
-            Tuple of (subpath list, set of paths marked for copy).
-            Either element may be None when there are no entries.
+            Tuple of (subpath list, copy_paths). copy_paths is always None.
+
+        Raises:
+            ConfigError: If a subpath entry still has ``copy: true``.
         """
         if raw is None:
             return None, None
@@ -164,7 +181,6 @@ class Config:
             return [raw], None
 
         subpaths: list[str] = []
-        copy_paths: set[str] = set()
 
         for entry in raw:
             if isinstance(entry, str):
@@ -172,10 +188,10 @@ class Config:
             elif isinstance(entry, dict) and "path" in entry:
                 path = entry["path"]
                 subpaths.append(path)
-                if entry.get("copy", False):
-                    copy_paths.add(path)
+                if entry.get(_KEY_COPY, False):
+                    raise _unsupported_copy_option(project_name, mapping_index)
 
-        return subpaths, copy_paths or None
+        return subpaths, None
 
     def _build_config_project(self, name: str, value: str | list | dict) -> ConfigProject:
         """Build a ConfigProject from raw YAML value according to grammar.
@@ -205,7 +221,7 @@ class Config:
 
         # Single dict mapping: project-name: {target: /target, subpath: [...]}
         if isinstance(value, dict) and _KEY_TARGET in value:
-            mapping = self._parse_dict_mapping(value)
+            mapping = self._parse_dict_mapping(value, project_name=name, mapping_index=1)
             return ConfigProject(
                 managed_project_name=name,
                 managed_project_path=project_path,
@@ -215,11 +231,14 @@ class Config:
         # List of mappings: project-name: [mapping1, mapping2, ...]
         if isinstance(value, list):
             mappings = []
+            mapping_index = 0
             for item in value:
                 if isinstance(item, str):
+                    mapping_index += 1
                     mappings.append(self._parse_string_mapping(item))
                 elif isinstance(item, dict) and _KEY_TARGET in item:
-                    mappings.append(self._parse_dict_mapping(item))
+                    mapping_index += 1
+                    mappings.append(self._parse_dict_mapping(item, project_name=name, mapping_index=mapping_index))
             return ConfigProject(
                 managed_project_name=name,
                 managed_project_path=project_path,
@@ -246,18 +265,35 @@ class Config:
         targets = self._normalize_targets(target)
         return Mapping(targets=targets, subpaths=None, copy_paths=None)
 
-    def _parse_dict_mapping(self, mapping_dict: dict) -> Mapping:
-        """Parse a dict mapping with target and optional subpath/copy.
+    def _parse_dict_mapping(
+        self,
+        mapping_dict: dict,
+        *,
+        project_name: str,
+        mapping_index: int,
+    ) -> Mapping:
+        """Parse a dict mapping with target and optional subpath.
 
         Args:
             mapping_dict: Dictionary with 'target' key and optional 'subpath'.
+            project_name: Project key, used in the ``copy: true`` error.
+            mapping_index: 1-based mapping index, used in the ``copy: true`` error.
 
         Returns:
-            Mapping with targets, subpaths, and copy_paths.
+            Mapping with targets and subpaths. copy_paths is always None.
+
+        Raises:
+            ConfigError: If the mapping still has ``copy: true``.
         """
+        if mapping_dict.get(_KEY_COPY, False):
+            raise _unsupported_copy_option(project_name, mapping_index)
         targets = self._normalize_targets(mapping_dict[_KEY_TARGET])
         raw_subpaths = mapping_dict.get(_KEY_SUBPATH)
-        subpaths, copy_paths = self._parse_subpaths(raw_subpaths)
+        subpaths, copy_paths = self._parse_subpaths(
+            raw_subpaths,
+            project_name=project_name,
+            mapping_index=mapping_index,
+        )
 
         return Mapping(
             targets=targets,

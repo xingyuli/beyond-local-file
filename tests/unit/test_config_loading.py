@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from beyond_local_file.config import Config
+from beyond_local_file.config import Config, ConfigError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -124,8 +124,8 @@ class TestDictMapping:
         assert mapping.subpaths == [".kiro/hooks"]
         assert mapping.copy_paths is None
 
-    def test_dict_with_copy_flag(self, tmp_path: Path) -> None:
-        """Subpath entry with copy: true is added to copy_paths."""
+    def test_dict_with_copy_true_fails_and_names_project_mapping_and_key(self, tmp_path: Path) -> None:
+        """Config load rejects copy: true and names the project, mapping, and key."""
         target = tmp_path / "target"
         make_project(tmp_path, "my-project")
         config_path = write_config(
@@ -141,14 +141,15 @@ class TestDictMapping:
             },
         )
 
-        projects = Config(config_path).get_config_projects()
-        mapping = projects["my-project"].mappings[0]
+        with pytest.raises(ConfigError, match="project: my-project") as exc_info:
+            Config(config_path).get_config_projects()
 
-        assert mapping.subpaths == [".kiro/hooks", "rules.md"]
-        assert mapping.copy_paths == {"rules.md"}
+        message = str(exc_info.value)
+        assert "mapping: 1" in message
+        assert "key: copy" in message
 
-    def test_dict_with_multiple_copy_flags(self, tmp_path: Path) -> None:
-        """Multiple copy: true entries all appear in copy_paths."""
+    def test_dict_with_path_entry_without_copy_flag_loads(self, tmp_path: Path) -> None:
+        """A path-dict subpath without copy: true loads as a normal subpath."""
         target = tmp_path / "target"
         make_project(tmp_path, "my-project")
         config_path = write_config(
@@ -157,9 +158,8 @@ class TestDictMapping:
                 "my-project": {
                     "target": str(target),
                     "subpath": [
-                        {"path": "file-a.md", "copy": True},
-                        {"path": "file-b.md", "copy": True},
-                        "plain.txt",
+                        ".kiro/hooks",
+                        {"path": "rules.md"},
                     ],
                 }
             },
@@ -168,8 +168,28 @@ class TestDictMapping:
         projects = Config(config_path).get_config_projects()
         mapping = projects["my-project"].mappings[0]
 
+        assert mapping.subpaths == [".kiro/hooks", "rules.md"]
+        assert mapping.copy_paths is None
+
+    def test_mapping_without_copy_flag_has_no_copy_paths(self, tmp_path: Path) -> None:
+        """Existing mappings without copy: true load and do not set copy_paths."""
+        target = tmp_path / "target"
+        make_project(tmp_path, "my-project")
+        config_path = write_config(
+            tmp_path,
+            {
+                "my-project": {
+                    "target": str(target),
+                    "subpath": ["file-a.md", "file-b.md", "plain.txt"],
+                }
+            },
+        )
+
+        projects = Config(config_path).get_config_projects()
+        mapping = projects["my-project"].mappings[0]
+
         assert set(mapping.subpaths) == {"file-a.md", "file-b.md", "plain.txt"}
-        assert mapping.copy_paths == {"file-a.md", "file-b.md"}
+        assert mapping.copy_paths is None
 
     def test_dict_with_multiple_targets(self, tmp_path: Path) -> None:
         """target: [t1, t2] in a dict mapping produces one Mapping with two targets."""
@@ -239,8 +259,33 @@ class TestListOfMappings:
         assert mappings[1].targets == [t2.resolve()]
         assert mappings[1].subpaths == [".kiro/hooks"]
 
-    def test_list_dict_mapping_with_copy_flag(self, tmp_path: Path) -> None:
-        """Dict entry inside a list correctly parses copy_paths."""
+    def test_list_dict_mapping_with_copy_true_names_mapping_index(self, tmp_path: Path) -> None:
+        """copy: true on the second mapping names mapping 2."""
+        t1 = tmp_path / "target1"
+        t2 = tmp_path / "target2"
+        make_project(tmp_path, "my-project")
+        config_path = write_config(
+            tmp_path,
+            {
+                "my-project": [
+                    str(t1),
+                    {
+                        "target": str(t2),
+                        "subpath": [{"path": "rules.md", "copy": True}],
+                    },
+                ]
+            },
+        )
+
+        with pytest.raises(ConfigError, match="project: my-project") as exc_info:
+            Config(config_path).get_config_projects()
+
+        message = str(exc_info.value)
+        assert "mapping: 2" in message
+        assert "key: copy" in message
+
+    def test_list_dict_mapping_without_copy_flag_loads(self, tmp_path: Path) -> None:
+        """Dict entry inside a list loads subpaths without a copy strategy flag."""
         target = tmp_path / "target"
         make_project(tmp_path, "my-project")
         config_path = write_config(
@@ -249,7 +294,7 @@ class TestListOfMappings:
                 "my-project": [
                     {
                         "target": str(target),
-                        "subpath": [{"path": "rules.md", "copy": True}],
+                        "subpath": [{"path": "rules.md"}],
                     }
                 ]
             },
@@ -259,7 +304,7 @@ class TestListOfMappings:
         mapping = projects["my-project"].mappings[0]
 
         assert mapping.subpaths == ["rules.md"]
-        assert mapping.copy_paths == {"rules.md"}
+        assert mapping.copy_paths is None
 
 
 # ---------------------------------------------------------------------------

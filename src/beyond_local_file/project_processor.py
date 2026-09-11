@@ -235,7 +235,7 @@ def _load_single_config(config_path: Path | str, project_name: str | None) -> Co
         cfg.load()
         projects = cfg.get_config_projects(project_name)
         return ConfigLoadResult(projects=projects, config_file=Path(config_path))
-    except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
+    except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(str(e))
         return None
 

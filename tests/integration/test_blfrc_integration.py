@@ -8,6 +8,12 @@ from click.testing import CliRunner
 from beyond_local_file.cli import cli
 
 
+def _assert_copy_projection(path: Path) -> None:
+    """A projection is a real copy, not a symlink."""
+    assert path.exists(), path
+    assert not path.is_symlink(), path
+
+
 @pytest.fixture
 def temp_home(tmp_path, monkeypatch):
     """Create a temporary home directory for testing.
@@ -52,8 +58,8 @@ class TestBlfrcIntegration:
             result = runner.invoke(cli, ["link", "sync"], env=env)
 
         assert result.exit_code == 0, result.output
-        assert (target / "file1.txt").is_symlink()
-        assert (target / "file2.txt").is_symlink()
+        _assert_copy_projection(target / "file1.txt")
+        _assert_copy_projection(target / "file2.txt")
 
     def test_uses_config_from_blfrc_multiple_files(self, temp_home, tmp_path):
         """Test that multiple configs are combined from .blfrc."""
@@ -87,8 +93,8 @@ class TestBlfrcIntegration:
             result = runner.invoke(cli, ["link", "sync"], env=env)
 
         assert result.exit_code == 0, result.output
-        assert (target1 / "file1.txt").is_symlink()
-        assert (target2 / "file2.txt").is_symlink()
+        _assert_copy_projection(target1 / "file1.txt")
+        _assert_copy_projection(target2 / "file2.txt")
 
     def test_explicit_config_flag_overrides_blfrc(self, temp_home, tmp_path):
         """Test that explicit --config flag overrides .blfrc."""
@@ -115,7 +121,7 @@ class TestBlfrcIntegration:
             result = runner.invoke(cli, ["--config", str(explicit_config), "link", "sync"], env=env)
 
         assert result.exit_code == 0, result.output
-        assert (right_target / "file1.txt").is_symlink()
+        _assert_copy_projection(right_target / "file1.txt")
         assert not (wrong_target / "file1.txt").exists()
 
     def test_falls_back_to_default_when_blfrc_missing(self, temp_home):
@@ -138,7 +144,7 @@ class TestBlfrcIntegration:
             result = runner.invoke(cli, ["link", "sync"], env=env)
 
             assert result.exit_code == 0, result.output
-            assert (target / "file1.txt").is_symlink()
+            _assert_copy_projection(target / "file1.txt")
 
     def test_falls_back_when_config_file_field_missing(self, temp_home):
         """Test fallback to default when .blfrc exists but config_file is missing."""
@@ -161,7 +167,7 @@ class TestBlfrcIntegration:
             result = runner.invoke(cli, ["link", "sync"], env=env)
 
             assert result.exit_code == 0, result.output
-            assert (target / "file1.txt").is_symlink()
+            _assert_copy_projection(target / "file1.txt")
 
     def test_error_on_invalid_blfrc(self, temp_home, tmp_path):
         """Test that error is shown when .blfrc is invalid."""
@@ -249,5 +255,5 @@ class TestBlfrcIntegration:
             result = runner.invoke(cli, ["link", "sync"], env=env)
 
         assert result.exit_code == 0, result.output
-        assert (target1 / "file1.txt").is_symlink()
-        assert (target2 / "file2.txt").is_symlink()
+        _assert_copy_projection(target1 / "file1.txt")
+        _assert_copy_projection(target2 / "file2.txt")
