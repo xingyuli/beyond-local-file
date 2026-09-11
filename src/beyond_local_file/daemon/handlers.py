@@ -24,6 +24,7 @@ from beyond_local_file.options import OutputFormat
 from beyond_local_file.project_processor import ProjectProcessor, RevlinkResolveError, resolve_revlink_context
 
 from .catchup import record_baseline
+from .ingest import commit_reload
 from .ipc import Request, Response
 from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
 
@@ -46,6 +47,7 @@ def handle_request(config_path: Path, request: Request) -> Response:
         "create": _handle_create,
         "restore": _handle_restore,
         "remove": _handle_remove,
+        "reload": _handle_reload,
     }
     handler = dispatch.get(str(op) if op is not None else "")
     if handler is None:
@@ -60,6 +62,10 @@ def handle_request(config_path: Path, request: Request) -> Response:
             except Exception as error:
                 click.echo(f"Warning: could not persist mapping snapshot: {error}")
     return {"exit_code": exit_code, "stdout": buffer.getvalue()}
+
+
+def _handle_reload(config_path: Path, request: Request) -> int:
+    return commit_reload(config_path, confirmed=bool(request.get("confirmed")))
 
 
 def _handle_check(config_path: Path, request: Request) -> int:

@@ -42,7 +42,7 @@ def run_catch_up(
         _fresh_catch_up(projects, config_dir)
     else:
         print("catch-up: update", flush=True)
-        _update_catch_up(projects, baseline)
+        _update_catch_up(projects, config_dir, baseline)
     return record_baseline(projects, previous=baseline)
 
 
@@ -94,25 +94,33 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
 
 def _fresh_catch_up(projects: dict[str, ConfigProject], config_dir: Path) -> None:
     for unit in translate_config_to_processing(projects):
-        if not unit.managed_project_path.exists():
-            print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
-            continue
-        if not unit.target_project_path.exists():
-            print(f"Target directory does not exist: {unit.target_project_path}", flush=True)
-            continue
-        copy_mgr = CopyManager(list(unit.items), unit.target_project_path, config_dir)
-        for item in unit.items:
-            destination = unit.target_project_path / item.name
-            replace_with_copy(item.path, destination)
-            copy_mgr.sync_state.update_record(item.path, destination)
-            print(f"catch-up: copied {item.name} -> {destination}", flush=True)
-        copy_mgr.sync_state.save()
-        copy_mgr.add_git_excludes()
+        _fresh_catch_up_unit(unit, config_dir)
 
 
-def _update_catch_up(projects: dict[str, ConfigProject], baseline: BaselineTrees) -> None:
+def _update_catch_up(projects: dict[str, ConfigProject], config_dir: Path, baseline: BaselineTrees) -> None:
     for unit in translate_config_to_processing(projects):
-        _apply_update_unit(unit, baseline)
+        if str(unit.target_project_path) not in baseline:
+            print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
+            _fresh_catch_up_unit(unit, config_dir)
+        else:
+            _apply_update_unit(unit, baseline)
+
+
+def _fresh_catch_up_unit(unit: ProcessingUnit, config_dir: Path) -> None:
+    if not unit.managed_project_path.exists():
+        print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
+        return
+    if not unit.target_project_path.exists():
+        print(f"Target directory does not exist: {unit.target_project_path}", flush=True)
+        return
+    copy_mgr = CopyManager(list(unit.items), unit.target_project_path, config_dir)
+    for item in unit.items:
+        destination = unit.target_project_path / item.name
+        replace_with_copy(item.path, destination)
+        copy_mgr.sync_state.update_record(item.path, destination)
+        print(f"catch-up: copied {item.name} -> {destination}", flush=True)
+    copy_mgr.sync_state.save()
+    copy_mgr.add_git_excludes()
 
 
 def _apply_update_unit(unit: ProcessingUnit, baseline: BaselineTrees) -> None:

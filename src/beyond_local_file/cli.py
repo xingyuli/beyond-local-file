@@ -15,7 +15,7 @@ import click
 from . import __version__
 from .completion import complete_project_names
 from .daemon.client import call_daemon
-from .operations.daemon import follow_daemon_logs, start_daemon, status_daemon, stop_daemon
+from .operations.daemon import follow_daemon_logs, reload_daemon, start_daemon, status_daemon, stop_daemon
 from .operations.upgrade import run_upgrade
 from .options import OutputFormat
 from .project_processor import load_config_projects
@@ -149,6 +149,13 @@ def daemon_status(ctx):
 def daemon_logs(ctx):
     """Follow the daemon log. Ctrl-C stops following, not the daemon."""
     ctx.exit(follow_daemon_logs(ctx.obj["config"]))
+
+
+@daemon.command("reload")
+@click.pass_context
+def daemon_reload(ctx):
+    """Apply external mapping edits from the config file."""
+    ctx.exit(reload_daemon(ctx.obj["config"]))
 
 
 @cli.group()

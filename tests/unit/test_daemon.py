@@ -140,7 +140,7 @@ def daemon_workspace(tmp_path: Path, daemon_env: dict[str, str]) -> Iterator[tup
 
 
 def test_daemon_group_exposes_start_stop_status_logs() -> None:
-    """blf daemon --help lists start, stop, status, and logs."""
+    """blf daemon --help lists start, stop, status, logs, and reload."""
     result = _invoke(["daemon", "--help"])
 
     assert result.exit_code == 0
@@ -148,6 +148,7 @@ def test_daemon_group_exposes_start_stop_status_logs() -> None:
     assert "stop" in result.output
     assert "status" in result.output
     assert "logs" in result.output
+    assert "reload" in result.output
 
 
 def test_daemon_start_backgrounds_one_process_stop_status_and_logs(
@@ -331,7 +332,7 @@ def test_mapping_snapshot_survives_kill_and_start_does_not_delete_copies(
     daemon_workspace: tuple[Path, list[Path], list[Path]],
     daemon_env: dict[str, str],
 ) -> None:
-    """Snapshot stays on disk after a kill; a differing config does not delete copies."""
+    """Snapshot stays on disk after a kill; a differing config without a TTY does not delete copies."""
     config_path, _managed_dirs, target_dirs = daemon_workspace
     target = target_dirs[0]
 
@@ -353,7 +354,11 @@ def test_mapping_snapshot_survives_kill_and_start_does_not_delete_copies(
     config_path.write_text(f"proj-0: {other_target}\n")
 
     restarted = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
-    assert restarted.exit_code == 0, restarted.output
+    assert restarted.exit_code != 0
+    assert "confirm" in restarted.output.lower() or "interactive" in restarted.output.lower()
+    assert snapshot.is_file()
+    assert snapshot.read_bytes() == snapshot_bytes
     assert (target / "shared.txt").is_file()
     assert (target / "shared.txt").read_text() == "hub-0"
     assert not (other_target / "shared.txt").exists()
+    assert _read_pid(config_path) is None or not _pid_alive(_read_pid(config_path) or 0)

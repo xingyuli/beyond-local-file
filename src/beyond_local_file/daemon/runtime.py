@@ -45,8 +45,8 @@ def run_worker(config_path: Path) -> int:
 
     def _handle_request(request_config: Path, request: Request) -> Response:
         response = handle_request(request_config, request)
-        mutating = request.get("op") in {"create", "restore", "remove"} and not request.get("dry_run")
-        if mutating:
+        mutating = request.get("op") in {"create", "restore", "remove", "reload"} and not request.get("dry_run")
+        if mutating and response.get("exit_code") == 0:
             snapshot = load_snapshot(request_config)
             baseline = load_baseline(request_config)
             if snapshot is not None and baseline is not None:
@@ -69,7 +69,7 @@ def _catch_up_and_persist(config_path: Path) -> tuple[dict[str, ConfigProject], 
     elif not mappings_equal(file_projects, snapshot_projects):
         projects = snapshot_projects
         print(
-            "config file differs from mapping snapshot; YAML ingest is not implemented; starting from snapshot",
+            "config file differs from mapping snapshot; starting from snapshot until reload",
             flush=True,
         )
     else:
