@@ -35,6 +35,7 @@ from .operations import (
     SyncOperation,
     run_upgrade,
 )
+from .operations.daemon import follow_daemon_logs, start_daemon, status_daemon, stop_daemon
 from .operations.remove import RemoveFormatter, RemoveOperation
 from .operations.revlink import CreateFormatter, RestoreFormatter, RestoreOperation
 from .options import ConflictResolution, CopyConflictResolution, OutputFormat
@@ -239,6 +240,41 @@ def remove(ctx, path, dry_run):
         context=ctx_result,
     ).run()
     ctx.exit(exit_code)
+
+
+@cli.group()
+def daemon():
+    """Run one background process that catch-up's copy projections."""
+    pass
+
+
+@daemon.command("start")
+@click.option("--worker", is_flag=True, hidden=True)
+@click.pass_context
+def daemon_start(ctx, worker):
+    """Start the daemon in the background."""
+    ctx.exit(start_daemon(ctx.obj["config"], worker=worker))
+
+
+@daemon.command("stop")
+@click.pass_context
+def daemon_stop(ctx):
+    """Stop the running daemon."""
+    ctx.exit(stop_daemon(ctx.obj["config"]))
+
+
+@daemon.command("status")
+@click.pass_context
+def daemon_status(ctx):
+    """Show whether the daemon is running."""
+    ctx.exit(status_daemon(ctx.obj["config"]))
+
+
+@daemon.command("logs")
+@click.pass_context
+def daemon_logs(ctx):
+    """Follow the daemon log. Ctrl-C stops following, not the daemon."""
+    ctx.exit(follow_daemon_logs(ctx.obj["config"]))
 
 
 @cli.group()

@@ -15,6 +15,7 @@ from pathlib import Path
 # Update this list whenever a module is added or removed from the package.
 REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/__init__.py",
+    "beyond_local_file/__main__.py",
     "beyond_local_file/blfrc.py",
     "beyond_local_file/cli.py",
     "beyond_local_file/config.py",
@@ -34,10 +35,17 @@ REQUIRED_WHEEL_MODULES = [
     # operations subpackage
     "beyond_local_file/operations/__init__.py",
     "beyond_local_file/operations/base.py",
+    "beyond_local_file/operations/daemon.py",
     "beyond_local_file/operations/link_check.py",
     "beyond_local_file/operations/link_sync.py",
     "beyond_local_file/operations/revlink.py",
     "beyond_local_file/operations/upgrade.py",
+    # daemon subpackage
+    "beyond_local_file/daemon/__init__.py",
+    "beyond_local_file/daemon/catchup.py",
+    "beyond_local_file/daemon/process.py",
+    "beyond_local_file/daemon/runtime.py",
+    "beyond_local_file/daemon/store.py",
 ]
 
 # Directories that must never appear in the wheel.
