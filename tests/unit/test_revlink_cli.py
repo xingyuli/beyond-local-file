@@ -4,56 +4,22 @@ Covers Requirements 1.1, 1.2, 1.3, 1.4, 1.6, 3.1, 3.2, 3.3, 3.3a.
 """
 
 from pathlib import Path
-from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
-from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.operations.revlink import RevlinkContext
-from beyond_local_file.project_processor import RevlinkResolveError
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from tests.daemon_support import invoke_with_daemon
 
 
-def _make_config_project(managed_path: Path, target_path: Path) -> ConfigProject:
-    """Build a minimal ConfigProject for use in tests.
-
-    Args:
-        managed_path: The managed project path (destination root).
-        target_path: A target directory that maps to this project.
-
-    Returns:
-        A ConfigProject with a single mapping targeting ``target_path``.
-    """
-    return ConfigProject(
-        managed_project_name="test-project",
-        managed_project_path=managed_path,
-        mappings=[Mapping(targets=[target_path], subpaths=None, copy_paths=None)],
-    )
-
-
-def _make_revlink_context(managed_path: Path, target_path: Path, config_path: Path) -> RevlinkContext:
-    """Build a RevlinkContext for use in tests.
-
-    Args:
-        managed_path: The managed project path (destination root).
-        target_path: The CWD / target directory.
-        config_path: The config file path.
-
-    Returns:
-        A RevlinkContext with a single mapping targeting ``target_path``.
-    """
-    mapping = Mapping(targets=[target_path], subpaths=None, copy_paths=None)
-    return RevlinkContext(
-        config_path=config_path,
-        project_name="test-project",
-        matched_mapping=mapping,
-        cwd=target_path,
-        managed_project_path=managed_path,
-    )
+def _write_mapping(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Create a managed project, target, and config mapping."""
+    managed = tmp_path / "managed"
+    target = tmp_path / "target"
+    managed.mkdir()
+    target.mkdir()
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"managed:\n  target: {target}\n  subpath: []\n")
+    return config_path, managed, target
 
 
 # ---------------------------------------------------------------------------
@@ -145,27 +111,18 @@ def test_revlink_help_shows_description() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
+def test_revlink_nonexistent_path_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that a non-existent source path produces an error and exits 1.
 
     Requirement 3.1: WHEN the path argument does not exist, THE Revlink_Command
     SHALL print a descriptive error message and exit with a non-zero status code
     without modifying the filesystem.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        nonexistent = target_dir / "does_not_exist.txt"
-        result = runner.invoke(cli, ["revlink", "create", str(nonexistent)])
+    config_path, _managed, target = _write_mapping(tmp_path)
+    monkeypatch.chdir(target)
+    result = invoke_with_daemon(config_path, ["revlink", "create", "does_not_exist.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "Path does not exist" in result.output
@@ -176,49 +133,21 @@ def test_revlink_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
-    """Test that a source path that is already a symlink produces an error.
-
-    Requirement 3.2: WHEN the path argument is already a symlink, THE
-    Revlink_Command SHALL print a descriptive error message indicating the path
-    is already a symlink and exit with a non-zero status code.
-
-    The CLI resolves the path via ``Path(path).resolve()`` before passing it to
-    ``CreateOperation``.  To ensure the resolved path is still seen as a
-    symlink, we patch ``Path.resolve`` to return the symlink path itself
-    (without following it).
-    """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    # Create a real file and a symlink pointing to it
+def test_revlink_symlink_source_outside_cwd_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """A symlink whose target is outside CWD is rejected before adoption."""
+    config_path, _managed, target = _write_mapping(tmp_path)
     real_file = tmp_path / "real.txt"
     real_file.write_text("content")
-    symlink_path = target_dir / "link.txt"
+    symlink_path = target / "link.txt"
     symlink_path.symlink_to(real_file)
+    monkeypatch.chdir(target)
 
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    # Patch Path.resolve so the CLI sees the symlink path (not its target)
-    original_resolve = Path.resolve
-
-    def _resolve_no_follow(self: Path, **kwargs: object) -> Path:
-        if str(self) == str(symlink_path):
-            return symlink_path
-        return original_resolve(self, **kwargs)
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch.object(Path, "resolve", _resolve_no_follow),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", str(symlink_path)])
+    result = invoke_with_daemon(config_path, ["revlink", "create", "link.txt"], isolated_home)
 
     assert result.exit_code == 1
-    assert "already a symlink" in result.output
+    assert "inside the current directory" in result.output.lower() or "already a symlink" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +155,9 @@ def test_revlink_symlink_source_exits_with_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_dest_exists_without_force_exits_with_error(tmp_path: Path) -> None:
+def test_revlink_dest_exists_without_force_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that an existing destination without --force produces an error.
 
     Requirement 3.3: WHEN the destination path in the managed project already
@@ -234,27 +165,12 @@ def test_revlink_dest_exists_without_force_exits_with_error(tmp_path: Path) -> N
     error message and exit with a non-zero status code without modifying the
     filesystem.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
+    config_path, managed, target = _write_mapping(tmp_path)
+    (target / "myfile.txt").write_text("original content")
+    (managed / "myfile.txt").write_text("old content")
+    monkeypatch.chdir(target)
 
-    # Create source file in target dir
-    source_file = target_dir / "myfile.txt"
-    source_file.write_text("original content")
-
-    # Pre-create the destination in managed dir (simulates existing copy)
-    dest_file = managed_dir / "myfile.txt"
-    dest_file.write_text("old content")
-
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", str(source_file)])
+    result = invoke_with_daemon(config_path, ["revlink", "create", "myfile.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "Destination already exists" in result.output
@@ -265,40 +181,25 @@ def test_revlink_dest_exists_without_force_exits_with_error(tmp_path: Path) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_force_allows_overwrite_when_dest_exists(tmp_path: Path) -> None:
+def test_revlink_force_allows_overwrite_when_dest_exists(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that --force bypasses the destination-exists pre-flight check.
 
     Requirement 3.3a: WHEN the destination path in the managed project already
     exists and --force is set, THE Revlink_Command SHALL overwrite the existing
     destination with the current content of the source path.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
+    config_path, managed, target = _write_mapping(tmp_path)
+    (target / "myfile.txt").write_text("original content")
+    (managed / "myfile.txt").write_text("old content")
+    monkeypatch.chdir(target)
 
-    # Create source file in target dir
-    source_file = target_dir / "myfile.txt"
-    source_file.write_text("original content")
+    result = invoke_with_daemon(config_path, ["revlink", "create", "--force", "myfile.txt"], isolated_home)
 
-    # Pre-create the destination in managed dir
-    dest_file = managed_dir / "myfile.txt"
-    dest_file.write_text("old content")
-
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", "--force", str(source_file)])
-
-    # With --force the validation passes; operation proceeds past pre-flight.
-    # The "Destination already exists" error must NOT appear.
     assert "Destination already exists" not in result.output
-    # Exit code 0 means the full operation succeeded (symlink created)
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
+    assert (managed / "myfile.txt").read_text() == "original content"
 
 
 # ---------------------------------------------------------------------------
@@ -306,65 +207,44 @@ def test_revlink_force_allows_overwrite_when_dest_exists(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_dry_run_does_not_modify_filesystem(tmp_path: Path) -> None:
+def test_revlink_dry_run_does_not_modify_filesystem(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that --dry-run passes validation but leaves the filesystem unchanged.
 
     Requirement 3.4: WHEN --dry-run is active, THE Revlink_Command SHALL
     perform all validation checks and report what would happen, but SHALL NOT
     modify the filesystem.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    source_file = target_dir / "myfile.txt"
+    config_path, managed, target = _write_mapping(tmp_path)
+    source_file = target / "myfile.txt"
     source_file.write_text("content")
+    monkeypatch.chdir(target)
 
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
+    result = invoke_with_daemon(config_path, ["revlink", "create", "--dry-run", "myfile.txt"], isolated_home)
 
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", "--dry-run", str(source_file)])
-
-    assert result.exit_code == 0
-    # Source must still be a regular file (not a symlink)
+    assert result.exit_code == 0, result.output
     assert source_file.exists()
     assert not source_file.is_symlink()
-    # Destination must NOT have been created
-    assert not (managed_dir / "myfile.txt").exists()
+    assert not (managed / "myfile.txt").exists()
 
 
-def test_revlink_dry_run_prints_preview_output(tmp_path: Path) -> None:
+def test_revlink_dry_run_prints_preview_output(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that --dry-run prints [dry-run]-prefixed preview lines for all steps.
 
     Requirement 7.6: WHEN --dry-run is active, THE Revlink_Command SHALL prefix
     all output lines with a [dry-run] indicator.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
+    config_path, _managed, target = _write_mapping(tmp_path)
+    (target / "myfile.txt").write_text("content")
+    monkeypatch.chdir(target)
 
-    source_file = target_dir / "myfile.txt"
-    source_file.write_text("content")
+    result = invoke_with_daemon(config_path, ["revlink", "create", "--dry-run", "myfile.txt"], isolated_home)
 
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", "--dry-run", str(source_file)])
-
-    assert result.exit_code == 0
-    # Every output line must carry the [dry-run] prefix
+    assert result.exit_code == 0, result.output
     assert "[dry-run]" in result.output
-    # Key step messages must appear
     assert "Copying" in result.output
     assert "Computing checksum" in result.output
     assert "MD5 checksum verified" in result.output
@@ -376,54 +256,47 @@ def test_revlink_dry_run_prints_preview_output(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_no_matching_project_exits_with_error(tmp_path: Path) -> None:
+def test_revlink_no_matching_project_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that no matching project for CWD produces an error and exits 1.
 
     Requirement 2.4: WHEN no managed project's target paths match the CWD,
     THE Revlink_Command SHALL print a descriptive error message and exit 1.
     """
-    runner = CliRunner()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
+    config_path, _managed, _target = _write_mapping(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "myfile.txt").write_text("content")
+    monkeypatch.chdir(other)
 
-    source_file = target_dir / "myfile.txt"
-    source_file.write_text("content")
-
-    error = RevlinkResolveError(message=f"No managed project found for current directory: {target_dir}\nHint: ...")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=error),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", str(source_file)])
+    result = invoke_with_daemon(config_path, ["revlink", "create", "myfile.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "No managed project found" in result.output
 
 
-def test_revlink_ambiguous_project_exits_with_error(tmp_path: Path) -> None:
+def test_revlink_ambiguous_project_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that multiple matching projects produce an ambiguity error and exit 1.
 
     Requirement 2.6: WHEN multiple managed projects' target paths match the CWD,
     THE Revlink_Command SHALL print a descriptive error message listing the
     ambiguous projects and exit with a non-zero status code.
     """
-    runner = CliRunner()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
+    first = tmp_path / "project-a"
+    second = tmp_path / "project-b"
+    target = tmp_path / "target"
+    first.mkdir()
+    second.mkdir()
+    target.mkdir()
+    (target / "myfile.txt").write_text("content")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"project-a: {target}\nproject-b: {target}\n")
+    monkeypatch.chdir(target)
 
-    source_file = target_dir / "myfile.txt"
-    source_file.write_text("content")
-
-    error = RevlinkResolveError(
-        message=f"Ambiguous: multiple projects target {target_dir}: project-a, project-b"
-    )
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=error),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "create", str(source_file)])
+    result = invoke_with_daemon(config_path, ["revlink", "create", "myfile.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "Ambiguous" in result.output

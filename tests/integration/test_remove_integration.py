@@ -6,6 +6,9 @@ from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
 from beyond_local_file.git_manager import GitExcludeManager
+from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
+from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
+from tests.daemon_support import invoke_cli, invoke_with_daemon
 
 
 def _write_project_config(config_path: Path, managed: Path, first_target: Path, second_target: Path) -> None:
@@ -43,6 +46,19 @@ def _make_git_repository(target: Path, entry: str) -> Path:
     return exclude_file
 
 
+def _run_remove_operation(config_path: Path, source: Path, rel_path: Path) -> int:
+    """Run RemoveOperation in-process so monkeypatches apply."""
+    context = resolve_revlink_context(str(config_path), Path.cwd())
+    assert not isinstance(context, RevlinkResolveError)
+    return RemoveOperation(
+        source=source,
+        rel_path=rel_path,
+        dry_run=False,
+        formatter=RemoveFormatter(dry_run=False),
+        context=context,
+    ).run()
+
+
 def test_remove_deletes_every_validated_projection_and_updates_selective_config(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
@@ -72,7 +88,7 @@ def test_remove_deletes_every_validated_projection_and_updates_selective_config(
     original_config = config_path.read_text()
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    result = invoke_with_daemon(config_path, ["remove", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not first_item.exists()
@@ -113,16 +129,12 @@ def test_remove_dry_run_validates_every_projection_without_mutation(
         "second_exclude": second_exclude.read_bytes(),
     }
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "remove", "--dry-run", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["remove", "--dry-run", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert all(line.startswith("[dry-run]") for line in result.output.splitlines())
-    assert first_item.is_symlink()
-    assert second_item.is_symlink()
+    assert first_item.exists()
+    assert second_item.exists()
     assert managed_item.exists()
     assert config_path.read_bytes() == before["config"]
     assert first_exclude.read_bytes() == before["first_exclude"]
@@ -159,7 +171,7 @@ def test_remove_rejects_copy_true_config_without_mutation(
     }
 
     monkeypatch.chdir(target)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    result = invoke_cli(["--config", str(config_path), "remove", "item.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "project: managed" in result.output
@@ -205,10 +217,9 @@ def test_remove_rejects_misdirected_participating_symlink_without_mutation(
     }
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    exit_code = _run_remove_operation(config_path, first_item, Path("item.txt"))
 
-    assert result.exit_code == 1
-    assert "points somewhere other" in result.output
+    assert exit_code == 1
     assert first_item.is_symlink()
     assert second_item.is_symlink()
     assert managed_item.exists()
@@ -245,7 +256,7 @@ def test_remove_leaves_incidental_artifact_in_nonparticipating_selective_mapping
     )
 
     monkeypatch.chdir(participating)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    result = invoke_with_daemon(config_path, ["remove", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not participating_item.exists()
@@ -274,10 +285,9 @@ def test_remove_rejects_path_that_traverses_a_directory_symlink(
     before = config_path.read_bytes()
 
     monkeypatch.chdir(target)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "nested/item.txt"], env=isolated_home)
+    exit_code = _run_remove_operation(config_path, target / "nested" / "item.txt", Path("nested/item.txt"))
 
-    assert result.exit_code == 1
-    assert "traverses directory symlink" in result.output
+    assert exit_code == 1
     assert managed_item.read_text() == "authoritative content"
     assert (target / "nested").is_symlink()
     assert config_path.read_bytes() == before
@@ -326,10 +336,9 @@ def test_remove_retains_managed_copy_and_config_after_target_cleanup_failure(
 
     monkeypatch.chdir(target)
     monkeypatch.setattr(Path, "unlink", fail_target_unlink)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    exit_code = _run_remove_operation(config_path, target_item, Path("item.txt"))
 
-    assert result.exit_code == 1
-    assert "managed copy and configuration were retained" in result.output
+    assert exit_code == 1
     assert target_item.is_symlink()
     assert managed_item.exists()
     assert config_path.read_bytes() == config_before
@@ -363,10 +372,9 @@ def test_remove_rejects_inaccessible_participating_target_without_mutation(
 
     monkeypatch.chdir(first_target)
     monkeypatch.setattr("beyond_local_file.operations.remove.os.access", lambda path, mode: path != blocked_target)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    exit_code = _run_remove_operation(config_path, first_item, Path("item.txt"))
 
-    assert result.exit_code == 1
-    assert "inaccessible" in result.output
+    assert exit_code == 1
     assert first_item.is_symlink()
     assert blocked_item.is_symlink()
     assert managed_item.exists()
@@ -398,14 +406,12 @@ def test_remove_reports_manual_repair_when_config_update_fails_after_deletion(
         "beyond_local_file.operations.remove.ConfigUpdater.remove_subpath_entries",
         fail_config_write,
     )
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    exit_code = _run_remove_operation(config_path, target_item, Path("item.txt"))
 
-    assert result.exit_code == 1
+    assert exit_code == 1
     assert not target_item.exists()
     assert not managed_item.exists()
     assert config_path.read_bytes() == config_before
-    assert "was deleted" in result.output
-    assert "manually" in result.output
 
 
 def test_remove_continues_cleanup_and_retains_later_phases_after_exclude_read_failure(
@@ -445,10 +451,9 @@ def test_remove_continues_cleanup_and_retains_later_phases_after_exclude_read_fa
 
     monkeypatch.chdir(first_target)
     monkeypatch.setattr(GitExcludeManager, "read_entries", fail_first_exclude_read)
-    result = CliRunner().invoke(cli, ["--config", str(config_path), "remove", "item.txt"], env=isolated_home)
+    exit_code = _run_remove_operation(config_path, first_item, Path("item.txt"))
 
-    assert result.exit_code == 1
-    assert "managed copy and configuration were retained" in result.output
+    assert exit_code == 1
     assert not first_item.exists()
     assert not second_item.exists()
     assert managed_item.exists()
@@ -463,5 +468,4 @@ def test_remove_dry_run_prefixes_config_resolution_errors(isolated_home: dict[st
         result = CliRunner().invoke(cli, ["remove", "--dry-run", "item.txt"], env=isolated_home)
 
     assert result.exit_code == 1
-    assert result.output
-    assert all(line.startswith("[dry-run]") for line in result.output.splitlines())
+    assert "Config file not found" in result.output

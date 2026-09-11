@@ -2,10 +2,8 @@
 
 from pathlib import Path
 
-from click.testing import CliRunner
-
-from beyond_local_file.cli import cli
 from beyond_local_file.sync_state import SyncState, SyncStatus
+from tests.daemon_support import invoke_with_daemon, start_daemon, stop_daemon
 
 
 def _write_selective_config(config_path: Path, managed_name: str, *targets: Path) -> None:
@@ -51,11 +49,7 @@ def test_revlink_create_leaves_target_as_regular_file_and_copies_into_hub(
     _write_selective_config(config_path, "managed", target)
 
     monkeypatch.chdir(target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "create", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "create", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert source.is_file()
@@ -81,11 +75,7 @@ def test_revlink_create_records_pair_as_in_sync(tmp_path: Path, monkeypatch, iso
     _write_selective_config(config_path, "managed", target)
 
     monkeypatch.chdir(target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "create", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "create", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     sync_state = SyncState(config_path.parent)
@@ -93,16 +83,13 @@ def test_revlink_create_records_pair_as_in_sync(tmp_path: Path, monkeypatch, iso
     hub_copy = managed / "item.txt"
     assert sync_state.detect_status(hub_copy, source) == SyncStatus.IN_SYNC
 
-    sync_result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "link", "sync"],
-        env=isolated_home,
-    )
-    assert sync_result.exit_code == 0, sync_result.output
-    assert source.read_text() == "adopt me"
-    assert hub_copy.read_text() == "adopt me"
-    assert not source.is_symlink()
-    assert "Copied:" not in sync_result.output
+    start_daemon(config_path, isolated_home)
+    try:
+        assert source.read_text() == "adopt me"
+        assert hub_copy.read_text() == "adopt me"
+        assert not source.is_symlink()
+    finally:
+        stop_daemon(config_path, isolated_home)
 
 
 def test_revlink_create_fans_out_to_other_replicas(
@@ -122,11 +109,7 @@ def test_revlink_create_fans_out_to_other_replicas(
     _write_selective_config(config_path, "managed", first_target, second_target)
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "create", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "create", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     replica = second_target / "item.txt"
@@ -156,11 +139,7 @@ def test_revlink_create_holds_divergent_replica_then_overwrites(
     _write_selective_config(config_path, "managed", first_target, second_target)
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "create", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "create", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert (second_target / "item.txt").read_text() == "adopt me"
@@ -190,11 +169,7 @@ def test_revlink_create_leaves_directory_as_real_tree(
     config_path.write_text(f"managed:\n  target: {target}\n  subpath: []\n")
 
     monkeypatch.chdir(target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "create", "hooks"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "create", "hooks"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert source_dir.is_dir()
@@ -249,11 +224,7 @@ def test_revlink_restore_deletes_hub_and_leaves_other_targets_unmanaged(
     )
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "restore", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not managed_item.exists()
@@ -291,11 +262,7 @@ def test_revlink_restore_unregisters_item_from_every_participating_mapping(
     )
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "restore", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not (managed / "item.txt").exists()
@@ -330,11 +297,7 @@ def test_revlink_restore_leaves_directory_in_this_target(
     )
 
     monkeypatch.chdir(target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "revlink", "restore", "hooks"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "hooks"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not hub_dir.exists()
@@ -356,11 +319,7 @@ def test_remove_deletes_hub_copy_and_every_projection(
     second_exclude.write_text("# preserved\nitem.txt\n")
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "remove", "item.txt"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["remove", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not managed_item.exists()
@@ -394,11 +353,7 @@ def test_remove_deletes_directory_hub_and_projections(
     )
 
     monkeypatch.chdir(first_target)
-    result = CliRunner().invoke(
-        cli,
-        ["--config", str(config_path), "remove", "hooks"],
-        env=isolated_home,
-    )
+    result = invoke_with_daemon(config_path, ["remove", "hooks"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not (managed / "hooks").exists()

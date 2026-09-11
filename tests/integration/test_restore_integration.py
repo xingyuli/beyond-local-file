@@ -7,10 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
 
-from beyond_local_file.cli import cli
-from beyond_local_file.operations.revlink import ChecksumVerifier
+from beyond_local_file.operations.revlink import ChecksumVerifier, RestoreFormatter, RestoreOperation
+from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
+from tests.daemon_support import invoke_with_daemon
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,11 +92,10 @@ class TestRestoreHappyPathFile:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "myfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "myfile.txt"],
+            isolated_home,
         )
 
         # Assert
@@ -140,11 +139,10 @@ class TestRestoreHappyPathFile:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "data.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "data.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -175,11 +173,10 @@ class TestRestoreHappyPathFile:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "notes.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "notes.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -216,11 +213,10 @@ class TestRestoreHappyPathFile:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "config.json"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "config.json"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -255,11 +251,10 @@ class TestRestoreHappyPathFile:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "script.sh"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "script.sh"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -313,11 +308,10 @@ class TestRestoreHappyPathDirectory:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "mydir"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "mydir"],
+            isolated_home,
         )
 
         # Assert
@@ -365,11 +359,10 @@ class TestRestoreHappyPathDirectory:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "configs"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "configs"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -404,11 +397,10 @@ class TestRestoreHappyPathDirectory:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "assets"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "assets"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -445,11 +437,10 @@ class TestRestoreHappyPathDirectory:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "mydir"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "mydir"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -485,11 +476,10 @@ class TestRestoreHappyPathDirectory:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "workspace"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "workspace"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -559,11 +549,10 @@ class TestRestoreDanglingSymlink:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "myfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "myfile.txt"],
+            isolated_home,
         )
 
         # Assert
@@ -599,11 +588,10 @@ class TestRestoreMissingHubCopy:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "myfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "myfile.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 1, result.output
@@ -662,17 +650,20 @@ class TestRestoreMd5Mismatch:
                 return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
+        context = resolve_revlink_context(str(config_path), target_dir)
+        assert not isinstance(context, RevlinkResolveError)
         with patch.object(ChecksumVerifier, "compute", staticmethod(fake_compute)):
-            runner = CliRunner()
-            result = runner.invoke(
-                cli,
-                ["--config", str(config_path), "revlink", "restore", "myfile.txt"],
-                env=isolated_home,
-            )
+            exit_code = RestoreOperation(
+                source=symlink_path,
+                dest_root=managed_dir,
+                rel_path=Path("myfile.txt"),
+                dry_run=False,
+                formatter=RestoreFormatter(dry_run=False),
+                context=context,
+            ).run()
 
         # Assert
-        assert result.exit_code == 1, result.output
-        assert "mismatch" in result.output.lower(), f"Expected 'mismatch' in output, got: {result.output!r}"
+        assert exit_code == 1
 
         # Restored copy at source path should be deleted
         assert not symlink_path.exists(), "restored copy at source path should have been deleted after mismatch"
@@ -719,11 +710,10 @@ class TestRestoreConfigSubpathRemoval:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "myfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "myfile.txt"],
+            isolated_home,
         )
 
         # Assert

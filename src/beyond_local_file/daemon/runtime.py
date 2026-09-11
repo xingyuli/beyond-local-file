@@ -1,4 +1,4 @@
-"""Long-running daemon worker: catch-up, then idle until stop."""
+"""Long-running daemon worker: catch-up, then serve shell requests until stop."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from types import FrameType
 from beyond_local_file.config import Config
 
 from .catchup import run_catch_up
-from .process import write_ready
+from .handlers import handle_request
+from .ipc import serve_requests
 from .store import load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 
 
 def run_worker(config_path: Path) -> int:
-    """Catch-up copy projections, then idle until SIGTERM/SIGINT.
+    """Catch-up copy projections, then serve requests until SIGTERM/SIGINT.
 
     Args:
         config_path: Path to the loaded config file.
@@ -34,10 +35,7 @@ def run_worker(config_path: Path) -> int:
 
     print("daemon worker starting", flush=True)
     _catch_up_and_persist(config_path)
-    write_ready(config_path)
-    print("daemon ready", flush=True)
-    while not shutdown.is_set():
-        shutdown.wait(timeout=0.25)
+    serve_requests(config_path, handle_request, shutdown)
     print("daemon stopping", flush=True)
     return 0
 

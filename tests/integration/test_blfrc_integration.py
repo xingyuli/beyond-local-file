@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
+from tests.daemon_support import daemon_running, start_daemon, stop_daemon
 
 
 def _assert_copy_projection(path: Path) -> None:
@@ -53,11 +54,9 @@ class TestBlfrcIntegration:
         blfrc = home_dir / ".blfrc"
         blfrc.write_text(f"config_file: {config}\n")
 
-        runner = CliRunner()
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+        with daemon_running(config, env):
+            pass
 
-        assert result.exit_code == 0, result.output
         _assert_copy_projection(target / "file1.txt")
         _assert_copy_projection(target / "file2.txt")
 
@@ -87,12 +86,13 @@ class TestBlfrcIntegration:
         blfrc = home_dir / ".blfrc"
         blfrc.write_text(f"config_file:\n  - {config1}\n  - {config2}\n")
 
-        runner = CliRunner()
-        # CWD doesn't matter here since config paths are absolute in .blfrc
-        with runner.isolated_filesystem():
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+        try:
+            start_daemon(config1, env)
+            start_daemon(config2, env)
+        finally:
+            stop_daemon(config1, env)
+            stop_daemon(config2, env)
 
-        assert result.exit_code == 0, result.output
         _assert_copy_projection(target1 / "file1.txt")
         _assert_copy_projection(target2 / "file2.txt")
 
@@ -116,11 +116,9 @@ class TestBlfrcIntegration:
         blfrc = home_dir / ".blfrc"
         blfrc.write_text(f"config_file: {blfrc_config}\n")
 
-        runner = CliRunner()
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["--config", str(explicit_config), "link", "sync"], env=env)
+        with daemon_running(explicit_config, env):
+            pass
 
-        assert result.exit_code == 0, result.output
         _assert_copy_projection(right_target / "file1.txt")
         assert not (wrong_target / "file1.txt").exists()
 
@@ -139,11 +137,12 @@ class TestBlfrcIntegration:
             target = td_path / "target"
             target.mkdir()
 
-            (td_path / "config.yml").write_text(f"test-project: {target}\n")
+            config_path = td_path / "config.yml"
+            config_path.write_text(f"test-project: {target}\n")
 
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+            with daemon_running(config_path, env):
+                pass
 
-            assert result.exit_code == 0, result.output
             _assert_copy_projection(target / "file1.txt")
 
     def test_falls_back_when_config_file_field_missing(self, temp_home):
@@ -162,11 +161,12 @@ class TestBlfrcIntegration:
             target = td_path / "target"
             target.mkdir()
 
-            (td_path / "config.yml").write_text(f"test-project: {target}\n")
+            config_path = td_path / "config.yml"
+            config_path.write_text(f"test-project: {target}\n")
 
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+            with daemon_running(config_path, env):
+                pass
 
-            assert result.exit_code == 0, result.output
             _assert_copy_projection(target / "file1.txt")
 
     def test_error_on_invalid_blfrc(self, temp_home, tmp_path):
@@ -178,7 +178,7 @@ class TestBlfrcIntegration:
 
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+            result = runner.invoke(cli, ["daemon", "status"], env=env)
 
         assert result.exit_code != 0
         assert "Error:" in result.output
@@ -193,7 +193,7 @@ class TestBlfrcIntegration:
 
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+            result = runner.invoke(cli, ["daemon", "status"], env=env)
 
         assert result.exit_code != 0
         assert "Error:" in result.output
@@ -218,7 +218,7 @@ class TestBlfrcIntegration:
 
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+            result = runner.invoke(cli, ["daemon", "status"], env=env)
 
         assert result.exit_code != 0
         assert "Error:" in result.output
@@ -250,10 +250,12 @@ class TestBlfrcIntegration:
         blfrc = home_dir / ".blfrc"
         blfrc.write_text(f"config_file:\n  - {config1}\n  - {config2}\n")
 
-        runner = CliRunner()
-        with runner.isolated_filesystem():
-            result = runner.invoke(cli, ["link", "sync"], env=env)
+        try:
+            start_daemon(config1, env)
+            start_daemon(config2, env)
+        finally:
+            stop_daemon(config1, env)
+            stop_daemon(config2, env)
 
-        assert result.exit_code == 0, result.output
         _assert_copy_projection(target1 / "file1.txt")
         _assert_copy_projection(target2 / "file2.txt")

@@ -540,8 +540,8 @@ class CreateOperation:
 
            - 5a: if a declared subpath is an ancestor of (or equal to)
              ``rel_path``, the path is already covered — print an error
-             directing the user to run ``blf link sync`` (or copy manually
-             first) and return 1.
+             directing the user to let the daemon project the copy (or copy
+             manually first) and return 1.
            - 5b: if ``rel_path`` is an ancestor of a declared subpath (reverse
              conflict), adopting the broader path would shadow the narrower
              declared entry — print an error and return 1.
@@ -604,13 +604,13 @@ class CreateOperation:
                         self.formatter.error(
                             f"'{declared}' is already a declared subpath that covers this path,"
                             f" and the managed copy already exists at '{managed_copy.as_posix()}'."
-                            " Run 'blf link sync' to project the copy."
+                            " The daemon projects this copy."
                         )
                     else:
                         self.formatter.error(
                             f"'{declared}' is already a declared subpath that covers this path."
-                            f" Copy '{self.source.as_posix()}' to '{managed_copy.as_posix()}' manually,"
-                            " then run 'blf link sync' to project the copy."
+                            f" Copy '{self.source.as_posix()}' to '{managed_copy.as_posix()}' manually;"
+                            " the daemon will project the copy."
                         )
                     return 1
                 # 5b — rel_path is an ancestor of a declared subpath (reverse conflict)
@@ -814,7 +814,7 @@ class CreateOperation:
 
         The entry name is ``self.rel_path.as_posix()`` (e.g. ``.kiro/specs/foo``)
         rather than ``source.name`` so the exclude entry mirrors the full
-        relative path used by ``link sync``.
+        relative path used by catch-up and ``link check``.
         """
         if self.context is None:
             return

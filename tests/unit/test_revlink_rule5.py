@@ -117,7 +117,7 @@ class TestRule5aDeclaredAncestorCopyExists:
         formatter.error.assert_called_once()
         msg = formatter.error.call_args[0][0]
         assert "notes.txt" in msg
-        assert "blf link sync" in msg
+        assert "daemon" in msg
         assert managed_copy.as_posix() in msg
 
     def test_ancestor_subpath_copy_exists_returns_1(self, tmp_path: Path) -> None:
@@ -153,7 +153,7 @@ class TestRule5aDeclaredAncestorCopyExists:
         formatter.error.assert_called_once()
         msg = formatter.error.call_args[0][0]
         assert "docs" in msg
-        assert "blf link sync" in msg
+        assert "daemon" in msg
 
     def test_error_message_contains_managed_copy_path(self, tmp_path: Path) -> None:
         """Error message for 5a (copy exists) includes the managed copy path.
@@ -210,7 +210,7 @@ class TestRule5aDeclaredAncestorCopyMissing:
         formatter.error.assert_called_once()
         msg = formatter.error.call_args[0][0]
         assert "notes.txt" in msg
-        assert "blf link sync" in msg
+        assert "daemon" in msg
 
     def test_ancestor_subpath_copy_missing_returns_1(self, tmp_path: Path) -> None:
         """Declared subpath is ancestor of rel_path and managed copy is absent → exit 1.

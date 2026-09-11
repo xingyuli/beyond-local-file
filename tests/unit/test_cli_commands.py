@@ -9,6 +9,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
+from tests.daemon_support import daemon_running
 
 
 def test_cli_help_command():
@@ -27,12 +28,12 @@ def test_link_group_exists():
     assert "Link management commands" in result.output
 
 
-def test_link_sync_command_exists():
-    """Test that 'beyond-local-file link sync' command exists."""
+def test_link_sync_is_not_a_command():
+    """Test that 'beyond-local-file link sync' is not a command."""
     runner = CliRunner()
     result = runner.invoke(cli, ["link", "sync", "--help"])
-    assert result.exit_code == 0
-    assert "Synchronize links from project directory" in result.output
+    assert result.exit_code != 0
+    assert "no such command" in result.output.lower()
 
 
 def test_link_check_command_exists():
@@ -61,14 +62,6 @@ def test_check_accepts_config_option():
     assert result.exit_code == 0
     assert "--config" in result.output or "-c" in result.output
     assert "Path to config file" in result.output
-
-
-def test_sync_accepts_project_name_argument():
-    """Test that sync command accepts project_name argument."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["link", "sync", "--help"])
-    assert result.exit_code == 0
-    assert "PROJECT_NAME" in result.output or "project_name" in result.output.lower()
 
 
 def test_check_accepts_project_name_argument():
@@ -110,7 +103,8 @@ def test_default_config_file_discovery(temp_dir: Path, isolated_home) -> None:
         config_path = td_path / "config.yml"
         config_path.write_text("test-project: target\n")
 
-        result = runner.invoke(cli, ["link", "check"], env=isolated_home)
+        with daemon_running(config_path, isolated_home):
+            result = runner.invoke(cli, ["link", "check"], env=isolated_home)
 
         assert result.exit_code == 0
         assert "test-project" in result.output
@@ -161,7 +155,7 @@ def test_link_sync_rejects_copy_true_and_names_project_mapping_and_key(
 """
         )
 
-        result = runner.invoke(cli, ["link", "sync"], env=isolated_home)
+        result = runner.invoke(cli, ["daemon", "start"], env=isolated_home)
 
         assert result.exit_code != 0
         assert "project: my-project" in result.output
@@ -192,9 +186,10 @@ def test_link_sync_projects_mapping_without_copy_flag_as_copies(isolated_home) -
 """
         )
 
-        result = runner.invoke(cli, ["link", "sync"], env=isolated_home)
+        config_path = td_path / "config.yml"
+        with daemon_running(config_path, isolated_home):
+            pass
 
-        assert result.exit_code == 0, result.output
         file_projection = target_dir / "file1.txt"
         dir_projection = target_dir / ".kiro" / "hooks"
         assert file_projection.is_file()

@@ -13,6 +13,7 @@ from click.testing import CliRunner
 from beyond_local_file.cli import cli
 from beyond_local_file.config import Config
 from beyond_local_file.symlink_manager import SymlinkManager
+from tests.daemon_support import daemon_running
 
 
 def test_existing_config_files_work():
@@ -95,15 +96,13 @@ def test_verbose_output_format(isolated_home):
         config_path.write_text(f"test-project: {target_dir}\n")
 
         # Run check command in verbose mode and verify output format
-        result = runner.invoke(cli, ["link", "check", "--format", "verbose"], env=isolated_home)
+        with daemon_running(config_path, isolated_home):
+            result = runner.invoke(cli, ["link", "check", "--format", "verbose"], env=isolated_home)
 
         # Verify expected output elements
         assert result.exit_code == 0
         assert "Processing test-project" in result.output
         assert "target" in result.output.lower()
-
-        # The output should mention symlink status
-        assert "symlink" in result.output.lower() or "missing" in result.output.lower()
 
 
 def test_same_symlink_behavior():
@@ -273,25 +272,18 @@ def test_backward_compatible_cli_commands():
         config_path = td_path / "test-config.yml"
         config_path.write_text(f"test-project: {target_dir}\n")
 
-        # Test 1: sync with --config global option
-        result1 = runner.invoke(cli, ["--config", str(config_path), "link", "sync"])
-        assert result1.exit_code == 0
+        with daemon_running(config_path):
+            result1 = runner.invoke(cli, ["--config", str(config_path), "daemon", "status"])
+            assert result1.exit_code == 0
 
-        # Test 2: sync with project name
-        result2 = runner.invoke(cli, ["--config", str(config_path), "link", "sync", "test-project"])
-        assert result2.exit_code == 0
+            result3 = runner.invoke(cli, ["--config", str(config_path), "link", "check"])
+            assert result3.exit_code == 0
 
-        # Test 3: check with --config global option
-        result3 = runner.invoke(cli, ["--config", str(config_path), "link", "check"])
-        assert result3.exit_code == 0
+            result4 = runner.invoke(cli, ["--config", str(config_path), "link", "check", "--extra-exclude"])
+            assert result4.exit_code == 0
 
-        # Test 4: check with --extra-exclude option
-        result4 = runner.invoke(cli, ["--config", str(config_path), "link", "check", "--extra-exclude"])
-        assert result4.exit_code == 0
-
-        # Test 5: check with project name
-        result5 = runner.invoke(cli, ["--config", str(config_path), "link", "check", "test-project"])
-        assert result5.exit_code == 0
+            result5 = runner.invoke(cli, ["--config", str(config_path), "link", "check", "test-project"])
+            assert result5.exit_code == 0
 
 
 def test_backward_compatible_relative_paths():

@@ -14,7 +14,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+import click
 from rich.console import Console
+
+from beyond_local_file.blfrc import BlfrcError, resolve_config_from_blfrc
+from beyond_local_file.constants import DEFAULT_CONFIG_FILE
+from beyond_local_file.daemon.client import DAEMON_RUNNING_HINT
+from beyond_local_file.daemon.process import is_running
 
 # Package name as registered on PyPI
 _PACKAGE_NAME = "beyond-local-file"
@@ -115,7 +121,7 @@ def resolve_upgrade() -> UpgradeResolution:
     return UpgradeResolution(method=method, command=command, label=label)
 
 
-def run_upgrade(*, dry_run: bool = False) -> int:
+def run_upgrade(*, dry_run: bool = False, config: str | None = None) -> int:
     """Detect the install method and run the appropriate upgrade command.
 
     Prints the detected method and the command that will be (or would be, in
@@ -124,11 +130,16 @@ def run_upgrade(*, dry_run: bool = False) -> int:
 
     Args:
         dry_run: When ``True``, print the command without executing it.
+        config: Optional ``--config`` path used to locate a running daemon.
 
     Returns:
         Exit code: ``0`` on success, ``1`` on detection failure or upgrade error.
     """
     console = Console()
+    config_path = _config_path_if_present(config)
+    if config_path is not None and is_running(config_path):
+        click.echo(DAEMON_RUNNING_HINT)
+        return 1
     resolution = resolve_upgrade()
 
     if resolution.command is None:
@@ -151,3 +162,25 @@ def run_upgrade(*, dry_run: bool = False) -> int:
 
     result = subprocess.run(resolution.command, check=False)
     return result.returncode
+
+
+def _config_path_if_present(config: str | None) -> Path | None:
+    """Return a readable config path without printing load errors.
+
+    Args:
+        config: Optional explicit ``--config`` value.
+
+    Returns:
+        Resolved config path when it exists, otherwise None.
+    """
+    if config is not None:
+        path = Path(config).expanduser().resolve()
+        return path if path.exists() else None
+    try:
+        blfrc_paths = resolve_config_from_blfrc()
+    except BlfrcError:
+        blfrc_paths = []
+    if blfrc_paths:
+        return blfrc_paths[0]
+    default = Path(DEFAULT_CONFIG_FILE).resolve()
+    return default if default.exists() else None

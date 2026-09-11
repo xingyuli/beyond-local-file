@@ -11,6 +11,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.cli import cli
+from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
+from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
+from tests.daemon_support import invoke_with_daemon
 from tests.path_strategies import is_safe_fs_name
 
 _component = st.text(
@@ -41,7 +44,7 @@ def test_remove_lexically_normalizes_contained_paths(item_name: str) -> None:
         previous_cwd = Path.cwd()
         try:
             os.chdir(target)
-            result = CliRunner().invoke(cli, ["--config", str(config), "remove", f"./unused/../{item_name}"])
+            result = invoke_with_daemon(config, ["remove", f"./unused/../{item_name}"])
         finally:
             os.chdir(previous_cwd)
 
@@ -110,7 +113,7 @@ def test_remove_selects_only_generated_participating_mappings(participates: list
         previous_cwd = Path.cwd()
         try:
             os.chdir(targets[0])
-            result = CliRunner().invoke(cli, ["--config", str(config), "remove", "item.txt"])
+            result = invoke_with_daemon(config, ["remove", "item.txt"])
         finally:
             os.chdir(previous_cwd)
 
@@ -151,7 +154,7 @@ def test_remove_invalid_projection_never_mutates_persistent_state(invalid_kind: 
             subpath = "    - item.txt\n"
         else:
             target_item.write_text("divergent")
-            subpath = "    - path: item.txt\n      copy: true\n"
+            subpath = "    - item.txt\n"
         exclude = target / ".git" / "info" / "exclude"
         exclude.parent.mkdir(parents=True)
         exclude.write_text("item.txt\n")
@@ -168,11 +171,19 @@ def test_remove_invalid_projection_never_mutates_persistent_state(invalid_kind: 
         previous_cwd = Path.cwd()
         try:
             os.chdir(target)
-            result = CliRunner().invoke(cli, ["--config", str(config), "remove", "item.txt"])
+            context = resolve_revlink_context(str(config), Path.cwd())
+            assert not isinstance(context, RevlinkResolveError)
+            exit_code = RemoveOperation(
+                source=target_item,
+                rel_path=Path("item.txt"),
+                dry_run=False,
+                formatter=RemoveFormatter(dry_run=False),
+                context=context,
+            ).run()
         finally:
             os.chdir(previous_cwd)
 
-        assert result.exit_code == 1
+        assert exit_code == 1
         assert config.read_bytes() == before["config"]
         assert exclude.read_bytes() == before["exclude"]
         assert managed_item.read_bytes() == before["managed"]

@@ -4,55 +4,26 @@ Covers Requirements 1.4, 1.7, 3.1, 3.2, 3.3, 3.4.
 """
 
 from pathlib import Path
-from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
-from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.operations.revlink import RevlinkContext
+from tests.daemon_support import invoke_with_daemon
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_config_project(managed_path: Path, target_path: Path) -> ConfigProject:
-    """Build a minimal ConfigProject for use in tests.
-
-    Args:
-        managed_path: The managed project path (destination root).
-        target_path: A target directory that maps to this project.
-
-    Returns:
-        A ConfigProject with a single mapping targeting ``target_path``.
-    """
-    return ConfigProject(
-        managed_project_name="test-project",
-        managed_project_path=managed_path,
-        mappings=[Mapping(targets=[target_path], subpaths=None, copy_paths=None)],
-    )
-
-
-def _make_revlink_context(managed_path: Path, target_path: Path, config_path: Path) -> RevlinkContext:
-    """Build a RevlinkContext for use in tests.
-
-    Args:
-        managed_path: The managed project path (destination root).
-        target_path: The CWD / target directory.
-        config_path: The config file path.
-
-    Returns:
-        A RevlinkContext with a single mapping targeting ``target_path``.
-    """
-    mapping = Mapping(targets=[target_path], subpaths=None, copy_paths=None)
-    return RevlinkContext(
-        config_path=config_path,
-        project_name="test-project",
-        matched_mapping=mapping,
-        cwd=target_path,
-        managed_project_path=managed_path,
-    )
+def _write_mapping(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Create a managed project, target, and selective mapping."""
+    managed = tmp_path / "managed"
+    target = tmp_path / "target"
+    managed.mkdir()
+    target.mkdir()
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"managed:\n  target: {target}\n  subpath: []\n")
+    return config_path, managed, target
 
 
 # ---------------------------------------------------------------------------
@@ -160,32 +131,22 @@ def test_restore_rejects_force_flag(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_restore_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
+def test_restore_nonexistent_path_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that a non-existent path produces an error message and exits 1.
 
     Requirement 3.1: WHEN the path argument does not exist, THE Restore_Command
     SHALL print a descriptive error message and exit with a non-zero status code
     without modifying the filesystem.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    nonexistent = target_dir / "does_not_exist.txt"
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "restore", str(nonexistent)])
+    config_path, _managed, target = _write_mapping(tmp_path)
+    monkeypatch.chdir(target)
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "does_not_exist.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "Path does not exist" in result.output
-    # Filesystem must be unchanged — no files created
-    assert not nonexistent.exists()
+    assert not (target / "does_not_exist.txt").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -193,28 +154,20 @@ def test_restore_nonexistent_path_exits_with_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_restore_real_file_without_hub_copy_exits_with_error(tmp_path: Path) -> None:
+def test_restore_real_file_without_hub_copy_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """A real file with no managed copy is not restorable.
 
     Restore leaves a real projection in place, but only when the hub copy
     exists. A lone target file is rejected without modifying the filesystem.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    real_file = target_dir / "myfile.txt"
+    config_path, _managed, target = _write_mapping(tmp_path)
+    real_file = target / "myfile.txt"
     real_file.write_text("original content")
+    monkeypatch.chdir(target)
 
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "restore", str(real_file)])
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "myfile.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "managed copy does not exist" in result.output.lower()
@@ -226,49 +179,26 @@ def test_restore_real_file_without_hub_copy_exits_with_error(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_restore_dangling_symlink_exits_with_error(tmp_path: Path) -> None:
+def test_restore_dangling_symlink_exits_with_error(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that a symlink whose managed copy is missing produces an error.
 
     Requirement 3.3: WHEN the path is a symlink but its target (the
     Managed_Copy) does not exist, THE Restore_Command SHALL print a descriptive
     error message indicating a dangling symlink, and exit with a non-zero
     status code without modifying the filesystem.
-
-    The CLI resolves the path via ``Path(path).resolve()`` which follows
-    symlinks.  For a dangling symlink the resolved path is the non-existent
-    target, so we patch ``Path.resolve`` to return the symlink path itself
-    (without following it), matching the intent of the restore operation.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
+    config_path, managed, target = _write_mapping(tmp_path)
+    missing_managed = managed / "myfile.txt"
+    symlink_path = target / "myfile.txt"
+    symlink_path.symlink_to(missing_managed)
+    monkeypatch.chdir(target)
 
-    # Create a symlink pointing to a non-existent managed copy
-    missing_managed = managed_dir / "myfile.txt"
-    symlink_path = target_dir / "myfile.txt"
-    symlink_path.symlink_to(missing_managed)  # dangling — target doesn't exist
-
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
-
-    original_resolve = Path.resolve
-
-    def _resolve_no_follow(self: Path, **kwargs: object) -> Path:
-        if str(self) == str(symlink_path):
-            return symlink_path
-        return original_resolve(self, **kwargs)
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch.object(Path, "resolve", _resolve_no_follow),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "restore", str(symlink_path)])
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "myfile.txt"], isolated_home)
 
     assert result.exit_code == 1
     assert "dangling symlink" in result.output.lower() or "managed copy does not exist" in result.output.lower()
-    # The symlink must still be in place — no filesystem changes
     assert symlink_path.is_symlink()
 
 
@@ -277,89 +207,47 @@ def test_restore_dangling_symlink_exits_with_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_restore_dry_run_accepted_and_exits_zero(tmp_path: Path) -> None:
+def test_restore_dry_run_accepted_and_exits_zero(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that --dry-run is accepted, exits 0, and makes no filesystem changes.
 
     Requirement 3.4: WHEN --dry-run is active, THE Restore_Command SHALL
     perform all validation checks and report what would happen, but SHALL NOT
     modify the filesystem.
-
-    The CLI resolves the path via ``Path(path).resolve()`` which follows
-    symlinks.  We patch ``Path.resolve`` to return the symlink path itself so
-    that ``RestoreOperation._validate`` sees a symlink, not the managed copy.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    # Set up a valid symlink pointing to an existing managed copy
-    managed_file = managed_dir / "myfile.txt"
+    config_path, managed, target = _write_mapping(tmp_path)
+    managed_file = managed / "myfile.txt"
     managed_file.write_text("managed content")
-    symlink_path = target_dir / "myfile.txt"
+    symlink_path = target / "myfile.txt"
     symlink_path.symlink_to(managed_file)
+    monkeypatch.chdir(target)
 
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "--dry-run", "myfile.txt"], isolated_home)
 
-    original_resolve = Path.resolve
-
-    def _resolve_no_follow(self: Path, **kwargs: object) -> Path:
-        if str(self) == str(symlink_path):
-            return symlink_path
-        return original_resolve(self, **kwargs)
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch.object(Path, "resolve", _resolve_no_follow),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "restore", "--dry-run", str(symlink_path)])
-
-    assert result.exit_code == 0
-    # Symlink must still be in place — no filesystem changes
+    assert result.exit_code == 0, result.output
     assert symlink_path.is_symlink()
-    # Managed copy must still exist
     assert managed_file.exists()
     assert managed_file.read_text() == "managed content"
 
 
-def test_restore_dry_run_prints_dry_run_prefixed_output(tmp_path: Path) -> None:
+def test_restore_dry_run_prints_dry_run_prefixed_output(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
     """Test that --dry-run prints [dry-run]-prefixed preview lines.
 
     Requirement 3.4 / Requirement 7.10: WHEN --dry-run is active, THE
     Restore_Command SHALL prefix all output lines with [dry-run].
-
-    The CLI resolves the path via ``Path(path).resolve()`` which follows
-    symlinks.  We patch ``Path.resolve`` to return the symlink path itself so
-    that ``RestoreOperation._validate`` sees a symlink, not the managed copy.
     """
-    runner = CliRunner()
-    managed_dir = tmp_path / "managed"
-    managed_dir.mkdir()
-    target_dir = tmp_path / "target"
-    target_dir.mkdir()
-
-    managed_file = managed_dir / "myfile.txt"
+    config_path, managed, target = _write_mapping(tmp_path)
+    managed_file = managed / "myfile.txt"
     managed_file.write_text("managed content")
-    symlink_path = target_dir / "myfile.txt"
+    symlink_path = target / "myfile.txt"
     symlink_path.symlink_to(managed_file)
+    monkeypatch.chdir(target)
 
-    ctx = _make_revlink_context(managed_dir, target_dir, tmp_path / "config.yml")
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "--dry-run", "myfile.txt"], isolated_home)
 
-    original_resolve = Path.resolve
-
-    def _resolve_no_follow(self: Path, **kwargs: object) -> Path:
-        if str(self) == str(symlink_path):
-            return symlink_path
-        return original_resolve(self, **kwargs)
-
-    with (
-        patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-        patch.object(Path, "resolve", _resolve_no_follow),
-        patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-    ):
-        result = runner.invoke(cli, ["revlink", "restore", "--dry-run", str(symlink_path)])
-
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "[dry-run]" in result.output
+    assert symlink_path.is_symlink()

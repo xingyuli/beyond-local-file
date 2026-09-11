@@ -16,6 +16,7 @@ from beyond_local_file.sync_state import STATE_DIR
 PID_NAME = "daemon.pid"
 LOG_NAME = "daemon.log"
 READY_NAME = "daemon.ready"
+PORT_NAME = "daemon.port"
 _START_TIMEOUT_S = 30.0
 _STOP_TIMEOUT_S = 10.0
 _POLL_S = 0.05
@@ -29,7 +30,7 @@ def state_dir(config_path: Path) -> Path:
         config_path: Path to the loaded config file.
 
     Returns:
-        Directory that holds pid, log, snapshot, and baseline files.
+        Directory that holds pid, log, port, snapshot, and baseline files.
     """
     return config_path.parent / STATE_DIR
 
@@ -68,6 +69,18 @@ def ready_path(config_path: Path) -> Path:
         Path to ``daemon.ready``.
     """
     return state_dir(config_path) / READY_NAME
+
+
+def port_path(config_path: Path) -> Path:
+    """Return the daemon request-port file path.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        Path to ``daemon.port``.
+    """
+    return state_dir(config_path) / PORT_NAME
 
 
 def read_pid(config_path: Path) -> int | None:
@@ -277,7 +290,7 @@ def _write_pid(config_path: Path, pid: int) -> None:
 
 
 def _clear_runtime_files(config_path: Path) -> None:
-    for path in (pid_path(config_path), ready_path(config_path)):
+    for path in (pid_path(config_path), ready_path(config_path), port_path(config_path)):
         path.unlink(missing_ok=True)
 
 

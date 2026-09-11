@@ -6,16 +6,13 @@ Covers Requirements 1.5, 2.1, 2.2, 4.1, 4.5, 5.2, 5.3, 6.1.
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from beyond_local_file.cli import cli
 from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.operations.revlink import RevlinkContext
+from tests.daemon_support import invoke_with_daemon
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,11 +85,10 @@ class TestRevlinkHappyPathFile:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "myfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "myfile.txt"],
+            isolated_home,
         )
 
         # Assert
@@ -131,11 +127,10 @@ class TestRevlinkHappyPathFile:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "data.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "data.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -187,11 +182,10 @@ class TestRevlinkDirectoryTree:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "mydir"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "mydir"],
+            isolated_home,
         )
 
         # Assert
@@ -231,11 +225,10 @@ class TestRevlinkDirectoryTree:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "configs"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "configs"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -274,7 +267,7 @@ class TestRevlinkForce:
         managed_dir.mkdir()
 
         config_path = tmp_path / "config.yml"
-        _write_config(config_path, "my-project", target_dir)
+        config_path.write_text(f"my-project:\n  target: {target_dir}\n  subpath: []\n")
 
         # Create source file in target dir
         source_file = target_dir / "myfile.txt"
@@ -287,11 +280,10 @@ class TestRevlinkForce:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "--force", "myfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "--force", "myfile.txt"],
+            isolated_home,
         )
 
         # Assert
@@ -326,11 +318,10 @@ class TestRevlinkForce:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "--force", "fresh.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "--force", "fresh.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -377,11 +368,10 @@ class TestRevlinkConfigResolution:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "file.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "file.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -414,11 +404,10 @@ class TestRevlinkConfigResolution:
         # CWD is the target dir — config.yml is found there automatically
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
+        result = invoke_with_daemon(
+            config_path,
             ["revlink", "create", "notes.txt"],
-            env=isolated_home,
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -456,11 +445,10 @@ class TestRevlinkConfigResolution:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
+        result = invoke_with_daemon(
+            config_path,
             ["revlink", "create", "readme.txt"],
-            env=env,
+            env,
         )
 
         assert result.exit_code == 0, result.output
@@ -525,11 +513,10 @@ class TestRevlinkConfigUpdate:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "newfile.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -562,11 +549,10 @@ class TestRevlinkConfigUpdate:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "newfile.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -595,11 +581,10 @@ class TestRevlinkConfigUpdate:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "newfile.txt"],
+            isolated_home,
         )
 
         # Rule 5: path already declared as a subpath → exit 1 with error
@@ -635,11 +620,10 @@ class TestRevlinkConfigUpdate:
 
         monkeypatch.chdir(target_dir)
 
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "newfile.txt"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "newfile.txt"],
+            isolated_home,
         )
 
         assert result.exit_code == 0, result.output
@@ -680,7 +664,9 @@ class TestRevlinkNestedPath:
             mappings=[Mapping(targets=[target_path], subpaths=[], copy_paths=None)],
         )
 
-    def test_nested_path_managed_copy_at_correct_location(self, tmp_path: Path) -> None:
+    def test_nested_path_managed_copy_at_correct_location(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
         """revlink create with a nested path places the managed copy at the full rel_path.
 
         Given a source at ``target/.kiro/specs/foo``, the managed copy must land
@@ -692,7 +678,7 @@ class TestRevlinkNestedPath:
         target_dir = tmp_path / "target"
         target_dir.mkdir()
 
-        managed_dir = tmp_path / "managed"
+        managed_dir = tmp_path / "test-project"
         managed_dir.mkdir()
 
         # Write a real config file so the config update step can read it
@@ -708,24 +694,12 @@ class TestRevlinkNestedPath:
         source_file = source_dir / "foo"
         source_file.write_text("spec content")
 
-        mapping = Mapping(targets=[target_dir], subpaths=[], copy_paths=None)
-        ctx = RevlinkContext(
-            config_path=config_path,
-            project_name="test-project",
-            matched_mapping=mapping,
-            cwd=target_dir,
-            managed_project_path=managed_dir,
+        monkeypatch.chdir(target_dir)
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", ".kiro/specs/foo"],
+            isolated_home,
         )
-
-        runner = CliRunner()
-        with (
-            patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-            patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-        ):
-            # Act — invoke with the absolute path (Path.cwd is mocked, so
-            # Path(path).resolve() in cli.py will resolve against the real OS
-            # CWD; passing the absolute path avoids that ambiguity)
-            result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
         # Assert: exit code 0
         assert result.exit_code == 0, result.output
@@ -743,7 +717,9 @@ class TestRevlinkNestedPath:
         updated_config = config_path.read_text()
         assert ".kiro/specs/foo" in updated_config
 
-    def test_nested_path_config_subpath_entry_uses_full_rel_path(self, tmp_path: Path) -> None:
+    def test_nested_path_config_subpath_entry_uses_full_rel_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
+    ) -> None:
         """revlink create adds the full rel_path to the config subpath list.
 
         The config entry must be ``.kiro/specs/foo``, not ``foo``.
@@ -754,7 +730,7 @@ class TestRevlinkNestedPath:
         target_dir = tmp_path / "target"
         target_dir.mkdir()
 
-        managed_dir = tmp_path / "managed"
+        managed_dir = tmp_path / "test-project"
         managed_dir.mkdir()
 
         # Write a real config file so the config update can be verified
@@ -766,22 +742,12 @@ class TestRevlinkNestedPath:
         source_file = source_dir / "foo"
         source_file.write_text("spec content")
 
-        mapping = Mapping(targets=[target_dir], subpaths=[], copy_paths=None)
-        ctx = RevlinkContext(
-            config_path=config_path,
-            project_name="test-project",
-            matched_mapping=mapping,
-            cwd=target_dir,
-            managed_project_path=managed_dir,
+        monkeypatch.chdir(target_dir)
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", ".kiro/specs/foo"],
+            isolated_home,
         )
-
-        runner = CliRunner()
-        with (
-            patch("beyond_local_file.cli.resolve_revlink_context", return_value=ctx),
-            patch("beyond_local_file.cli.Path.cwd", return_value=target_dir),
-        ):
-            # Act — pass the absolute path (same reason as the first test)
-            result = runner.invoke(cli, ["revlink", "create", str(source_file)])
 
         assert result.exit_code == 0, result.output
 
@@ -862,11 +828,10 @@ class TestRevlinkRestoreNestedPath:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", ".kiro/specs/foo"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", ".kiro/specs/foo"],
+            isolated_home,
         )
 
         # Assert
@@ -905,11 +870,10 @@ class TestRevlinkRestoreNestedPath:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", ".kiro/specs/foo"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", ".kiro/specs/foo"],
+            isolated_home,
         )
 
         # Assert
@@ -992,11 +956,10 @@ class TestRevlinkGitExcludeNestedPath:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "docs/agent"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "docs/agent"],
+            isolated_home,
         )
 
         # Assert: command succeeds
@@ -1046,11 +1009,10 @@ class TestRevlinkGitExcludeNestedPath:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "create", "--dry-run", "docs/agent"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "create", "--dry-run", "docs/agent"],
+            isolated_home,
         )
 
         # Assert: command succeeds
@@ -1106,11 +1068,10 @@ class TestRevlinkGitExcludeNestedPath:
         monkeypatch.chdir(target_dir)
 
         # Act
-        runner = CliRunner()
-        result = runner.invoke(
-            cli,
-            ["--config", str(config_path), "revlink", "restore", "docs/agent"],
-            env=isolated_home,
+        result = invoke_with_daemon(
+            config_path,
+            ["revlink", "restore", "docs/agent"],
+            isolated_home,
         )
 
         # Assert: command succeeds
@@ -1166,12 +1127,10 @@ class TestRevlinkGitExcludeNestedPath:
             original_cwd = os.getcwd()
             try:
                 os.chdir(target_dir)
-                runner = CliRunner()
-                result = runner.invoke(
-                    cli,
-                    ["--config", str(config_path), "revlink", "create", filename],
-                    env=env,
-                    catch_exceptions=False,
+                result = invoke_with_daemon(
+                    config_path,
+                    ["revlink", "create", filename],
+                    env,
                 )
             finally:
                 os.chdir(original_cwd)
@@ -1229,12 +1188,10 @@ class TestRevlinkGitExcludeNestedPath:
             original_cwd = os.getcwd()
             try:
                 os.chdir(target_dir)
-                runner = CliRunner()
-                result = runner.invoke(
-                    cli,
-                    ["--config", str(config_path), "revlink", "restore", filename],
-                    env=env,
-                    catch_exceptions=False,
+                result = invoke_with_daemon(
+                    config_path,
+                    ["revlink", "restore", filename],
+                    env,
                 )
             finally:
                 os.chdir(original_cwd)
