@@ -36,20 +36,13 @@ project-c:
     - .vscode/settings.json
 ```
 
-The `target` key accepts a string or list. Only listed subpaths are synced.
+The `target` key accepts a string or list. Only listed subpaths are projected. Every item is a physical copy (file or directory).
 
-### 4. Copy strategy
+`copy: true` is not valid. A leftover flag is rejected at load:
 
-```yaml
-project-d:
-  target: /Users/username/workspace/project-d
-  subpath:
-    - .kiro/hooks                    # symlink (default)
-    - path: .kiro/steering/rules.md  # physical copy
-      copy: true
 ```
-
-Use `copy: true` for files that must be physical (tool compatibility).
+Unsupported option 'copy: true' (project: my-project, mapping: 1, key: copy)
+```
 
 ---
 
@@ -58,7 +51,7 @@ Use `copy: true` for files that must be physical (tool compatibility).
 1. **Project names** are directory names in your managed files location
 2. **Target paths** must be absolute paths
 3. **Subpaths** are relative to the project directory
-4. **Copy flag** creates physical files instead of symlinks (for tool compatibility)
+4. **Projections** are always physical copies; there is no symlink strategy
 5. **Items** are auto-discovered from filesystem (or specified in subpath)
 
 ---
@@ -72,8 +65,7 @@ my-project:
   target: /path/to/target
   subpath:
     - .kiro/hooks
-    - path: .kiro/steering/rules.md
-      copy: true
+    - .kiro/steering/rules.md
 ```
 
 ### Internal Model (Python)
@@ -84,7 +76,7 @@ Project(
     path=Path("/current/dir/my-project"),
     targets=[Path("/path/to/target")],
     items=[
-        ProjectItem(name=".kiro/hooks", strategy=LinkStrategy.SYMLINK),
+        ProjectItem(name=".kiro/hooks", strategy=LinkStrategy.COPY),
         ProjectItem(name=".kiro/steering/rules.md", strategy=LinkStrategy.COPY),
     ]
 )
@@ -94,7 +86,7 @@ Project(
 1. Config parsing extracts project names and targets
 2. Filesystem discovery finds items (or uses subpath list)
 3. Model construction creates `Project` and `ProjectItem` objects
-4. Strategy assignment: symlink (default) or copy (when `copy: true`)
+4. Every item is a copy; leftover `copy: true` never reaches this step
 
 ---
 
@@ -110,14 +102,14 @@ projects:
     targets: [~/target1, ~/target2]
     items:
       - name: config.yml
-        strategy: symlink
+        strategy: copy
 ```
 
 **Why different?**
 - `projects:` wrapper doesn't exist
 - `path:` field doesn't exist (auto-discovered)
 - `items:` array doesn't exist (auto-discovered or in subpath)
-- `strategy:` field doesn't exist (use `copy: true` flag instead)
+- `strategy:` field doesn't exist (copy is the only projection)
 
 These fields exist in the internal model, not the user config.
 
@@ -129,7 +121,7 @@ These fields exist in the internal model, not the user config.
 |--------|-------------|----------------|
 | Location | `config.yml` | Python classes |
 | Format | Simple YAML | Complex objects |
-| Strategy | `copy: true` flag | `LinkStrategy` enum |
+| Projection | Always a copy | `LinkStrategy.COPY` (leftover symlink conversion is catch-up, not a user option) |
 | Items | Auto-discovered or subpath | Explicit list |
 | Purpose | User-facing | Internal processing |
 

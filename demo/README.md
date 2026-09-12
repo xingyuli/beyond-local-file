@@ -51,10 +51,10 @@ The demo showcases:
 1. **Installation** - `uv tool install` from GitHub
 2. **Project Structure** - Show workspace layout
 3. **Configuration** - Display config.yml mapping
-4. **Sync Command** - Create symlinks automatically
-5. **Verification** - Check symlinks in target project
+4. **Daemon** - Project copies automatically
+5. **Verification** - Check copies in the target project
 6. **Git Integration** - Show .git/info/exclude entries
-7. **Check Command** - Verify sync status
+7. **Check Command** - Verify projection status
 
 ## Customization
 
@@ -104,7 +104,7 @@ This verifies:
 - Demo environment setup works
 - beyond-local-file is installed
 - All commands execute successfully
-- Symlinks are created correctly
+- Copies are created correctly
 - Git exclude is updated
 
 ## Troubleshooting
@@ -156,5 +156,5 @@ Once you have the optimized GIF, add it to the main README.md:
 
 ![Demo](demo/demo.gif)
 
-*Watch beyond-local-file in action: install from GitHub, sync files, create symlinks, and manage Git excludes automatically.*
+*Watch beyond-local-file in action: install from GitHub, project files, and manage Git excludes automatically.*
 ```

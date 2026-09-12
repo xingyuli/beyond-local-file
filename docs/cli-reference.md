@@ -10,6 +10,14 @@ Complete command-line interface reference for `beyond-local-file` (aliased as `b
 blf [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS] [ARGUMENTS]
 ```
 
+The daemon is the runtime. `link check`, `revlink create` / `restore`, and `remove` are shells: they send a request and fail if the daemon is down.
+
+```
+Error: daemon is not running. Start it with: blf daemon start
+```
+
+There is no `link sync`.
+
 ---
 
 ## Global Options
@@ -17,18 +25,206 @@ blf [GLOBAL_OPTIONS] COMMAND [COMMAND_OPTIONS] [ARGUMENTS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `-c, --config PATH` | Path | `config.yml` | Path to configuration file |
+| `--version` | Flag | - | Show the installed version and exit |
 | `--help` | Flag | - | Show help message and exit |
 
 **Examples:**
 ```bash
 blf --help
-blf -c custom.yml link sync
+blf --version
+blf -c custom.yml daemon start
 blf --config /path/to/config.yml link check
 ```
 
 ---
 
 ## Commands
+
+### `daemon` — Runtime
+
+One background process that catch-up's copy projections, observes the hub and replicas, and is the only writer of mappings that originate from blf commands.
+
+```bash
+blf daemon SUBCOMMAND
+```
+
+**Subcommands:**
+- `start` — Start the daemon in the background
+- `stop` — Stop the running daemon
+- `status` — Show whether it is running, plus out-of-sync paths and held copies
+- `logs` — Follow the daemon log
+- `reload` — Apply external mapping edits from the config file
+
+---
+
+## `daemon start` — Start the Runtime
+
+Start the daemon in the background after optional foreground ingest of mapping edits.
+
+### Syntax
+
+```bash
+blf daemon start
+```
+
+### Behavior
+
+1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
+2. Fails if a daemon is already running for that config.
+3. If the config file differs from the mapping snapshot, classifies the diff in the foreground (same as `reload`): removals print one plan and require confirmation; adds apply after. Decline (or no TTY when removals exist) starts nothing.
+4. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths. Same rule inside one project's subpaths.
+5. Warns about out-of-sync paths and held copies and asks you to continue.
+6. Catch-up then observation: with no baseline, every projection is made to match the managed project (fresh catch-up). With a baseline, only paths that differ are queued (update catch-up). Leftover blf symlinks to the correct managed item become copies. Nested symlink nodes inside a directory item are copied as symlinks.
+
+### Examples
+
+```bash
+# Start from the managed-files directory
+blf daemon start
+
+# Use a custom config file (global option)
+blf -c custom.yml daemon start
+```
+
+### Output
+
+```
+Daemon started (pid 12345)
+```
+
+If mapping removals need confirmation:
+
+```
+Mapping removals:
+  item-remove: my-project -> /Users/username/workspace/my-project : .kiro/hooks
+Apply these mapping removals? [y/N]:
+```
+
+Decline prints `Mapping changes were not applied` and does not start the daemon.
+
+Overlapping items:
+
+```
+Error: overlapping items on /Users/username/workspace/project: proj-a 'local-file' and proj-b 'local-file/devops/k8s.md'
+```
+
+---
+
+## `daemon stop` — Stop the Runtime
+
+Stop the running daemon for the loaded config.
+
+### Syntax
+
+```bash
+blf daemon stop
+```
+
+### Output
+
+```
+Daemon stopped
+```
+
+If nothing is running:
+
+```
+Daemon is not running
+```
+
+---
+
+## `daemon status` — Runtime Status
+
+Show whether the daemon is running, plus out-of-sync paths and held copies.
+
+### Syntax
+
+```bash
+blf daemon status
+```
+
+### Output
+
+```
+Daemon is running (pid 12345)
+```
+
+or
+
+```
+Daemon is not running
+```
+
+When isolation state exists:
+
+```
+Out-of-sync:
+  /Users/username/workspace/project-b  notes.md
+Held copies:
+  delete applied past the generation window; kept hub bytes of notes.md (reason: delete-gap)
+Held at /Users/username/my-dev-files/project-a/.blf-held/...
+```
+
+0.5.0 has no resolve/restore/discard shells for these. Status is enough to copy by hand; `start` and `reload` warn and continue.
+
+---
+
+## `daemon logs` — Follow the Log
+
+Print the daemon log and follow new lines until interrupted. Ctrl-C stops following, not the daemon. The command prints `.blf/daemon.log` as stored.
+
+Each new worker line is prefixed at write time with the daemon host's local timezone and offset:
+
+```
+2026-09-12T17:42:03+08:00 live: update alpha.txt gen 1
+```
+
+Old unstamped lines stay unstamped.
+
+### Syntax
+
+```bash
+blf daemon logs
+```
+
+If the log file is missing:
+
+```
+Daemon log not found
+```
+
+---
+
+## `daemon reload` — Apply Mapping Edits
+
+Classify external mapping edits by diffing the config file against the mapping snapshot, then commit them in the running daemon.
+
+### Syntax
+
+```bash
+blf daemon reload
+```
+
+### Behavior
+
+1. Fails if the daemon is not running.
+2. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths.
+3. If the file already matches the snapshot: `Mappings already match the snapshot`.
+4. Removals print one plan (project-remove, then target-remove, then item-remove, inner diffs subsumed) and require confirmation. Adds apply automatically after.
+5. Decline commits nothing. No TTY when removals exist also commits nothing.
+6. Warns about out-of-sync paths and held copies and asks you to continue.
+
+The daemon does not watch `config.yml`. Internal mapping edits from `revlink` / `remove` do not go through reload.
+
+### Examples
+
+```bash
+# After editing config.yml by hand
+blf daemon reload
+```
+
+---
 
 ### `remove` — Permanently Remove a Managed Item
 
@@ -54,9 +250,11 @@ blf remove [OPTIONS] PATH
 
 #### Behavior
 
-1. Resolves the managed project whose configured target includes the current working directory.
+Requires a running daemon. Run it inside the target.
+
+1. Resolves the hub from PATH (contribution source): the unique item whose name equals PATH or is a prefix of it, and that item's managed project. Several managed projects targeting CWD is not CWD-level ambiguity.
 2. Normalizes `PATH` and rejects paths outside the current working directory.
-3. Preflights every configured projection that manages the exact item. A symlink must point to the managed copy, and a copy-strategy projection must match it before removal begins.
+3. Preflights every configured projection that manages the exact item. A copy must match the managed item; a leftover blf symlink must still point at the managed copy.
 4. Deletes every validated projection, removes its matching `.git/info/exclude` entry when applicable, then deletes the managed copy.
 5. Removes the item from participating selective `subpath` lists in the configuration. See the [Configuration Reference](configuration-reference.md) for mapping syntax.
 
@@ -75,102 +273,30 @@ blf remove --dry-run .vscode/settings.json
 blf --config ~/my-dev-files/config.yml remove .vscode/settings.json
 ```
 
+#### Error Cases
+
+| Condition | Message |
+|-----------|---------|
+| PATH is not a managed item | `'{path}' is not a managed item` |
+| No managed project targets CWD | `No managed project found for current directory: <cwd>` |
+| Daemon is down | `Error: daemon is not running. Start it with: blf daemon start` |
+
 ### `link` — Link Management
 
-Manage symlinks and physical copies between managed projects and target locations.
+`link` is the metaphor for a managed item that is visible in a target project. A link is always a physical copy.
 
 ```bash
 blf link SUBCOMMAND [OPTIONS] [ARGUMENTS]
 ```
 
 **Subcommands:**
-- `sync` — Create symlinks and copies
-- `check` — Verify status
-
----
-
-## `link sync` — Create Links
-
-Create symlinks (or physical copies for items marked with `copy: true`) from managed project directory to target locations.
-
-### Syntax
-
-```bash
-blf link sync [PROJECT_NAME] [OPTIONS]
-```
-
-### Arguments
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `PROJECT_NAME` | No | Sync only this project; omit to sync all projects |
-
-### Behavior
-
-**When target path doesn't exist:**
-- Creates the target directory automatically
-
-**When target item already exists:**
-- Prompts for action: overwrite, skip, or abort
-- For copy items: detects changes and syncs bidirectionally
-
-**For Git repositories:**
-- Automatically adds symlink names to `.git/info/exclude`
-
-**For subpath configuration:**
-- Creates only the specified subpaths
-- Creates intermediate directories automatically
-
-**For copy strategy:**
-- Initial sync: copies from managed to target
-- Subsequent syncs: detects changes in both locations
-- Conflicts: prompts for resolution
-
-### Examples
-
-```bash
-# Sync all projects
-blf link sync
-
-# Sync specific project
-blf link sync my-project
-
-# Use custom config file (global option)
-blf -c custom.yml link sync
-
-# Sync specific project with custom config
-blf --config custom.yml link sync my-project
-```
-
-### Output
-
-```
-Syncing project-a to /Users/username/workspace/project-a
-  ✓ Created: .kiro/hooks
-  ✓ Created: .vscode/settings.json
-  ✓ Copied: .kiro/steering/rules.md
-  ✓ Added 3 entries to .git/info/exclude
-
-Syncing project-b to /Users/username/workspace/project-b
-  ✓ Already correct: .kiro/hooks
-  ⚠ Skipped: .vscode (already exists)
-```
-
-### Progress Tracking
-
-If you abort an operation (e.g., choose "Abort" when prompted about conflicts), the tool displays progress:
-
-```
-Operation aborted: 5/10 items processed
-```
-
-This shows how many items were successfully processed before the interruption.
+- `check` — Verify copy projections and Git excludes
 
 ---
 
 ## `link check` — Verify Status
 
-Check the status of symlinks, copies, and Git exclude entries for each project and target location.
+Check the status of copy projections and Git exclude entries for each project and target location. This is a daemon query.
 
 ### Syntax
 
@@ -204,18 +330,20 @@ blf link check
 **Output:**
 ```
 ┌─────────────┬─────────┬─────────┬──────────────────────────────────┐
-│ Project     │ Symlink │ Exclude │ Target Path                      │
+│ Project     │ Exclude │ Copy    │ Target Path                      │
 ├─────────────┼─────────┼─────────┼──────────────────────────────────┤
 │ project-a   │ ✓       │ ✓       │ /Users/user/workspace/project-a  │
-│ project-b   │ ✓       │ ✓ (+1)  │ /Users/user/workspace/project-b  │
-│ project-c   │ ✗ (1)   │ ✓       │ /Users/user/workspace/project-c  │
+│ project-b   │ ✓ (+1)  │ ✓       │ /Users/user/workspace/project-b  │
+│ project-c   │ ✓       │ ✗ (1)   │ /Users/user/workspace/project-c  │
 └─────────────┴─────────┴─────────┴──────────────────────────────────┘
 ```
+
+A Symlink column appears only when leftover blf symlinks are still present (they become copies on daemon catch-up).
 
 **Status indicators:**
 - `✓` — All items correct
 - `✓ (+N)` — All correct, N extra exclude entries
-- `⚠ (N incorrect)` — N items exist but point to wrong source (symlinks only)
+- `⚠ (N incorrect)` — N items exist but are not the expected copy (or leftover symlink points to the wrong source)
 - `✗ (N missing)` — N items missing
 - `✗ (N missing, M incorrect)` — N items missing and M items incorrect
 
@@ -228,10 +356,10 @@ blf link check --extra-exclude
 **Output:**
 ```
 ┌─────────────┬─────────┬─────────┬──────────────────────────────────┐
-│ Project     │ Symlink │ Exclude │ Target Path                      │
+│ Project     │ Exclude │ Copy    │ Target Path                      │
 ├─────────────┼─────────┼─────────┼──────────────────────────────────┤
 │ project-a   │ ✓       │ ✓       │ /Users/user/workspace/project-a  │
-│ project-b   │ ✓       │ ✓ (+1)  │ /Users/user/workspace/project-b  │
+│ project-b   │ ✓ (+1)  │ ✓       │ /Users/user/workspace/project-b  │
 └─────────────┴─────────┴─────────┴──────────────────────────────────┘
 
 Extra exclude entries:
@@ -248,55 +376,31 @@ blf link check --format verbose
 
 **Output:**
 ```
-Checking project-a → /Users/user/workspace/project-a
+Checking project-a -> /Users/user/workspace/project-a
 
-Symlinks:
-  ✓ .kiro/hooks
-  ✓ .vscode/settings.json
-  ✗ docker-compose.yml (missing)
-  ⚠ .env (points to wrong source)
+Copy Status: ✓
 
-Copies:
-  ✓ .kiro/steering/rules.md (in sync)
+Copy Sync Status:
+  ✓ .kiro/hooks (in sync)
+  ✓ .vscode/settings.json (in sync)
+  ⚠ notes.md (target changed)
 
-Git excludes:
-  ✓ .kiro/hooks
-  ✓ .vscode/settings.json
-  ✓ docker-compose.yml
-  ✓ .env
-  ✓ .kiro/steering/rules.md
-
----
-
-Checking project-b → /Users/user/workspace/project-b
-
-Symlinks:
-  ✓ .kiro/hooks
-
-Git excludes:
-  ✓ .kiro/hooks
-  ⚠ Extra: old-file.txt
+Git Exclude Status: ✓
 ```
-
-### Symlink Status Indicators
-
-| Status | Description |
-|--------|-------------|
-| `✓` | Symlink exists and points to correct source |
-| `⚠ (points to wrong source)` | Symlink exists but points to incorrect source |
-| `✗ (missing)` | Symlink doesn't exist |
 
 ### Copy Status Indicators
 
-For items with `copy: true`:
-
 | Status | Description |
 |--------|-------------|
-| `in sync` | Files are identical |
-| `managed changed` | Only managed file changed |
-| `target changed` | Only target file changed |
-| `conflict` | Both files changed |
-| `missing` | Target file doesn't exist |
+| `in sync` | Files are identical to the recorded baseline |
+| `manually synced` | Bytes match after a previous isolation or catch-up |
+| `managed changed` | Only the hub (managed) file changed |
+| `target changed` | Only the replica file changed |
+| `conflict - both changed` | Both files changed relative to the baseline |
+| `missing` | Target copy doesn't exist |
+| `not a copy` | Target path exists but is not a regular copy |
+
+While the daemon is running, hub/fan-out applies these changes live. `link check` reports the daemon's view; it does not copy.
 
 ### Examples
 
@@ -326,26 +430,27 @@ blf --config custom.yml link check my-project --extra-exclude --format verbose
 ## `revlink` — Manage Files Adopted into the Managed Workflow
 
 `revlink` is a subcommand group with two operations: `create` adopts an existing file or
-directory into the managed project, and `restore` is the exact inverse — it dissolves the
-managed symlink and recovers the real file.
+directory into the managed project as a copy projection, and `restore` is the inverse —
+it unregisters the item and leaves the target file in place.
 
 ```bash
 blf revlink SUBCOMMAND [OPTIONS] PATH
 ```
 
 **Subcommands:**
-- `create` — Convert a real file or directory into a managed symlink
-- `restore` — Dissolve a managed symlink and recover the real file
+- `create` — Adopt a real file or directory as a copy projection
+- `restore` — Stop managing PATH and leave the target file in place
+
+Both require a running daemon.
 
 ---
 
 ## `revlink create` — Adopt a File into the Managed Workflow
 
-Convert an existing file or directory in the current working directory into a managed symlink.
-Where `link sync` pushes symlinks from a managed project into target directories, `revlink create`
-works in reverse: it copies the path to the managed project, verifies the copy via MD5
-checksum, replaces the original with a symlink, and optionally records the item in
-`.git/info/exclude`.
+Convert an existing file or directory in the current working directory into a managed copy
+projection. The original stays a regular file or directory. The daemon copies it into the
+managed project (the hub), verifies MD5, records Git exclude and config, then fans the hub
+bytes out to other in-sync replicas of that managed project.
 
 ### Syntax
 
@@ -369,13 +474,14 @@ blf revlink create [OPTIONS] PATH
 ### Behavior
 
 1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
-2. Identifies the managed project whose target paths include the current working directory.
+2. Chooses the hub. One managed project targeting CWD: no prompt. PATH already covered by an item: that contribution source, no prompt (then the existing already-covered error). Several hubs targeting CWD and PATH a new item: the same command prompts for a 1-based managed project name. No TTY (or an aborted prompt) lists the names and exits 1.
 3. Validates the source path (must exist, must not already be a symlink).
-4. Copies the source to `<managed_project_path>/<name>`.
+4. Copies the source to `<managed_project_path>/<relative-path>`. Nested symlink nodes inside a directory are copied as symlinks.
 5. Verifies the copy via MD5 checksum; aborts and deletes the copy on mismatch.
-6. Removes the original and creates a symlink pointing to the managed copy.
+6. Leaves the original as a regular file or directory.
 7. Adds the item name to `.git/info/exclude` if the current directory is a Git repository.
-8. If the matched mapping uses selective sync (`subpath` list), appends the item name to that list in the config file so that `link sync` and `link check` will manage it going forward. Mappings that sync everything (no `subpath`) are unaffected.
+8. If the matched mapping uses selective projection (`subpath` list), appends the item name to that list in the config file so that the daemon and `link check` will manage it going forward. Mappings that project everything (no `subpath`) are unaffected.
+9. Fans the hub copy out to other in-sync replicas of that managed project. If a replica already had different bytes, those bytes are stored under `.blf-held/` (`create-overwrite`) and the hub overwrites the live path.
 
 ### Examples
 
@@ -396,13 +502,24 @@ blf revlink create --force myfile.txt
 blf -c ~/my-files/config.yml revlink create myfile.txt
 ```
 
+When several managed projects contribute to CWD and PATH is new:
+
+```
+More than one managed project contributes to this directory:
+  1. shared-hooks
+  2. app-settings
+Choose a managed project: 1
+```
+
+Create then continues on the chosen hub.
+
 ### Output
 
 ```
 Copying /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
 Computing checksum of /Users/user/project/myfile.txt
 ✓ MD5 checksum verified
-✓ Symlink created: /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
+✓ Target path left in place: /Users/user/project/myfile.txt
 Added 'myfile.txt' to .git/info/exclude
 ```
 
@@ -412,7 +529,7 @@ With `--dry-run`:
 [dry-run] Copying /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
 [dry-run] Computing checksum of /Users/user/project/myfile.txt
 [dry-run] ✓ MD5 checksum verified
-[dry-run] ✓ Symlink created: /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
+[dry-run] ✓ Target path left in place: /Users/user/project/myfile.txt
 [dry-run] Added 'myfile.txt' to .git/info/exclude
 ```
 
@@ -424,18 +541,23 @@ With `--dry-run`:
 | PATH is already a symlink | `Error: Path is already a symlink: <path>` |
 | Destination exists and `--force` not set | `Error: Destination already exists: <path>` |
 | No managed project targets CWD | `No managed project found for current directory: <cwd>` |
-| Multiple projects target CWD | `Ambiguous: multiple projects target <cwd>: <names>` |
+| Several hubs target CWD, PATH is new | Numbered prompt, then `Choose a managed project:` |
+| Several hubs target CWD, PATH is new, no TTY | `Error: more than one managed project contributes to this directory: <names>` |
+| PATH already covered by an item | Uses that contribution source (no prompt); then the existing already-covered error |
 | MD5 checksum mismatch | `Error: Checksum mismatch — copy may be corrupt. Destination deleted.` |
-| Permission denied removing source | `Error: Permission denied removing <path>` |
+| Daemon is down | `Error: daemon is not running. Start it with: blf daemon start` |
 
 ---
 
-## `revlink restore` — Dissolve a Managed Symlink
+## `revlink restore` — Stop Managing a Path
 
-The exact inverse of `revlink create`. Given a path in the current working directory that is
-a symlink pointing to the managed project, `revlink restore` copies the managed file back,
-verifies integrity via MD5 checksum, deletes the managed copy, and removes the item from
-`.git/info/exclude` and the config subpath list.
+The inverse of `revlink create`. Given a path in the current working directory that is a
+managed projection, `revlink restore` deletes the managed (hub) copy, leaves PATH as a
+regular file or directory, leaves other targets' copies as unmanaged files, and removes
+the item from `.git/info/exclude` and the config subpath list.
+
+Leftover blf symlinks from older versions are still restorable: the symlink is removed and
+the managed content is copied back as a regular file.
 
 ### Syntax
 
@@ -447,7 +569,7 @@ blf revlink restore [OPTIONS] PATH
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `PATH` | Yes | Symlink in the current working directory to dissolve |
+| `PATH` | Yes | Projection in the current working directory to stop managing |
 
 ### Options
 
@@ -458,13 +580,12 @@ blf revlink restore [OPTIONS] PATH
 ### Behavior
 
 1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
-2. Identifies the managed project whose target paths include the current working directory.
-3. Validates the path (must exist, must be a symlink, symlink target must exist).
-4. Removes the symlink and copies the managed copy back to the original path.
-5. Verifies the copy via MD5 checksum; aborts and deletes the restored copy on mismatch.
-6. Deletes the managed copy (non-fatal if this fails — a warning is printed and the restore is still considered successful).
-7. Removes the item name from `.git/info/exclude` if the current directory is a Git repository.
-8. If the matched mapping uses selective sync (`subpath` list), removes the item name from that list in the config file.
+2. Resolves the hub from PATH (contribution source). Run it inside the target. Several managed projects targeting CWD is not CWD-level ambiguity.
+3. Validates the path (must exist as a regular file, directory, or leftover symlink; managed copy must exist).
+4. Leaves the requesting target's file in place (or, for a leftover symlink, replaces it with a real copy).
+5. Deletes the managed copy (non-fatal if this fails — a warning is printed and the restore is still considered successful).
+6. Removes the item name from `.git/info/exclude` if the current directory is a Git repository.
+7. If the matched mapping uses selective projection (`subpath` list), removes the item name from that list in the config file.
 
 ### Examples
 
@@ -485,10 +606,7 @@ blf -c ~/my-files/config.yml revlink restore myfile.txt
 ### Output
 
 ```
-Removing symlink at /Users/user/project/myfile.txt
-Copying /Users/user/my-files/project/myfile.txt -> /Users/user/project/myfile.txt
-Computing checksum of /Users/user/my-files/project/myfile.txt
-✓ MD5 checksum verified
+Leaving target file in place: /Users/user/project/myfile.txt
 ✓ Managed copy deleted: /Users/user/my-files/project/myfile.txt
 Removed 'myfile.txt' from .git/info/exclude
 Removed 'myfile.txt' from config subpath list
@@ -497,10 +615,7 @@ Removed 'myfile.txt' from config subpath list
 With `--dry-run`:
 
 ```
-[dry-run] Removing symlink at /Users/user/project/myfile.txt
-[dry-run] Copying /Users/user/my-files/project/myfile.txt -> /Users/user/project/myfile.txt
-[dry-run] Computing checksum of /Users/user/my-files/project/myfile.txt
-[dry-run] ✓ MD5 checksum verified
+[dry-run] Leaving target file in place: /Users/user/project/myfile.txt
 [dry-run] ✓ Managed copy deleted: /Users/user/my-files/project/myfile.txt
 ```
 
@@ -509,12 +624,13 @@ With `--dry-run`:
 | Condition | Message |
 |-----------|---------|
 | PATH does not exist | `Error: Path does not exist: <path>` |
-| PATH is not a symlink | `Error: Path is not a symlink: <path>\nUse 'revlink create' to adopt a real file.` |
-| Symlink target (managed copy) missing | `Error: Dangling symlink: managed copy does not exist at <managed>` |
-| Permission denied removing symlink | `Error: Permission denied removing symlink at <path>` |
-| MD5 checksum mismatch | `Error: Checksum mismatch — restored copy deleted. Managed copy preserved.` |
+| PATH is not a restorable projection | `Error: Path is not a restorable projection: <path>` |
+| PATH is not a managed item | `'{path}' is not a managed item` |
+| Managed copy missing (leftover dangling symlink) | `Error: Dangling symlink: managed copy does not exist at <managed>` |
+| Managed copy missing (regular path) | `Error: Managed copy does not exist at <managed>` |
+| MD5 checksum mismatch (leftover symlink restore) | `Error: Checksum mismatch — restored copy deleted. Managed copy preserved.` |
 | No managed project targets CWD | `No managed project found for current directory: <cwd>` |
-| Multiple projects target CWD | `Ambiguous: multiple projects target <cwd>: <names>` |
+| Daemon is down | `Error: daemon is not running. Start it with: blf daemon start` |
 
 ---
 
@@ -583,7 +699,7 @@ Upgrade manually using the command that matches how you installed the tool:
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Error (invalid config, file not found, etc.) |
+| `1` | Error (invalid config, file not found, daemon down, etc.) |
 | `2` | User aborted operation |
 
 ---
@@ -639,8 +755,8 @@ cat > config.yml << EOF
 my-project: /Users/username/workspace/my-project
 EOF
 
-# 2. Sync symlinks
-blf link sync
+# 2. Start the daemon
+blf daemon start
 
 # 3. Verify
 blf link check
@@ -649,14 +765,14 @@ blf link check
 ### Daily Usage
 
 ```bash
-# Sync all projects
-blf link sync
+# Keep the daemon running
+blf daemon status
 
-# Check status
+# Check copy status
 blf link check
 
-# Sync specific project
-blf link sync my-project
+# After editing config.yml by hand
+blf daemon reload
 ```
 
 ### Troubleshooting
@@ -668,8 +784,11 @@ blf link check --format verbose
 # Check for extra exclude entries
 blf link check --extra-exclude
 
-# Re-sync specific project
-blf link sync my-project
+# Inspect isolation state
+blf daemon status
+
+# Follow daemon output
+blf daemon logs
 ```
 
 ---
@@ -678,11 +797,12 @@ blf link sync my-project
 
 ### Working Directory
 
-Commands run from your managed files directory (where `config.yml` is located).
+Start the daemon from your managed files directory (where `config.yml` is located). Shells that take a `PATH` (`revlink`, `remove`) run from the target project.
 
 ```bash
 cd ~/my-dev-files
-blf link sync
+blf daemon start
+blf link check
 ```
 
 ### Config File Location
@@ -691,13 +811,13 @@ Default: `config.yml` in current directory
 
 Override with `-c` or `--config` (global option):
 ```bash
-blf -c /path/to/custom.yml link sync
+blf -c /path/to/custom.yml daemon start
 blf --config /path/to/custom.yml link check
 ```
 
 ### Git Integration
 
-For Git repositories, all linked items (both symlinks and copies) are automatically added to `.git/info/exclude` (not `.gitignore`).
+For Git repositories, projected items are automatically added to `.git/info/exclude` (not `.gitignore`).
 
 **Why `.git/info/exclude`?**
 - Local to your repository

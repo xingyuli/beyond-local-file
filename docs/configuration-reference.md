@@ -2,6 +2,8 @@
 
 Complete reference for `config.yml` configuration file.
 
+Every projection is a physical copy (file or directory). `copy: true` is not a valid option.
+
 ---
 
 ## Configuration Structure
@@ -24,7 +26,7 @@ Each mapping can be defined in two forms:
 
 #### 1. Simple String Mapping
 
-Syncs everything from the managed project to the target.
+Projects everything from the managed project to the target.
 
 ```yaml
 /absolute/path/to/target
@@ -32,14 +34,13 @@ Syncs everything from the managed project to the target.
 
 #### 2. Dict Mapping
 
-Supports selective subpath sync and copy strategy.
+Supports selective subpath projection.
 
 ```yaml
 target: /absolute/path/to/target  # can be string or list
-subpath:                          # optional: sync only these items
+subpath:                          # optional: project only these items
   - relative/path/to/item1
-  - path: relative/path/to/item2  # optional: use copy instead of symlink
-    copy: true
+  - relative/path/to/item2
 ```
 
 ---
@@ -75,10 +76,9 @@ This section provides a formal specification of the configuration format using Y
 <subpath-list>    ::= - <subpath-item>
                       (- <subpath-item>)*
 
-<subpath-item>    ::= <relative-path> | <copy-item>
+<subpath-item>    ::= <relative-path> | <path-item>
 
-<copy-item>       ::= path: <relative-path>
-                      copy: true
+<path-item>       ::= path: <relative-path>
 
 <project-name>    ::= <identifier>
 <absolute-path>   ::= <string>
@@ -94,6 +94,14 @@ This section provides a formal specification of the configuration format using Y
 - `()*` means zero or more repetitions
 - `+` means one or more repetitions
 - `:` and `-` are actual YAML syntax
+
+A leftover `copy:` key on a mapping or a path-item is rejected at load:
+
+```
+Unsupported option 'copy: true' (project: my-project, mapping: 1, key: copy)
+```
+
+The error names the project, 1-based mapping index, and key.
 
 ### Grammar Examples
 
@@ -133,7 +141,7 @@ my-project:
     - .kiro/hooks
 ```
 
-#### `<subpath-item>` as `<copy-item>` - Copy strategy
+#### `<subpath-item>` as `<path-item>` - Path dict without copy flag
 
 ```yaml
 my-project:
@@ -141,8 +149,9 @@ my-project:
   subpath:
     - .kiro/hooks
     - path: .kiro/steering/rules.md
-      copy: true
 ```
+
+`path:` is an alternate spelling of a relative subpath. It does not change projection: the item is still a physical copy. `copy: true` on that dict is rejected.
 
 #### `<mapping-list>` with `<string-mapping>` - List of simple strings
 
@@ -197,8 +206,7 @@ project-d:
   - target: /absolute/path/to/target2
     subpath:
       - .kiro/hooks
-      - path: .kiro/steering/rules.md
-        copy: true
+      - .kiro/steering/rules.md
 ```
 
 ---
@@ -208,34 +216,26 @@ project-d:
 ### Single Mapping
 
 ```yaml
-# Simple string - sync everything
+# Simple string - project everything
 project-a: /absolute/path/to/target
 
-# Dict with subpath - sync only specific items
+# Dict with subpath - project only specific items
 project-b:
   target: /absolute/path/to/target
   subpath:
     - .kiro/hooks
     - .vscode
-
-# Dict with copy strategy
-project-c:
-  target: /absolute/path/to/target
-  subpath:
-    - .kiro/hooks                    # symlink
-    - path: .kiro/steering/rules.md  # physical copy
-      copy: true
 ```
 
 ### List of Mappings
 
 ```yaml
-# List of simple strings - sync everything to multiple targets
+# List of simple strings - project everything to multiple targets
 project-d:
   - /absolute/path/to/target1
   - /absolute/path/to/target2
 
-# List of dicts - selective sync to multiple targets
+# List of dicts - selective projection to multiple targets
 project-e:
   - target: /absolute/path/to/target1
     subpath:
@@ -246,8 +246,8 @@ project-e:
 
 # Mixed list - combine simple strings and dicts
 project-f:
-  - /absolute/path/to/target1           # sync everything
-  - target: /absolute/path/to/target2   # sync only specific items
+  - /absolute/path/to/target1           # project everything
+  - target: /absolute/path/to/target2   # project only specific items
     subpath:
       - local-file/tasks/releases
 ```
@@ -257,7 +257,7 @@ project-f:
 The `target` key in a dict mapping can also be a list:
 
 ```yaml
-# Sync same subpaths to multiple targets
+# Project same subpaths to multiple targets
 project-g:
   target:
     - /absolute/path/to/target1
@@ -273,7 +273,7 @@ project-g:
 
 ### Subpath Mapping
 
-By default, all top-level items in a managed project are synced. Use `subpath` to sync only specific items:
+By default, all top-level items in a managed project are projected (except the reserved `.blf-held/` directory). Use `subpath` to project only specific items:
 
 ```yaml
 my-project:
@@ -285,44 +285,42 @@ my-project:
 ```
 
 **Behavior:**
-- Only listed subpaths are synced
+- Only listed subpaths are projected
 - Intermediate directories created automatically
-- All items are symlinked by default
+- Files and directories are physical copies
 
-### Copy Strategy
+### Copy-only projections
 
-By default, items are symlinked. Use `copy: true` for physical copies when tools don't recognize symlinks:
+There is no symlink strategy and no `copy: true` flag. The daemon copies files and directories. The projection path is a real file or directory, not a symlink to the hub. Nested symlink nodes inside a directory item (venv `python` → `python3.14` → the real interpreter) are copied as symlinks; following them is a bug. Leftover blf symlinks from older versions become copies on first catch-up.
+
+If a config still contains `copy: true`:
 
 ```yaml
+# Invalid in 0.5.0 — will not load
 my-project:
   target: /path/to/target
   subpath:
-    - .kiro/hooks                    # symlink (default)
-    - path: .kiro/steering/rules.md  # physical copy
+    - path: .kiro/steering/rules.md
       copy: true
 ```
 
-**Behavior:**
-- Items without `copy: true` are symlinked
-- Items with `copy: true` are physically copied
-- Bidirectional sync: detects changes in both locations
-- Conflict resolution: prompts when both sides changed
+```
+Unsupported option 'copy: true' (project: my-project, mapping: 1, key: copy)
+```
 
-**Limitations:**
-- Copy mode only supports single files, not directories
-- This is intentional to keep symlinks as the primary workflow
+Remove the `copy:` key (and, if you like, write the subpath as a plain string).
 
 ### Multiple Targets
 
-Sync the same managed project to multiple targets:
+Project the same managed project to multiple targets:
 
 ```yaml
-# Simple: sync everything to multiple targets
+# Simple: project everything to multiple targets
 api-service:
   - /path/to/target1
   - /path/to/target2
 
-# Dict: sync same subpaths to multiple targets
+# Dict: project same subpaths to multiple targets
 frontend:
   target:
     - /path/to/target1
@@ -330,13 +328,39 @@ frontend:
   subpath:
     - .kiro/hooks
 
-# Mixed: different sync strategies for different targets
+# Mixed: different subpaths for different targets
 my-project:
-  - /path/to/target1              # sync everything
-  - target: /path/to/target2      # sync only specific items
+  - /path/to/target1              # project everything
+  - target: /path/to/target2      # project only specific items
     subpath:
       - .kiro/hooks
 ```
+
+Each target holds its own tree. The daemon treats the managed project as the hub and fans successful applies out to in-sync replicas of that managed project.
+
+### Item overlap
+
+Several managed projects may contribute items to one target only if the item names are disjoint: not equal, and neither a path prefix of the other. The same rule applies to two subpaths of one managed project.
+
+```yaml
+# Illegal: local-file is a prefix of local-file/devops/k8s.md
+proj-a:
+  target: /path/to/target
+  subpath:
+    - local-file
+proj-b:
+  target: /path/to/target
+  subpath:
+    - local-file/devops/k8s.md
+```
+
+Start and reload fail after item discovery:
+
+```
+Error: overlapping items on /path/to/target: proj-a 'local-file' and proj-b 'local-file/devops/k8s.md'
+```
+
+Distinct siblings on one target are fine (`.vscode` and `.kiro/hooks`). Flatten owned files into the directory item, or use disjoint items.
 
 ---
 
@@ -347,9 +371,11 @@ my-project:
 | **Project names** | Directory names in your managed files location |
 | **Target paths** | Must be absolute paths |
 | **Subpaths** | Relative to the project directory |
-| **Mapping types** | Simple string (sync all) or dict (selective sync + copy) |
+| **Mapping types** | Simple string (project all) or dict (selective subpaths) |
 | **Target key** | Accepts string or list in dict mappings |
-| **Copy flag** | Creates physical files instead of symlinks (files only) |
+| **Projections** | Always physical copies (files and directories); nested symlink nodes stay links |
+| **Item overlap** | Item names on one target must be disjoint (not equal, not a path prefix) |
+| **`copy:` key** | Rejected at load; not a valid option |
 
 ---
 
@@ -358,19 +384,19 @@ my-project:
 ### Basic Usage
 
 ```yaml
-# Single target, sync everything
+# Single target, project everything
 personal-tool: /Users/username/projects/personal-tool
 
-# Multiple targets, sync everything
+# Multiple targets, project everything
 api-service:
   - /Users/username/work/api-v1
   - /Users/username/work/api-v2
 ```
 
-### Selective Sync
+### Selective Projection
 
 ```yaml
-# Sync only specific files
+# Project only specific files and directories
 frontend-app:
   target: /Users/username/work/frontend
   subpath:
@@ -378,7 +404,7 @@ frontend-app:
     - .vscode/settings.json
     - .editorconfig
 
-# Multiple targets with selective sync
+# Multiple targets with selective projection
 microservice:
   target:
     - /Users/username/work/service-a
@@ -388,54 +414,24 @@ microservice:
     - docker-compose.dev.yml
 ```
 
-### Copy Strategy
+### Mixed Mappings
 
 ```yaml
-# IDE requires physical steering files
-my-app:
-  target: /Users/username/work/my-app
-  subpath:
-    - .kiro/hooks                    # symlink
-    - .vscode                        # symlink
-    - path: .kiro/steering/rules.md  # physical copy
-      copy: true
-
-# Multiple targets with copy
-multi-env:
-  target:
-    - /Users/username/work/dev
-    - /Users/username/work/staging
-  subpath:
-    - .kiro/hooks                    # shared (symlink)
-    - path: .qoder/config.yml        # per-target (physical copy)
-      copy: true
-```
-
-### Mixed Strategies
-
-```yaml
-# Different sync strategies for different targets
+# Different subpaths for different targets
 beyond-local-file:
-  - /Users/username/projects/beyond-local-file  # full sync
-  - target: /Users/username/blog                # partial sync
+  - /Users/username/projects/beyond-local-file  # full projection
+  - target: /Users/username/blog                # partial projection
     subpath:
       - local-file/tasks/releases
 
 # Complex mixed configuration
 my-project:
-  - /Users/username/work/project-full           # full sync
-  - /Users/username/work/project-full-2         # full sync
-  - target: /Users/username/work/project-partial # partial sync
+  - /Users/username/work/project-full           # full projection
+  - /Users/username/work/project-full-2         # full projection
+  - target: /Users/username/work/project-partial # partial projection
     subpath:
       - .kiro/hooks
       - .vscode
-  - target:                                      # partial sync with copy
-      - /Users/username/work/env-dev
-      - /Users/username/work/env-prod
-    subpath:
-      - .kiro/hooks
-      - path: .kiro/steering/rules.md
-        copy: true
 ```
 
 ---
@@ -452,22 +448,9 @@ project: /Users/username/workspace/project
 project: ../workspace/project
 ```
 
-### Prefer Symlinks
+### Use Selective Projection
 
-Use copy strategy only when necessary (tool compatibility):
-
-```yaml
-my-project:
-  target: /Users/username/workspace/my-project
-  subpath:
-    - .kiro/hooks                    # symlink (preferred)
-    - path: .kiro/steering/rules.md  # copy (only if tool requires)
-      copy: true
-```
-
-### Use Selective Sync
-
-Sync only what you need:
+Project only what you need:
 
 ```yaml
 my-project:
@@ -484,7 +467,7 @@ my-project:
 # Shared development configurations
 dev-configs: /Users/username/workspace/shared
 
-# Legacy project - only sync test files
+# Legacy project - only project test files
 legacy-app:
   target: /Users/username/workspace/legacy
   subpath:
@@ -492,42 +475,25 @@ legacy-app:
     - .env.test  # Test environment
 ```
 
+### Apply mapping edits through the daemon
+
+The daemon does not watch `config.yml`. After a manual edit, run `blf daemon start` (if it is down) or `blf daemon reload` (if it is already up). Removals print one plan and require confirmation; decline commits nothing.
+
 ---
 
 ## Advanced Topics
 
-### Copy Strategy Conflict Resolution
+### Live hub and fan-out
 
-When both managed and target files have changed, the tool prompts for resolution:
+The managed project is the hub. A mailbox holds at most one not-yet-applied path change per `(path, replica)`. The owner of a target path is the unique item whose name equals that path or is a prefix of it, and that item's managed project — the **contribution source**, derived at runtime from committed mappings, not persisted. After a successful hub apply, that generation is copied or deleted onto other in-sync replicas of that managed project except the source replica. Replicas of other managed projects are not written, even when they use the same item name.
 
-```
-Conflict detected: both managed and target files have changed
-  managed: /path/to/managed/.kiro/steering/rules.md
-  target:  /path/to/target/.kiro/steering/rules.md
+### Out-of-sync replicas
 
-Choose resolution: [m]anaged / [t]arget / [s]kip
-```
+If two replicas edit the same path, the first apply wins. The loser is out-of-sync for that path: fan-out skips it, and further path changes from it are discarded. The hub and in-sync replicas keep moving. `blf daemon status` lists these; `start` and `reload` warn and continue. 0.5.0 has no resolve shell — if the replica's bytes later match the hub, out-of-sync clears.
 
-**Options:**
-- `m` — Use managed version (overwrite target)
-- `t` — Use target version (overwrite managed, reverse sync)
-- `s` — Skip this file (keep both versions as-is)
+### Held copies
 
-### Copy Strategy Sync Behavior
-
-**Initial sync:**
-- Copies from managed to target
-- Records file state for change detection
-
-**Subsequent syncs:**
-- Detects changes in both locations
-- Three-way comparison: managed, target, last-sync-state
-
-**Change scenarios:**
-1. No changes → Skip
-2. Managed changed only → Sync managed → target
-3. Target changed only → Sync target → managed (reverse sync)
-4. Both changed → Conflict (prompt user)
+A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `.blf-held/` in the managed project (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. `.blf-held/` is reserved: it is not an item and is never projected. `status` lists held copies; there is no restore/discard command in 0.5.0.
 
 ---
 

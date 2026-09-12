@@ -1,10 +1,9 @@
 # Windows Support
 
-**Testing Status:** Native Windows 10 has been cross-tested with the full pytest suite. Symlink creation still requires Developer Mode (Windows 10 Build 1703+) or an elevated shell. Windows 11 is expected to work the same but has not been separately cross-tested. Report remaining issues via GitHub.
+**Testing Status:** Native Windows 10 has been cross-tested with the full pytest suite. The projection path is a physical copy, so Developer Mode is not required for ordinary files and directories. Enable it (Windows 10 Build 1703+) or use an elevated shell when a directory item contains nested symlink nodes, or when leftover tests still create symlink fixtures. Windows 11 is expected to work the same but has not been separately cross-tested. Report remaining issues via GitHub.
 
 ## Table of Contents
 
-- [Symbolic Link Support on Windows](#symbolic-link-support-on-windows)
 - [Requirements](#requirements)
 - [Installation on Windows](#installation-on-windows)
 - [Usage on Windows](#usage-on-windows)
@@ -18,32 +17,11 @@
 
 This document explains how to use beyond-local-file on Windows systems.
 
-## Symbolic Link Support on Windows
-
-Python's `Path.symlink_to()` works on Windows, but requires special permissions due to Windows security policies.
-
 ## Requirements
 
-### Windows 10/11 (Build 1703 or later) - Recommended
+Windows 10/11 is supported. Ordinary copy projections (regular files and directories) do not need Developer Mode or an elevated shell.
 
-**Enable Developer Mode** (one-time setup):
-
-1. Open Settings (Win + I)
-2. Go to "Update & Security"
-3. Click "For developers" in the left sidebar
-4. Toggle "Developer Mode" to ON
-5. Confirm the prompt
-
-Once enabled, you can create symlinks without administrator privileges.
-
-### Older Windows Versions
-
-Run your terminal as Administrator:
-
-1. Search for "Command Prompt" or "PowerShell"
-2. Right-click and select "Run as administrator"
-3. Navigate to your managed projects directory
-4. Run beyond-local-file commands
+Developer Mode (or Administrator) is needed when a directory item contains nested symlink nodes (venv `python` → `python3.14` → the real interpreter). Those nested links are copied as symlinks; following them is a bug. It is also needed for leftover symlink test fixtures, or old blf symlinks on disk that the first daemon catch-up will convert to copies.
 
 ## Installation on Windows
 
@@ -82,8 +60,8 @@ The usage is identical to macOS/Linux:
 # Navigate to your managed projects directory
 cd C:\Users\YourName\my-dev-files
 
-# Sync all projects
-blf link sync
+# Start the daemon (projects copies and keeps them live)
+blf daemon start
 
 # Check status
 blf link check
@@ -124,14 +102,6 @@ shared-configs: ../workspace/shared
 
 ## Troubleshooting
 
-### "A required privilege is not held by the client"
-
-This error means you don't have permission to create symlinks.
-
-**Solution:**
-- **Windows 10/11**: Enable Developer Mode (see Requirements above)
-- **Older Windows**: Run terminal as Administrator
-
 ### "The system cannot find the path specified"
 
 The target directory doesn't exist.
@@ -141,21 +111,8 @@ The target directory doesn't exist.
 # Create the target directory first
 mkdir C:\Users\YourName\workspace\project-a
 
-# Then run sync
-blf link sync
-```
-
-### Symlinks Not Working in Git
-
-Windows Git may not handle symlinks correctly by default.
-
-**Solution:**
-```powershell
-# Enable symlink support in Git (run once)
-git config --global core.symlinks true
-
-# Clone repositories with symlink support
-git clone -c core.symlinks=true <repository-url>
+# Then start the daemon
+blf daemon start
 ```
 
 ### Command Not Found After Installation
@@ -173,9 +130,26 @@ $env:Path += ";$env:USERPROFILE\.local\bin"
 # 3. Add: C:\Users\YourName\.local\bin
 ```
 
+### "A required privilege is not held by the client"
+
+This error is from creating a symlink: leftover test fixtures, a first catch-up converting an old blf symlink, or copying nested symlink nodes inside a directory item. Ordinary file and directory copies without nested links do not need it.
+
+**Solution (tests / leftover conversion only):**
+- **Windows 10/11**: Enable Developer Mode — Settings → Update & Security → For developers → Developer Mode
+- **Older Windows**: Run the terminal as Administrator
+
+### Git and leftover symlinks
+
+Windows Git may not handle leftover blf symlinks correctly by default. Copy projections do not need Git symlink support. If you still have old symlinks to convert:
+
+```powershell
+# Enable symlink support in Git (run once)
+git config --global core.symlinks true
+```
+
 ## Testing on Windows
 
-**Current Status:** Cross-tested on Windows 10 (full `uv run pytest` suite). Developer Mode should be enabled for symlink-related commands and tests.
+**Current Status:** Cross-tested on Windows 10 (full `uv run pytest` suite). Developer Mode is needed for tests that still create leftover symlink fixtures, and for projecting directory items that contain nested links.
 
 **Reproduce locally:**
 
@@ -196,27 +170,28 @@ project-a: C:/Users/YourName/test-beyond-local-file/target
 # 4. Create target directory
 mkdir target
 
-# 5. Run sync
+# 5. Start the daemon
 cd my-files
-blf link sync
+blf daemon start
 
-# 6. Verify symlink
+# 6. Verify a regular copy (not a symlink)
 dir ..\target
-# Should show: test.txt -> C:\Users\YourName\test-beyond-local-file\my-files\project-a\test.txt
+# Should show: test.txt as a normal file
 ```
 
 **Please report regressions** by [opening an issue](https://github.com/xingyuli/beyond-local-file/issues) with:
 - Windows version
 - Python version
-- Whether Developer Mode is enabled
+- Whether Developer Mode is enabled (relevant for nested links and leftover symlink tests)
 - Any error messages
 
 ## Known Limitations on Windows
 
-1. **Developer Mode or Admin Required**: Unlike Unix systems, Windows requires special permissions
-2. **Git Symlink Support**: May need explicit Git configuration
-3. **Some Antivirus Software**: May block symlink creation (add exception if needed)
-4. **WSL vs Native**: This tool works in both native Windows and WSL, but they use different symlink mechanisms
+1. **Nested symlink nodes**: Developer Mode or Admin is required when a directory item contains nested links (those nodes are copied as symlinks)
+2. **Leftover symlink tests**: Developer Mode or Admin is still required for tests that create symlink fixtures
+3. **Git leftover symlinks**: May need explicit Git configuration if old blf symlinks remain
+4. **Some antivirus software**: May still inspect or delay many small file copies
+5. **WSL vs Native**: The tool works in both native Windows and WSL; copies are ordinary files in both
 
 ## WSL (Windows Subsystem for Linux)
 
@@ -225,20 +200,18 @@ If you're using WSL, the tool works exactly like on Linux:
 ```bash
 # In WSL, no special permissions needed
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
-blf link sync
+blf daemon start
 ```
 
-**Note:** Symlinks created in WSL may not be accessible from Windows Explorer, and vice versa.
+Copies created in WSL are regular files and are visible from Windows Explorer.
 
 ## Recommendations for Windows Users
 
-1. **Enable Developer Mode** - Required for non-elevated symlink creation
-2. **Use WSL** - If you're comfortable with Linux, WSL provides a Unix-like experience
-3. **Use Forward Slashes** - In config.yml for better cross-platform compatibility
-4. **Smoke-test First** - Try with a small test project before using on real projects
+1. **Use Forward Slashes** - In config.yml for better cross-platform compatibility
+2. **Smoke-test First** - Try with a small test project before using on real projects
+3. **Developer Mode** - Not needed for ordinary copies; enable it when a tree contains nested links, or if you run the pytest suite
 
 ## Further Reading
 
-- [Microsoft: Symbolic Links](https://docs.microsoft.com/en-us/windows/win32/fileio/symbolic-links)
-- [Python pathlib on Windows](https://docs.python.org/3/library/pathlib.html#pathlib.Path.symlink_to)
-- [Git for Windows: Symbolic Links](https://github.com/git-for-windows/git/wiki/Symbolic-Links)
+- [Python pathlib on Windows](https://docs.python.org/3/library/pathlib.html)
+- [Git for Windows: Symbolic Links](https://github.com/git-for-windows/git/wiki/Symbolic-Links) (leftover conversion / tests only)

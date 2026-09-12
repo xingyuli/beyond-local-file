@@ -182,9 +182,9 @@ Templates allow machine-specific customization:
 ### Core Concepts
 
 - **Managed projects:** Central location containing your local dev files
-- **Target projects:** Your actual project directories where files are synced
-- **Subpath selection:** Choose specific files/directories to sync
-- **Copy strategy:** Physical copies for tools that don't follow symlinks
+- **Target projects:** Your actual project directories where files are projected as copies
+- **Subpath selection:** Choose specific files/directories to project
+- **Daemon runtime:** One process copies, observes, and applies mapping changes
 - **Git exclude automation:** Automatically updates `.git/info/exclude`
 
 ### Typical Workflow
@@ -196,8 +196,8 @@ project-a: /Users/username/workspace/project-a
 project-b: /Users/username/workspace/project-b
 EOF
 
-# Sync files
-blf link sync
+# Start the daemon (projects copies and keeps them live)
+blf daemon start
 
 # Check status
 blf link check
@@ -216,20 +216,12 @@ project-b:
   - /Users/username/workspace/project-b
   - /Users/username/workspace/project-b-fork
 
-# Selective subpaths
+# Selective subpaths (files and directories are copies)
 project-c:
   target: /Users/username/workspace/project-c
   subpath:
     - .kiro/hooks
     - .vscode/settings.json
-
-# Copy mode for tool compatibility
-project-d:
-  target: /Users/username/workspace/project-d
-  subpath:
-    - .kiro/hooks                    # symlink (default)
-    - path: .kiro/steering/rules.md  # physical copy
-      copy: true
 ```
 
 ### Strengths
@@ -237,7 +229,7 @@ project-d:
 - Focused on per-project development files
 - Centralized configuration for all projects
 - Automatic Git exclude management
-- Supports both symlinks and physical copies
+- Physical copies only (files and directories), so tools that refuse workspace-escape can read them
 - Subpath selection for granular control
 - Simple and lightweight
 - No version control overhead
@@ -249,15 +241,15 @@ project-d:
 - No templating features
 - No encryption or secrets management
 - No built-in remote sync (intentionally)
-- Copy mode only supports single files, not directories
-- Windows support tested on Windows 10 (Developer Mode or Admin still required for symlinks)
+- Requires a running daemon (`blf daemon start`); shells fail if it is down
+- Windows support tested on Windows 10 (Developer Mode not required for copy projections)
 
 ### When to Use beyond-local-file
 
 - Managing local development files across multiple projects
 - Files that shouldn't be committed to Git (HTTP client configs, AI agent hooks, task runner configs)
 - Need automatic Git exclude handling
-- Tools that don't follow symlinks (copy mode)
+- Tools that refuse workspace-escape (physical copies stay inside the target project)
 - Different project layouts requiring flexible subpath selection
 
 ---
@@ -273,7 +265,7 @@ project-d:
 | **Templating** | None | Go templates for customization | None |
 | **Secrets management** | Manual | Password managers + encryption | Not applicable |
 | **Git integration** | Manual `.gitignore` | Manages dotfiles in Git | Auto Git exclude updates |
-| **Link strategy** | Symlinks only | Copies files to target | Symlinks + physical copies |
+| **Link strategy** | Symlinks only | Copies files to target | Physical copies only (daemon runtime) |
 | **Complexity** | Simple | Feature-rich | Minimal |
 | **Learning curve** | Low | Medium-High | Low |
 | **Cross-platform** | Unix-like (Linux, macOS) | Yes (Linux, macOS, Windows) | Yes (macOS, Linux, Windows 10 tested) |
@@ -308,14 +300,14 @@ project-d:
 
 ### Example 3: AI Agent Configuration
 
-**Scenario:** You use Kiro AI assistant and want to share hooks and steering documents across multiple projects. Some tools don't follow symlinks.
+**Scenario:** You use Kiro AI assistant and want to share hooks and steering documents across multiple projects. Kiro refuses workspace paths that resolve outside the project.
 
 **Best choice:** **beyond-local-file**
 
 **Why:**
 - Per-project configuration files
-- Copy mode for tools that don't follow symlinks
-- Subpath selection (only sync specific hooks)
+- Physical copies stay inside the target workspace (files and directories)
+- Subpath selection (only project specific hooks)
 - Automatic Git exclude updates
 
 ### Example 4: Development Container Dotfiles
@@ -364,7 +356,7 @@ Example setup:
 1. Create a managed projects directory
 2. Move project-specific files from Stow packages
 3. Create `config.yml` mapping projects to targets
-4. Run `blf link sync`
+4. Run `blf daemon start`
 5. Keep Stow for `$HOME` dotfiles
 
 ### From chezmoi to beyond-local-file
@@ -375,7 +367,7 @@ Example setup:
 1. Extract per-project files from chezmoi source directory
 2. Create managed projects directory structure
 3. Create `config.yml` with project mappings
-4. Run `blf link sync`
+4. Run `blf daemon start`
 5. Keep chezmoi for `$HOME` dotfiles
 
 ### From Shell Scripts to beyond-local-file
@@ -383,11 +375,11 @@ Example setup:
 **When to migrate:** If you have custom scripts for syncing files across projects.
 
 **Benefits:**
-- Built-in status checking and conflict detection
+- Built-in status checking and live hub/fan-out
 - Automatic Git exclude management
 - Cross-platform support
-- Copy mode for tool compatibility
-- No need to maintain sync logic
+- Physical copies for tools that refuse workspace-escape
+- No need to maintain copy logic
 
 ---
 

@@ -1,8 +1,8 @@
-"""Beyond Local File - A CLI tool for managing symlinks across projects.
+"""Beyond Local File - A CLI tool for projecting local files as copies.
 
-This package provides a command-line interface for synchronizing files and
-directories from managed projects to target locations using symlinks, with
-automatic git exclude management.
+This package provides a command-line interface for projecting files and
+directories from managed projects into target locations as physical copies,
+with automatic git exclude management and a live daemon runtime.
 """
 
 from importlib.metadata import PackageNotFoundError, version

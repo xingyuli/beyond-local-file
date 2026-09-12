@@ -55,10 +55,11 @@ New to beyond-local-file? Start here:
 |------|---------------|
 | Install the tool | [Installation](../README.md#installation) |
 | Create first config | [Quick Start](../README.md#quick-start) |
-| Sync specific files only | [Configuration Reference](configuration-reference.md#format-3-selective-subpaths) |
+| Project specific files only | [Configuration Reference](configuration-reference.md#subpath-mapping) |
+| Start the daemon | [CLI Reference](cli-reference.md#daemon-start--start-the-runtime) |
 | Check link status | [CLI Reference](cli-reference.md#link-check--verify-status) |
 | Set up tab completion | [Shell Completion](shell-completion.md) |
-| Enable Windows support | [Windows Support](windows-support.md#requirements) |
+| Use on Windows | [Windows Support](windows-support.md) |
 | Run tests | [Development Guide](development.md#running-tests) |
 
 ## Documentation Structure

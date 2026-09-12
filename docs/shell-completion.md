@@ -1,6 +1,6 @@
 # Shell Completion
 
-`beyond-local-file` supports tab completion for `PROJECT_NAME` arguments in `link sync` and `link check`. Completions are read dynamically from the active config file, respecting `--config` and `~/.blfrc`.
+`beyond-local-file` supports tab completion for `PROJECT_NAME` arguments in `link check`. Completions are read dynamically from the active config file, respecting `--config` and `~/.blfrc`.
 
 ## Before You Start: the `blf` Alias
 
@@ -53,7 +53,7 @@ Fish resolves aliases transparently, so no extra step is needed.
 Open a new terminal after setup, then press `<TAB>` after a command that accepts `PROJECT_NAME`:
 
 ```bash
-blf link sync <TAB>       # shows: project-a  project-b  project-c
+blf link check <TAB>      # shows: project-a  project-b  project-c
 blf link check pro<TAB>   # narrows to names starting with "pro"
 ```
 

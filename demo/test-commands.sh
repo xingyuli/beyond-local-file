@@ -35,18 +35,18 @@ cat demo-workspace/my-dev-files/config.yml > /dev/null 2>&1
 echo "   ✅ Config file readable"
 echo ""
 
-# Test sync command
-echo "5️⃣  Testing sync command..."
+# Test daemon start
+echo "5️⃣  Testing daemon start..."
 cd demo-workspace/my-dev-files
-beyond-local-file symlink sync > /dev/null 2>&1
-echo "   ✅ Sync command works"
+beyond-local-file --config config.yml daemon start > /dev/null 2>&1
+echo "   ✅ Daemon started"
 cd ../..
 echo ""
 
-# Test symlink verification
-echo "6️⃣  Testing symlink verification..."
-ls -la demo-workspace/target-project/ | grep '^l' > /dev/null 2>&1
-echo "   ✅ Symlinks created"
+# Test copy verification
+echo "6️⃣  Testing copy verification..."
+test -f demo-workspace/target-project/test.http
+echo "   ✅ Copies created"
 echo ""
 
 # Test git exclude
@@ -58,7 +58,7 @@ echo ""
 # Test check command
 echo "8️⃣  Testing check command..."
 cd demo-workspace/my-dev-files
-beyond-local-file symlink check > /dev/null 2>&1
+beyond-local-file --config config.yml link check > /dev/null 2>&1
 echo "   ✅ Check command works"
 cd ../..
 echo ""

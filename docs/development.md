@@ -52,8 +52,8 @@ With the alias configured, you can use `blf_dev` from any directory:
 
 ```bash
 cd /path/to/your/managed-projects
+blf_dev daemon start
 blf_dev link check
-blf_dev link sync
 ```
 
 ### Why This Approach?
@@ -97,7 +97,7 @@ uv run pytest --cov=beyond_local_file
 uv run pytest -v
 ```
 
-The suite is intended to pass on macOS, Linux, and Windows 10. Property tests share filters in `tests/path_strategies.py` so Hypothesis does not generate Windows-reserved names (`NUL`, `CON`, `COM1`, …). On Windows, enable Developer Mode (or use an elevated shell) before running tests that create symlinks.
+The suite is intended to pass on macOS, Linux, and Windows 10. Property tests share filters in `tests/path_strategies.py` so Hypothesis does not generate Windows-reserved names (`NUL`, `CON`, `COM1`, …). Ordinary copy projections do not need Developer Mode. On Windows, enable Developer Mode (or use an elevated shell) when a directory item contains nested symlink nodes, and before running leftover tests that still create symlink fixtures.
 
 ## Code Quality
 
@@ -150,15 +150,18 @@ beyond-local-file/
 │       ├── config.py                # Configuration handling
 │       ├── options.py               # StrEnum definitions for CLI options
 │       ├── link_strategy_protocol.py # Protocol definitions and result types
-│       ├── symlink_manager.py       # Symlink strategy implementation
-│       ├── copy_manager.py          # Copy strategy implementation
-│       ├── sync_state.py            # Copy strategy state tracking
+│       ├── symlink_manager.py       # Leftover symlink conversion (not a user strategy)
+│       ├── copy_manager.py          # Copy projections
+│       ├── sync_state.py            # Copy hash / baseline tracking
 │       ├── git_manager.py           # Git exclude management
 │       ├── project_processor.py     # Config loading and ProjectProcessor orchestrator
 │       ├── operations/
 │       │   ├── base.py              # CmdOperation ABC
-│       │   ├── link_sync.py         # SyncOperation + LinkSyncFormatter
-│       │   └── link_check.py        # CheckOperation + check formatters
+│       │   ├── daemon.py            # daemon start|stop|status|logs|reload
+│       │   ├── link_check.py        # CheckOperation + check formatters
+│       │   ├── revlink.py           # revlink create / restore
+│       │   └── remove.py            # remove operation
+│       ├── daemon/                  # Runtime process, catch-up, live observe
 │       └── model/
 │           ├── config.py            # Config models (YAML structure)
 │           ├── processing.py        # Processing models (execution)

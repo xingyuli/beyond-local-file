@@ -15,7 +15,7 @@
 
 ## Introduction
 
-The beyond-local-file system manages different link strategies (symlink, copy, etc.) for synchronizing files between managed projects and target locations. The architecture follows three core design patterns:
+As of 0.5.0, copy is the only projection. Symlink is not a user-facing link strategy; leftover blf symlinks are converted on daemon catch-up. The architecture still follows three core design patterns:
 
 1. **Model Separation**: Configuration models (YAML structure) vs Processing models (execution structure)
 2. **Divide-and-Conquer**: Partition items by strategy, delegate to specialized managers
@@ -248,7 +248,7 @@ When creating a new operation:
 | CopyManager | `src/beyond_local_file/copy_manager.py` |
 | Orchestration & Config Loading | `src/beyond_local_file/project_processor.py` |
 | Operation Base Class | `src/beyond_local_file/operations/base.py` |
-| link sync (operation + formatter) | `src/beyond_local_file/operations/link_sync.py` |
+| daemon runtime | `src/beyond_local_file/daemon/` and `src/beyond_local_file/operations/daemon.py` |
 | link check (operation + formatters) | `src/beyond_local_file/operations/link_check.py` |
 | CLI | `src/beyond_local_file/cli.py` |
 

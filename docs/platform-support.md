@@ -20,12 +20,12 @@ beyond-local-file is designed to work across all major operating systems.
 |----------|--------|-------|
 | **macOS** | ✅ Tested & Supported | No special configuration needed |
 | **Linux** | ✅ Tested & Supported | No special configuration needed |
-| **Windows 10** | ✅ Tested & Supported | Requires Developer Mode or Admin privileges for symlinks |
-| **Windows 11** | ✅ Supported | Same symlink requirements as Windows 10; not separately cross-tested |
-| **Windows 7/8** | ⚠️ Implemented, Not Tested | Should work with Administrator privileges |
+| **Windows 10** | ✅ Tested & Supported | Copy projections; Developer Mode only when a tree contains nested links |
+| **Windows 11** | ✅ Supported | Same as Windows 10; not separately cross-tested |
+| **Windows 7/8** | ⚠️ Implemented, Not Tested | Copy projections should work without elevation |
 | **WSL** | ✅ Should Work | Works like native Linux |
 
-**Note:** Native Windows 10 has been cross-tested (full test suite). Symlink creation still needs Developer Mode (Windows 10 Build 1703+) or an elevated shell. Windows 11 is expected to behave the same; feedback is welcome.
+**Note:** Native Windows 10 has been cross-tested (full test suite). The projection path is a physical copy, so Developer Mode is not required for ordinary files and directories. Enable it (Windows 10 Build 1703+) or use an elevated shell when a directory item contains nested symlink nodes, or for leftover symlink tests. Windows 11 is expected to behave the same; feedback is welcome.
 
 ## Quick Start by Platform
 
@@ -37,41 +37,39 @@ uv tool install git+https://github.com/xingyuli/beyond-local-file.git
 
 # Use immediately
 cd ~/my-dev-files
-blf link sync
+blf daemon start
+blf link check
 ```
 
 ### Windows 10/11
 
 ```powershell
-# 1. Enable Developer Mode (one-time)
-#    Settings → Update & Security → For developers → Developer Mode
-
-# 2. Install
+# 1. Install
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
 
-# 3. Use
+# 2. Use
 cd C:\Users\YourName\my-dev-files
-blf link sync
+blf daemon start
+blf link check
 ```
+
+Developer Mode is not required for ordinary copy projections. Enable it when a directory item contains nested symlink nodes, or if you run leftover symlink tests.
 
 ### WSL (Windows Subsystem for Linux)
 
 ```bash
 # Works exactly like Linux
 uv tool install git+https://github.com/xingyuli/beyond-local-file.git
-blf link sync
+blf daemon start
 ```
 
 ## Platform-Specific Details
 
-### Symbolic Link Creation
+### Copy Projections
 
-The tool uses Python's `pathlib.Path.symlink_to()` which:
+The tool writes regular files and directories at the projection path. That works out of the box on macOS, Linux, and Windows. Symlink is not a link strategy. Nested symlink nodes inside a directory item are copied as symlinks (venv interpreters); following them is a bug.
 
-- **macOS/Linux**: Works out of the box, no special permissions needed
-- **Windows**: Requires either:
-  - Developer Mode enabled (Windows 10 Build 1703+), or
-  - Administrator privileges (older versions)
+Leftover blf symlinks from older versions are converted to copies on the first daemon catch-up. Creating those test fixtures — or copying nested links — on Windows still needs Developer Mode or Administrator privileges.
 
 ### Path Handling
 
@@ -97,15 +95,15 @@ Internally, relative item paths written to `config.yml` subpath lists and `.git/
 
 ### Windows-Specific
 
-1. **Permissions**: Requires Developer Mode or Admin (unlike Unix)
-2. **Git Integration**: May need `git config --global core.symlinks true`
-3. **Antivirus**: Some antivirus software may block symlink creation
+1. **Nested symlink nodes**: Developer Mode or Admin is required when a directory item contains nested links
+2. **Leftover symlink tests**: Developer Mode or Admin is still required for tests that create symlink fixtures
+3. **Git leftover symlinks**: May need `git config --global core.symlinks true` if old blf symlinks remain
+4. **Antivirus**: Some antivirus software may inspect many small file copies
 
 ### All Platforms
 
-1. **Absolute Paths**: Symlinks use absolute paths (by design)
-2. **Git Tracking**: Symlinks should not be committed to Git
-3. **Cross-Platform**: Symlinks created on one OS may not work on another
+1. **Git Tracking**: Projected copies should not be committed to Git
+2. **Daemon required**: Shells (`link check`, `revlink`, `remove`) fail if the daemon is down
 
 ## Testing
 
@@ -118,7 +116,7 @@ uv run pytest
 # Full suite has been run on macOS, Linux, and Windows 10
 ```
 
-**Windows Testing Status:** The full pytest suite (including Hypothesis property tests) has been run successfully on Windows 10 with Developer Mode enabled. Property-test path generators filter Windows reserved device names (`NUL`, `CON`, `COM1`, …) so the suite stays portable. Automated CI still runs on the publish workflow only — local or contributor runs on Windows remain useful.
+**Windows Testing Status:** The full pytest suite (including Hypothesis property tests) has been run successfully on Windows 10. Property-test path generators filter Windows reserved device names (`NUL`, `CON`, `COM1`, …) so the suite stays portable. Automated CI still runs on the publish workflow only — local or contributor runs on Windows remain useful. Enable Developer Mode before running leftover symlink fixture tests, and when projecting directory items that contain nested links.
 
 ## Documentation
 
@@ -142,9 +140,7 @@ If you encounter platform-specific issues:
 
 Potential enhancements for better cross-platform support:
 
-- [ ] Automatic detection of Windows Developer Mode status
-- [ ] Better error messages for Windows permission issues
-- [ ] Optional hard links or junctions on Windows (as fallback)
+- [x] Copy-only projections (Developer Mode not required for ordinary copies; still needed for nested links)
 - [x] Cross-platform path normalization for config/exclude/display paths (`as_posix()`, UTF-8 I/O, resolved CWD)
 - [ ] CI/CD testing on Windows, macOS, and Linux
 

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from tests.daemon_support import invoke_with_daemon
 
-_HUB_A = "quvanai-qimiolab"
-_HUB_B = "some-other-hub"
+_HUB_A = "shared-hooks"
+_HUB_B = "shared-settings"
 
 
 def _write_item(root: Path, name: str, content: str) -> None:

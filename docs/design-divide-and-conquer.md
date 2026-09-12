@@ -21,7 +21,9 @@
 
 ## Overview
 
-This document describes the architecture for managing different link strategies (symlink, copy, etc.). The design follows a **divide-and-conquer** approach with **protocol-based composition** to enable clean separation of concerns and easy extensibility.
+> **Note (0.5.0):** Copy is the only projection. This document describes the pre-0.5.0 strategy-partition architecture and leftover symlink conversion. Symlink is not a user-facing link strategy.
+
+This document describes the architecture for managing link operations. The design follows a **divide-and-conquer** approach with **protocol-based composition** to enable clean separation of concerns and easy extensibility.
 
 ### Key Concepts
 

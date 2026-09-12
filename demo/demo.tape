@@ -56,25 +56,25 @@ Sleep 500ms
 Enter
 Sleep 1s
 
-# Run sync command
-Type "# Sync creates links automatically"
+# Start the daemon
+Type "# Daemon projects copies automatically"
 Sleep 1s
 Enter
-Type "beyond-local-file link sync"
+Type "beyond-local-file --config config.yml daemon start"
 Sleep 500ms
 Enter
 Sleep 5s
 Enter
 
 # Check the results
-Type "# Verify links were created"
+Type "# Verify copies were created"
 Sleep 1s
 Enter
 Type "cd ../target-project"
 Sleep 500ms
 Enter
 Sleep 500ms
-Type "ls -la | grep '^l'"
+Type "ls -la"
 Sleep 500ms
 Enter
 Sleep 3s
@@ -97,7 +97,7 @@ Enter
 Type "cd ../my-dev-files"
 Sleep 500ms
 Enter
-Type "beyond-local-file link check"
+Type "beyond-local-file --config config.yml link check"
 Sleep 500ms
 Enter
 Sleep 4s

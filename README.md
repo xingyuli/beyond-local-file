@@ -2,7 +2,7 @@
 
 ![Beyond Local File](docs/assets/banner-960x540.png)
 
-Sync your local dev files across projects using symbolic links — without committing them to Git.
+Project your local dev files across projects as physical copies — without committing them to Git.
 
 ## Table of Contents
 
@@ -29,21 +29,21 @@ You want them in your project directory — your editor, your AI tools, your tas
 expect them there — but not in the repository.
 
 `beyond-local-file` manages these files centrally and projects them into your target projects
-via symbolic links (or physical copies where symlinks aren't supported). It also automatically
-adds those links to each project's Git exclude list, so Git never sees them.
+as physical copies (files and directories). It also automatically adds those projections to
+each project's Git exclude list, so Git never sees them.
 
 A few concrete things it handles that are hard to do with a shell script:
 
-- Syncing an entire directory subtree (e.g., `.kiro/hooks/`) into multiple projects at once
-- Copying specific files physically instead of symlinking, for tools that don't follow symlinks
-- Detecting when a physical copy is out of sync with the source, with conflict detection
+- Projecting an entire directory subtree (e.g., `.kiro/hooks/`) into multiple projects at once
+- Keeping each target project's copies live while a daemon observes the hub and fans updates out
+- Isolating a replica that loses an update (out-of-sync) instead of overwriting it
 - Checking status across all managed projects at a glance (`blf link check`)
 
 ## 🎬 Quick Demo
 
 ![Demo](demo/demo.gif)
 
-*Watch beyond-local-file in action: install from GitHub, sync files, create symlinks, and manage Git excludes automatically.*
+*Watch beyond-local-file in action: install from GitHub, project files into a target, and manage Git excludes automatically.*
 
 ## Why not GNU Stow or chezmoi?
 
@@ -52,7 +52,7 @@ A few concrete things it handles that are hard to do with a shell script:
 - **Stow** uses a package-based approach with CLI parameters to create symlinks from a stow directory to `$HOME`.
 - **chezmoi** is a comprehensive dotfiles manager with templating, encryption, password manager integration, and Git-based sync across machines.
 
-**beyond-local-file** is designed for a different use case: per-project development files that shouldn't be committed to Git. Instead of managing `$HOME` dotfiles, it syncs local dev files (HTTP client configs, AI hooks, task runner configs) across multiple projects using a centralized `config.yml`. It handles Git excludes automatically and supports physical copies for tools that don't follow symlinks.
+**beyond-local-file** is designed for a different use case: per-project development files that shouldn't be committed to Git. Instead of managing `$HOME` dotfiles, it projects local dev files (HTTP client configs, AI hooks, task runner configs) across multiple projects using a centralized `config.yml`. It handles Git excludes automatically. Every projection is a physical copy, so tools that refuse workspace-escape (Kiro) can read the files inside the target project.
 
 **Use Stow/chezmoi for:** Personal dotfiles in `$HOME`  
 **Use beyond-local-file for:** Local dev files across multiple projects with different layouts
@@ -80,10 +80,12 @@ For a detailed comparison with use case examples, see [docs/alternatives-compari
 └── project-b/
     └── dev-config.yml
 
-# Target Projects (where symlinks are created)
+# Target Projects (where physical copies are projected)
 ~/workspace/project-a/
-└── test.http -> ~/my-dev-files/project-a/test.http
+└── test.http    # regular file, copied from ~/my-dev-files/project-a/test.http
 ```
+
+`link` is the metaphor: a managed item is visible in a target project. The runtime is a daemon that copies, observes, and applies mapping changes. Each target project holds its own tree; there is no live inode sharing.
 
 ## Installation
 
@@ -143,11 +145,11 @@ project-a:
 project-b: /Users/username/workspace/project-b
 ```
 
-2. Sync symlinks:
+2. Start the daemon (the runtime that projects copies and keeps them live):
 
 ```bash
 cd ~/my-dev-files
-blf link sync
+blf daemon start
 ```
 
 3. Check status:
@@ -156,9 +158,15 @@ blf link sync
 blf link check
 ```
 
+`link check`, `revlink create` / `restore`, and `remove` talk to the daemon. If it is down they fail with:
+
+```
+Error: daemon is not running. Start it with: blf daemon start
+```
+
 ## Configuration
 
-The `config.yml` file maps project names to target paths. Four formats are supported:
+The `config.yml` file maps project names to target paths. Three formats are supported:
 
 ### 1. Simple string — single target
 
@@ -174,7 +182,7 @@ project-b:
   - /Users/username/workspace/project-b-fork
 ```
 
-### 3. Selective subpaths — sync specific items only
+### 3. Selective subpaths — project specific items only
 
 ```yaml
 project-c:
@@ -184,26 +192,15 @@ project-c:
     - .vscode/settings.json
 ```
 
-Only the listed subpaths are synced. Intermediate directories are created automatically.
-
-### 4. Copy strategy — physical files for tool compatibility
-
-Some tools don't recognize symlinks. Use `copy: true` for files that must be physical:
-
-```yaml
-project-d:
-  target: /Users/username/workspace/project-d
-  subpath:
-    - .kiro/hooks                    # symlink (default)
-    - path: .kiro/steering/rules.md  # physical copy
-      copy: true
-```
-
-**Copy behavior:** Bidirectional sync with conflict detection. Changes in either location are detected and can be synced.
-
-**Limitation:** Copy mode only supports single files, not directories. This is intentional — symlinks remain the primary workflow.
+Only the listed subpaths are projected. Intermediate directories are created automatically. Files and directories are both physical copies.
 
 **Multiple targets:** The `target` key accepts a string or list in all formats.
+
+`copy: true` is not a valid option. Every projection is already a copy; leftover `copy: true` in a mapping or subpath entry is rejected at config load:
+
+```
+Unsupported option 'copy: true' (project: my-project, mapping: 1, key: copy)
+```
 
 For detailed examples, see [docs/configuration-reference.md](docs/configuration-reference.md).
 
@@ -227,22 +224,30 @@ See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order)
 
 | Command | Description |
 |---------|-------------|
-| `blf link sync [PROJECT]` | Create symlinks or copies in target directories |
-| `blf link check [PROJECT]` | Check link status and Git excludes |
-| `blf revlink create PATH` | Adopt an existing file or directory into the managed workflow |
-| `blf revlink restore PATH` | Dissolve a managed symlink and recover the real file |
+| `blf daemon start` | Start the background runtime that copies, observes, and applies mappings |
+| `blf daemon stop` | Stop the running daemon |
+| `blf daemon status` | Show whether the daemon is running, plus out-of-sync paths and held copies |
+| `blf daemon logs` | Follow the daemon log (Ctrl-C stops following, not the daemon) |
+| `blf daemon reload` | Apply external mapping edits from the config file |
+| `blf link check [PROJECT]` | Check copy projections and Git excludes |
+| `blf revlink create PATH` | Adopt an existing file or directory as a copy projection |
+| `blf revlink restore PATH` | Stop managing PATH and leave the target file in place |
 | `blf remove PATH` | Permanently remove a managed item and its validated projections |
 | `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
 
-### Progress Tracking
+There is no `link sync`. The daemon is the runtime.
 
-When operations are interrupted (e.g., user chooses "Abort" during prompts), the tool displays progress information:
+### Live updates, out-of-sync, and held copies
 
-```
-Operation aborted: 5/10 items processed
-```
+The managed project is the hub. After a successful hub apply, the daemon fans the generation out to other in-sync replicas of that managed project except the source (the tree that already has the bytes).
 
-This helps you understand how much work was completed before the interruption.
+If two target projects edit the same path, the first apply wins. The loser is **out-of-sync** for that path: later fan-out skips it, and further edits from it are discarded. The live path on the hub and on in-sync replicas keeps moving.
+
+A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `.blf-held/` in the managed project (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `start` and `reload` warn and ask you to continue; 0.5.0 does not interview you to pick winners.
+
+### Mapping edits
+
+Edit `config.yml` by hand, then run `blf daemon start` (if the daemon is down) or `blf daemon reload` (if it is already up). Adds apply automatically. Removals print one plan and require confirmation; decline commits nothing. The daemon does not watch the config file.
 
 For full option details and usage examples, see [docs/cli-reference.md](docs/cli-reference.md).
 
@@ -262,16 +267,17 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ## Important Notes
 
-- Symbolic links use absolute paths to ensure correct targeting from different locations
-- Only use in local development environments; do not commit symbolic links to Git
-- If you move the source file location, re-run `sync`
-- The tool is designed to run from your managed projects directory
+- Every projection is a regular file or directory inside the target project
+- Leftover blf symlinks from older versions become copies on the first daemon catch-up
+- Only use in local development environments; do not commit projected copies to Git
+- If you move the managed project, restart the daemon so catch-up can rewrite projections
+- Shells (`link check`, `revlink`, `remove`) require a running daemon
 
 ## Platform Support
 
 Tested on macOS, Linux, and Windows 10. See [docs/platform-support.md](docs/platform-support.md) for details.
 
-On Windows, enable Developer Mode (Windows 10/11) or run with Administrator privileges so symlink creation is allowed. See [docs/windows-support.md](docs/windows-support.md) for setup instructions.
+Projections are copies, so Windows Developer Mode is not required for ordinary files and directories. Enable it when a directory item contains nested symlinks (venv interpreters). See [docs/windows-support.md](docs/windows-support.md) for path and install notes.
 
 ## Contributing
 
@@ -283,13 +289,13 @@ I maintain two managed-project repos with `beyond-local-file` — one for person
 projects (`viclau-local-files`, a private repo), one for company work. They're completely
 independent, each with its own `config.yml`, and the tool doesn't need to know about either.
 
-The company-scoped repo's most involved config entry syncs an entire AI-assisted development
+The company-scoped repo's most involved config entry projects an entire AI-assisted development
 environment into a backend project: Kiro hooks for code review, requirement breakdown, and
 weekly report generation; `.qoder` agent definitions, rules, and skills; `.vscode` settings;
 a `Taskfile.yml` with build and deploy tasks; and a structured `local-file/` directory that
-AI agents read and write into during development. Two of the Kiro steering documents are
-synced with `copy: true` instead of as symlinks, because Kiro reads those files directly and
-doesn't follow symbolic links — one config option, no manual copy workflow.
+AI agents read and write into during development. Those trees are physical copies, including
+directory items such as `.kiro/hooks`, so tools that refuse workspace-escape can read them
+inside the target workspace.
 
 The personal repo has a single entry: `beyond-local-file` itself. The tool manages its own
 development environment — a local task tracker, per-release archived changelogs, and an
