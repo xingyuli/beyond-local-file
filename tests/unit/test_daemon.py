@@ -277,6 +277,150 @@ def test_fresh_catch_up_copies_hub_trees_and_records_baseline(
     assert _baseline_path(config_path).is_file()
 
 
+def test_fresh_catch_up_preserves_nested_symlinks_in_directory_item(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """Nested symlinks inside a directory item stay symlinks on the replica."""
+    config_path, managed_dirs, target_dirs = daemon_workspace
+    managed = managed_dirs[0]
+    target = target_dirs[0]
+    bin_dir = managed / "nested" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    interpreter = bin_dir / "python3.14"
+    interpreter.symlink_to("/opt/homebrew/opt/python@3.14/bin/python3.14")
+    (bin_dir / "python").symlink_to("python3.14")
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+
+    copied_interpreter = target / "nested" / "venv" / "bin" / "python3.14"
+    copied_python = target / "nested" / "venv" / "bin" / "python"
+    assert copied_interpreter.is_symlink()
+    assert copied_python.is_symlink()
+    assert os.readlink(copied_interpreter) == "/opt/homebrew/opt/python@3.14/bin/python3.14"
+    assert os.readlink(copied_python) == "python3.14"
+
+
+def test_daemon_start_rejects_overlapping_items_on_one_target(
+    tmp_path: Path,
+    daemon_env: dict[str, str],
+) -> None:
+    """Two managed items on one target cannot share a path prefix."""
+    hub_a = tmp_path / "proj-a"
+    hub_b = tmp_path / "proj-b"
+    target = tmp_path / "target"
+    hub_a.mkdir()
+    hub_b.mkdir()
+    target.mkdir()
+    (hub_a / "local-file").mkdir()
+    (hub_a / "local-file" / "keep.txt").write_text("keep")
+    nested = hub_b / "local-file" / "devops"
+    nested.mkdir(parents=True)
+    (nested / "k8s.md").write_text("k8s")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "proj-a:",
+                f"  target: {target}",
+                "  subpath:",
+                "    - local-file",
+                "proj-b:",
+                f"  target: {target}",
+                "  subpath:",
+                "    - local-file/devops/k8s.md",
+                "",
+            ]
+        )
+    )
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 1, started.output
+    assert "overlapping items" in started.output
+    assert "proj-a" in started.output
+    assert "proj-b" in started.output
+    assert "local-file/devops/k8s.md" in started.output
+
+
+def test_daemon_start_rejects_overlapping_subpaths_in_one_project(
+    tmp_path: Path,
+    daemon_env: dict[str, str],
+) -> None:
+    """One managed project cannot declare nested items for the same target."""
+    hub = tmp_path / "proj-a"
+    target = tmp_path / "target"
+    hub.mkdir()
+    target.mkdir()
+    docs = hub / "docs"
+    docs.mkdir()
+    (docs / "readme.md").write_text("docs")
+    adr = docs / "adr"
+    adr.mkdir()
+    (adr / "0001.md").write_text("adr")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "proj-a:",
+                f"  target: {target}",
+                "  subpath:",
+                "    - docs",
+                "    - docs/adr",
+                "",
+            ]
+        )
+    )
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 1, started.output
+    assert "overlapping items" in started.output
+    assert "docs/adr" in started.output
+
+
+def test_daemon_start_allows_disjoint_items_from_two_projects_on_one_target(
+    tmp_path: Path,
+    daemon_env: dict[str, str],
+) -> None:
+    """Distinct item paths from two managed projects may share a target."""
+    hub_a = tmp_path / "proj-a"
+    hub_b = tmp_path / "proj-b"
+    target = tmp_path / "target"
+    hub_a.mkdir()
+    hub_b.mkdir()
+    target.mkdir()
+    vscode = hub_a / ".vscode"
+    vscode.mkdir()
+    (vscode / "settings.json").write_text("{}")
+    hooks = hub_b / ".kiro" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "hook.json").write_text("{}")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "proj-a:",
+                f"  target: {target}",
+                "  subpath:",
+                "    - .vscode",
+                "proj-b:",
+                f"  target: {target}",
+                "  subpath:",
+                "    - .kiro/hooks",
+                "",
+            ]
+        )
+    )
+
+    try:
+        started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+        assert started.exit_code == 0, started.output
+        assert (target / ".vscode" / "settings.json").read_text() == "{}"
+        assert (target / ".kiro" / "hooks" / "hook.json").read_text() == "{}"
+    finally:
+        _invoke(["--config", str(config_path), "daemon", "stop"], env=daemon_env)
+
+
 def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
     daemon_workspace: tuple[Path, list[Path], list[Path]],
     daemon_env: dict[str, str],

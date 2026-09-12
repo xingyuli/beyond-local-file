@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from beyond_local_file.config import ConfigUpdater
+from beyond_local_file.copy_manager import copy_projection
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import (
     REASON_CREATE_OVERWRITE,
@@ -636,9 +637,7 @@ class CreateOperation:
         destination before copying.  Always emits a progress message showing
         the source and destination paths before the copy begins.
 
-        For files, uses ``shutil.copy2`` to preserve metadata.  For
-        directories, uses ``shutil.copytree`` to recursively copy the entire
-        tree.
+        Copies files and directory trees while preserving nested symlink nodes.
 
         Args:
             dest: Derived destination path (``dest_root / rel_path``).
@@ -656,11 +655,7 @@ class CreateOperation:
 
         self.formatter.copying(self.source, dest)
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if self.source.is_dir():
-            shutil.copytree(self.source, dest)
-        else:
-            shutil.copy2(self.source, dest)
+        copy_projection(self.source, dest)
 
         return 0
 
@@ -738,16 +733,7 @@ class CreateOperation:
             src: Existing file or directory.
             dest: Destination path; parent directories are created.
         """
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            if dest.is_dir():
-                shutil.rmtree(dest)
-            else:
-                dest.unlink()
-        if src.is_dir():
-            shutil.copytree(src, dest)
-        else:
-            shutil.copy2(src, dest)
+        copy_projection(src, dest)
 
     def _fan_out(self, dest: Path) -> None:
         """Copy the hub item onto every non-source replica.
@@ -1009,8 +995,8 @@ class RestoreOperation:
         ``shutil.rmtree(source)``, which would follow the link and delete the
         managed copy.
 
-        After unlinking, the managed content is copied back using
-        ``shutil.copy2`` for files or ``shutil.copytree`` for directories.
+        After unlinking, the managed content is copied back, preserving nested
+        symlink nodes.
 
         Args:
             managed: Derived managed copy path (``dest_root / rel_path``)
@@ -1029,10 +1015,7 @@ class RestoreOperation:
 
         self.formatter.copying_back(managed, self.source)
 
-        if managed.is_dir():
-            shutil.copytree(managed, self.source)
-        else:
-            shutil.copy2(managed, self.source)
+        copy_projection(managed, self.source)
 
         return 0
 

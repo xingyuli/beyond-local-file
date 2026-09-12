@@ -262,3 +262,85 @@ def test_fan_out_does_not_write_replica_whose_disk_hash_is_not_expected_base(
     assert (target_a / "shared.txt").read_text() == "from-a"
     assert (target_b / "shared.txt").read_text() == "divergent"
     assert (target_b, "shared.txt") in live.out_of_sync
+
+
+def test_target_edit_applies_to_the_owning_hub_not_another_contributor(tmp_path: Path) -> None:
+    """A path change on a shared target writes the managed project that owns that item."""
+    hub_a = tmp_path / "proj-a"
+    hub_b = tmp_path / "proj-b"
+    target_shared = tmp_path / "target-shared"
+    target_a_only = tmp_path / "target-a-only"
+    for path in (hub_a, hub_b, target_shared, target_a_only):
+        path.mkdir()
+    (hub_a / "alpha.txt").write_text("alpha-0")
+    (hub_b / "beta.txt").write_text("beta-0")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "proj-a:",
+                f"  target: [{target_shared}, {target_a_only}]",
+                "  subpath:",
+                "    - alpha.txt",
+                "proj-b:",
+                f"  target: {target_shared}",
+                "  subpath:",
+                "    - beta.txt",
+                "",
+            ]
+        )
+    )
+    live = _live_sync(config_path)
+
+    (target_shared / "alpha.txt").write_text("alpha-from-target")
+    live.tick()
+
+    assert (hub_a / "alpha.txt").read_text() == "alpha-from-target"
+    assert (target_a_only / "alpha.txt").read_text() == "alpha-from-target"
+    assert (hub_b / "beta.txt").read_text() == "beta-0"
+
+    (target_shared / "beta.txt").write_text("beta-from-target")
+    live.tick()
+
+    assert (hub_b / "beta.txt").read_text() == "beta-from-target"
+    assert (hub_a / "alpha.txt").read_text() == "alpha-from-target"
+    assert (target_a_only / "alpha.txt").read_text() == "alpha-from-target"
+
+
+def test_fan_out_does_not_write_another_hubs_replica_with_the_same_item_name(tmp_path: Path) -> None:
+    """Fan-out stays inside the owning managed project's replicas."""
+    hub_a = tmp_path / "proj-a"
+    hub_b = tmp_path / "proj-b"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for path in (hub_a, hub_b, target_a, target_b):
+        path.mkdir()
+    (hub_a / "local-file").mkdir()
+    (hub_b / "local-file").mkdir()
+    (hub_a / "local-file" / "note.txt").write_text("a-0")
+    (hub_b / "local-file" / "note.txt").write_text("b-0")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "proj-a:",
+                f"  target: {target_a}",
+                "  subpath:",
+                "    - local-file",
+                "proj-b:",
+                f"  target: {target_b}",
+                "  subpath:",
+                "    - local-file",
+                "",
+            ]
+        )
+    )
+    live = _live_sync(config_path)
+
+    (target_a / "local-file" / "note.txt").write_text("a-from-target")
+    live.tick()
+
+    assert (hub_a / "local-file" / "note.txt").read_text() == "a-from-target"
+    assert (hub_b / "local-file" / "note.txt").read_text() == "b-0"
+    assert (target_b / "local-file" / "note.txt").read_text() == "b-0"
+    assert (target_b, "local-file/note.txt") not in live.out_of_sync

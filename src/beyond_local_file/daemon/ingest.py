@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from beyond_local_file.config import Config
+from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
 
@@ -129,6 +130,8 @@ def prepare_ingest(
         should commit. A ``None`` diff means there is nothing to apply.
     """
     file_projects, snapshot_projects = _load_file_and_snapshot(config_path)
+    if echo_item_path_overlaps(file_projects):
+        return 1, None, None, None
     if snapshot_projects is None or mappings_equal(file_projects, snapshot_projects):
         return 0, file_projects, snapshot_projects, None
     diff = classify(snapshot_projects, file_projects)
@@ -181,6 +184,8 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     file_projects, snapshot_projects = _load_file_and_snapshot(config_path)
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
+        return 1
+    if echo_item_path_overlaps(file_projects):
         return 1
     if mappings_equal(file_projects, snapshot_projects):
         return 0

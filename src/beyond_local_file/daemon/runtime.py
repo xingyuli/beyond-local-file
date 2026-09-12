@@ -8,6 +8,7 @@ from pathlib import Path
 from types import FrameType
 
 from beyond_local_file.config import Config
+from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
 
 from .catchup import run_catch_up
@@ -36,7 +37,10 @@ def run_worker(config_path: Path) -> int:
     signal.signal(signal.SIGINT, _handle)
 
     print("daemon worker starting", flush=True)
-    projects, trees = _catch_up_and_persist(config_path)
+    caught = _catch_up_and_persist(config_path)
+    if caught is None:
+        return 1
+    projects, trees = caught
     live = LiveSync(projects, trees)
 
     def _tick() -> None:
@@ -58,7 +62,17 @@ def run_worker(config_path: Path) -> int:
     return 0
 
 
-def _catch_up_and_persist(config_path: Path) -> tuple[dict[str, ConfigProject], BaselineTrees]:
+def _catch_up_and_persist(
+    config_path: Path,
+) -> tuple[dict[str, ConfigProject], BaselineTrees] | None:
+    """Catch up committed mappings, or abort when items overlap on a target.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        Projects and baseline trees, or None when start must not continue.
+    """
     cfg = Config(config_path)
     cfg.load()
     file_projects = cfg.get_config_projects()
@@ -75,6 +89,9 @@ def _catch_up_and_persist(config_path: Path) -> tuple[dict[str, ConfigProject], 
     else:
         projects = file_projects
         print("catch-up: mapping snapshot matches config file", flush=True)
+
+    if echo_item_path_overlaps(projects):
+        return None
 
     trees = run_catch_up(projects, config_path.parent, load_baseline(config_path))
     save_baseline(config_path, trees)

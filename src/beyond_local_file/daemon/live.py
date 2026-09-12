@@ -49,9 +49,9 @@ class PathChange:
 @dataclass(frozen=True)
 class _WatchRoot:
     root: Path
-    hub: Path
     item_names: tuple[str, ...]
     is_hub: bool
+    item_hubs: dict[str, Path]
 
 
 class LiveSync:
@@ -105,17 +105,18 @@ class LiveSync:
                 if state_equal(old, new):
                     continue
                 kind = _classify(old, new)
+                owner = _owner_hub(watch, rel)
                 if self._is_oos(watch.root, rel):
-                    hub_now = scan_path_state(watch.hub, rel)
+                    hub_now = scan_path_state(owner, rel)
                     if state_equal(new, hub_now):
-                        self._clear_oos(watch.root, rel, watch.hub)
+                        self._clear_oos(watch.root, rel, owner)
                         continue
                     if kind != "delete":
                         continue
                 self._mailbox[(rel, str(watch.root))] = PathChange(
                     rel=rel,
                     replica=watch.root,
-                    hub=watch.hub,
+                    hub=owner,
                     kind=kind,
                     base_present=bool(old.get("present")),
                     base_hash=old.get("hash") if old.get("present") else None,
@@ -194,6 +195,8 @@ class LiveSync:
                 continue
             if not rel_in_items(change.rel, watch.item_names):
                 continue
+            if _owner_hub(watch, change.rel) != change.hub:
+                continue
             if self._is_oos(watch.root, change.rel):
                 continue
             if (change.rel, str(watch.root)) in self._mailbox:
@@ -266,25 +269,61 @@ class LiveSync:
         print(f"Held at {slot.as_posix()}", flush=True)
 
 
+def _owner_hub(watch: _WatchRoot, rel: str) -> Path:
+    """Return the managed project that owns *rel* on this watch root.
+
+    Args:
+        watch: Hub or replica watch.
+        rel: Path relative to the watch root.
+
+    Returns:
+        Hub directory for the unique item that covers *rel*.
+    """
+    for name in watch.item_names:
+        if rel == name or rel.startswith(f"{name}/"):
+            return watch.item_hubs[name]
+    return watch.root
+
+
+def _merge_watch(
+    current: _WatchRoot | None,
+    root: Path,
+    names: tuple[str, ...],
+    is_hub: bool,
+    item_hubs: dict[str, Path],
+) -> _WatchRoot:
+    """Union item names and owners onto one watch root.
+
+    Args:
+        current: Existing watch, or None.
+        root: Directory being watched.
+        names: Item names from one processing unit.
+        is_hub: True when *root* is a managed project.
+        item_hubs: Item name to hub directory.
+
+    Returns:
+        Combined watch root.
+    """
+    if current is None:
+        return _WatchRoot(root, names, is_hub, dict(item_hubs))
+    merged_names = tuple(sorted(set(current.item_names) | set(names)))
+    merged_hubs = dict(current.item_hubs)
+    merged_hubs.update(item_hubs)
+    return _WatchRoot(root, merged_names, is_hub, merged_hubs)
+
+
 def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
     hubs: dict[str, _WatchRoot] = {}
     replicas: dict[str, _WatchRoot] = {}
     for unit in translate_config_to_processing(projects):
         names = tuple(item.name for item in unit.items)
+        item_hubs = dict.fromkeys(names, unit.managed_project_path)
         hub_key = str(unit.managed_project_path)
-        hub = hubs.get(hub_key)
-        if hub is None:
-            hubs[hub_key] = _WatchRoot(unit.managed_project_path, unit.managed_project_path, names, True)
-        else:
-            merged = tuple(sorted(set(hub.item_names) | set(names)))
-            hubs[hub_key] = _WatchRoot(hub.root, hub.hub, merged, True)
+        hubs[hub_key] = _merge_watch(hubs.get(hub_key), unit.managed_project_path, names, True, item_hubs)
         replica_key = str(unit.target_project_path)
-        replica = replicas.get(replica_key)
-        if replica is None:
-            replicas[replica_key] = _WatchRoot(unit.target_project_path, unit.managed_project_path, names, False)
-        else:
-            merged = tuple(sorted(set(replica.item_names) | set(names)))
-            replicas[replica_key] = _WatchRoot(replica.root, replica.hub, merged, False)
+        replicas[replica_key] = _merge_watch(
+            replicas.get(replica_key), unit.target_project_path, names, False, item_hubs
+        )
     return sorted([*hubs.values(), *replicas.values()], key=lambda watch: str(watch.root))
 
 

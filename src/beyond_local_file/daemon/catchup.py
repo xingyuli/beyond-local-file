@@ -6,7 +6,7 @@ import os
 import shutil
 from pathlib import Path
 
-from beyond_local_file.copy_manager import CopyManager
+from beyond_local_file.copy_manager import CopyManager, copy_projection
 from beyond_local_file.held import HELD_DIR
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.processing import ProcessingUnit
@@ -166,21 +166,13 @@ def _apply_hub_state(source: Path, destination: Path, hub_state: PathState) -> N
 
 
 def replace_with_copy(source: Path, destination: Path) -> None:
-    """Replace *destination* with a copy of *source*.
+    """Replace *destination* with a copy of *source*, preserving symlink nodes.
 
     Args:
-        source: File or directory to copy.
+        source: File, directory, or symlink to copy.
         destination: Path that should become the copy.
     """
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_symlink() or destination.is_file():
-        destination.unlink()
-    elif destination.is_dir():
-        shutil.rmtree(destination)
-    if source.is_dir():
-        shutil.copytree(source, destination)
-    else:
-        shutil.copy2(source, destination)
+    copy_projection(source, destination)
 
 
 def remove_path(path: Path) -> None:

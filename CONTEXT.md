@@ -17,12 +17,12 @@ A single file or directory inside a managed project that is projected into one o
 _Avoid_: File, resource, artifact
 
 **Mapping**:
-A declared relationship between a managed project and one or more target projects, with optional subpaths governing which items are projected.
+A declared relationship between a managed project and one or more target projects, with optional subpaths governing which items are projected. Several managed projects may contribute to one target when their items do not overlap.
 _Avoid_: Configuration entry, rule, link definition
 
 **Link**:
-The abstraction that makes a managed item visible in a target project. A link is always realized as a physical copy; it is not a symlink.
-_Avoid_: Symlink, shortcut, alias, strategy
+The abstraction that makes a managed item visible in a target project. A link is always realized as a physical copy at the projection path; that path is not a symlink to the hub. Nested symlink nodes inside a directory item are copied as symlinks (venv interpreters, relative ``python`` → ``python3.14``).
+_Avoid_: Shortcut, alias, strategy
 
 **Projection**:
 The physical copy of a managed item that lives inside a target project.
@@ -65,7 +65,7 @@ At most one not-yet-applied path change per (path, replica). A later event from 
 _Avoid_: Debounce, batch, buffer, timeout
 
 **Fan-out**:
-After a successful hub apply, copy or delete that generation onto every in-sync replica except the source replica — the tree the change was observed on. The source already has the bytes.
+After a successful hub apply, copy or delete that generation onto every in-sync replica of the owning managed project except the source replica — the tree the change was observed on. The source already has the bytes. Replicas of other managed projects are not written, even when they use the same item name.
 _Avoid_: Broadcast, replicate, push, echo
 
 **Generation**:
@@ -111,3 +111,11 @@ _Avoid_: Adopt, import, reverse sync
 **Git exclude**:
 An entry in a target project's `.git/info/exclude` that prevents Git from tracking a projected item. The tool maintains these entries automatically alongside projections.
 _Avoid_: Gitignore entry, ignore rule
+
+**Contribution source**:
+The managed project that owns an item on a target. Derived at runtime from committed mappings after item discovery. Not persisted. A target path belongs to the unique item whose name equals that path or is a prefix of it; that item belongs to one managed project.
+_Avoid_: Overlay owner, source index, persisted owner
+
+**Item overlap**:
+Two items on the same target whose names are equal or one is a path prefix of the other (``local-file`` and ``local-file/devops/k8s.md``). Illegal across managed projects and within one project's subpaths. Start and reload fail and name both projects and both paths. Distinct siblings on one target (``.vscode`` and ``.kiro/hooks``) are allowed.
+_Avoid_: Collision, conflict, duplicate mapping
