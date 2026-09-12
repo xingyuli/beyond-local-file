@@ -107,9 +107,9 @@ def test_no_project_message_includes_hint() -> None:
 
 
 def test_returns_error_when_multiple_projects_match() -> None:
-    """When _resolve_project_from_cwd returns a list, the result is a RevlinkResolveError.
+    """Create without a named project still fails when several hubs target CWD.
 
-    The message must mention 'Ambiguous' and include all project names.
+    Restore/remove pass rel_path and resolve by contribution source instead.
     """
     project_a = ConfigProject(
         managed_project_name="project-a",
@@ -227,3 +227,79 @@ def test__resolve_project_from_cwd_called_with_correct_args() -> None:
         resolve_revlink_context(config=None, cwd=_CWD)
 
     mock_resolve.assert_called_once_with(projects, _CWD)
+
+
+def test_project_name_selects_among_multiple_cwd_matches() -> None:
+    """An explicit project_name that still targets CWD wins over CWD ambiguity."""
+    project_a = _make_project(name="project-a")
+    project_b = ConfigProject(
+        managed_project_name="project-b",
+        managed_project_path=Path("/managed-b"),
+        mappings=[Mapping(targets=[_CWD], subpaths=None, copy_paths=None)],
+    )
+    load_result = ConfigLoadResult(
+        projects={"a": project_a, "b": project_b},
+        config_file=_CONFIG_PATH,
+    )
+
+    with (
+        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(
+            "beyond_local_file.project_processor._resolve_project_from_cwd",
+            return_value=[project_a, project_b],
+        ),
+    ):
+        result = resolve_revlink_context(config=None, cwd=_CWD, project_name="project-b")
+
+    assert isinstance(result, RevlinkContext)
+    assert result.project_name == "project-b"
+    assert result.managed_project_path == Path("/managed-b")
+
+
+def test_rel_path_selects_contribution_owner() -> None:
+    """Restore/remove pick the unique item owner among projects targeting CWD."""
+    project_a = ConfigProject(
+        managed_project_name="project-a",
+        managed_project_path=Path("/managed-a"),
+        mappings=[Mapping(targets=[_CWD], subpaths=[".env"], copy_paths=None)],
+    )
+    project_b = ConfigProject(
+        managed_project_name="project-b",
+        managed_project_path=Path("/managed-b"),
+        mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"], copy_paths=None)],
+    )
+    load_result = ConfigLoadResult(
+        projects={"a": project_a, "b": project_b},
+        config_file=_CONFIG_PATH,
+    )
+
+    with patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result):
+        result = resolve_revlink_context(config=None, cwd=_CWD, rel_path=".env")
+
+    assert isinstance(result, RevlinkContext)
+    assert result.project_name == "project-a"
+
+
+def test_rel_path_without_owner_is_not_managed() -> None:
+    """A path covered by no contributor is not managed, not CWD-ambiguous."""
+    project_a = ConfigProject(
+        managed_project_name="project-a",
+        managed_project_path=Path("/managed-a"),
+        mappings=[Mapping(targets=[_CWD], subpaths=[".env"], copy_paths=None)],
+    )
+    project_b = ConfigProject(
+        managed_project_name="project-b",
+        managed_project_path=Path("/managed-b"),
+        mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"], copy_paths=None)],
+    )
+    load_result = ConfigLoadResult(
+        projects={"a": project_a, "b": project_b},
+        config_file=_CONFIG_PATH,
+    )
+
+    with patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result):
+        result = resolve_revlink_context(config=None, cwd=_CWD, rel_path="notes.txt")
+
+    assert isinstance(result, RevlinkResolveError)
+    assert "Ambiguous" not in (result.message or "")
+    assert "not a managed item" in (result.message or "")

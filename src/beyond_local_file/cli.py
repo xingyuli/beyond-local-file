@@ -14,6 +14,7 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
+from .contribution import contribution_owner, projects_targeting
 from .daemon.client import call_daemon
 from .operations.daemon import follow_daemon_logs, reload_daemon, start_daemon, status_daemon, stop_daemon
 from .operations.upgrade import run_upgrade
@@ -177,6 +178,7 @@ def revlink_create(ctx, path, dry_run, force):
     .git/info/exclude if the target directory is a Git repository.
     """
     cwd = _cwd_containing(ctx, path, resolve_source=True)
+    project_name = _choose_create_project(ctx, cwd, path)
     _call_daemon(
         ctx,
         {
@@ -185,6 +187,7 @@ def revlink_create(ctx, path, dry_run, force):
             "path": path,
             "dry_run": dry_run,
             "force": force,
+            "project_name": project_name,
         },
     )
 
@@ -211,6 +214,80 @@ def revlink_restore(ctx, path, dry_run):
             "dry_run": dry_run,
         },
     )
+
+
+def _choose_create_project(ctx: click.Context, cwd: Path, path: str) -> str | None:
+    """Return the hub for ``revlink create``, interviewing when PATH is new.
+
+    Args:
+        ctx: Active Click context carrying ``--config``.
+        cwd: Resolved current working directory (the target).
+        path: User-supplied path argument.
+
+    Returns:
+        The chosen managed project name, or ``None`` when no project targets
+        ``cwd`` (the daemon still reports that).
+    """
+    loaded = load_config_projects(ctx.obj["config"])
+    if loaded is None:
+        ctx.exit(1)
+        return None
+    matches = projects_targeting(loaded.projects, cwd)
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0].managed_project_name
+    source = Path(path).resolve()
+    rel = source.relative_to(cwd).as_posix()
+    owner = contribution_owner(loaded.projects, cwd, rel)
+    if owner is not None:
+        return owner.managed_project_name
+    names = [project.managed_project_name for project in matches]
+    chosen = _interview_create_project(names)
+    if chosen is None:
+        click.echo("Error: more than one managed project contributes to this directory: " + ", ".join(names))
+        ctx.exit(1)
+        return None
+    return chosen
+
+
+def _interview_create_project(names: list[str]) -> str | None:
+    """Prompt for a 1-based hub choice. Return ``None`` when stdin cannot answer.
+
+    Args:
+        names: Managed project names in stable order.
+
+    Returns:
+        The chosen name, or ``None`` when there is no TTY/input or the prompt
+        is aborted.
+    """
+    if not _stdin_can_prompt():
+        return None
+    click.echo("More than one managed project contributes to this directory:")
+    for index, name in enumerate(names, start=1):
+        click.echo(f"  {index}. {name}")
+    choices = click.Choice([str(index) for index in range(1, len(names) + 1)])
+    try:
+        selected = click.prompt("Choose a managed project", type=choices, show_choices=False)
+    except (EOFError, OSError, click.Abort):
+        return None
+    return names[int(selected) - 1]
+
+
+def _stdin_can_prompt() -> bool:
+    """Return whether stdin is a TTY or a test/pipe stream with unread input."""
+    try:
+        if sys.stdin.isatty():
+            return True
+    except ValueError:
+        return False
+    try:
+        position = sys.stdin.tell()
+        chunk = sys.stdin.read(1)
+        sys.stdin.seek(position)
+    except OSError:
+        return False
+    return bool(chunk)
 
 
 def _cwd_containing(ctx: click.Context, path: str, *, resolve_source: bool = False) -> Path:

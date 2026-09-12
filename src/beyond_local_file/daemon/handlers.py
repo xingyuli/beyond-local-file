@@ -96,7 +96,12 @@ def _handle_create(config_path: Path, request: Request) -> int:
     rel_path = _rel_path_or_error(source, cwd, path)
     if isinstance(rel_path, int):
         return rel_path
-    context = _resolve_context(config_path, cwd)
+    project_name = request.get("project_name")
+    context = _resolve_context(
+        config_path,
+        cwd,
+        project_name=str(project_name) if project_name else None,
+    )
     if isinstance(context, int):
         return context
     dry_run = bool(request.get("dry_run"))
@@ -121,7 +126,7 @@ def _handle_restore(config_path: Path, request: Request) -> int:
     rel_path = _rel_path_or_error(source, cwd, path)
     if isinstance(rel_path, int):
         return rel_path
-    context = _resolve_context(config_path, cwd)
+    context = _resolve_context(config_path, cwd, rel_path=rel_path)
     if isinstance(context, int):
         return context
     dest_root = context.managed_project_path
@@ -147,7 +152,7 @@ def _handle_remove(config_path: Path, request: Request) -> int:
     rel_path = _rel_path_or_error(source, cwd, path)
     if isinstance(rel_path, int):
         return rel_path
-    context = _resolve_context(config_path, cwd)
+    context = _resolve_context(config_path, cwd, rel_path=rel_path)
     if isinstance(context, int):
         return context
     dry_run = bool(request.get("dry_run"))
@@ -174,8 +179,19 @@ def _rel_path_or_error(source: Path, cwd: Path, path: str) -> Path | int:
         return 1
 
 
-def _resolve_context(config_path: Path, cwd: Path) -> RevlinkContext | int:
-    result = resolve_revlink_context(str(config_path), cwd)
+def _resolve_context(
+    config_path: Path,
+    cwd: Path,
+    *,
+    project_name: str | None = None,
+    rel_path: str | Path | None = None,
+) -> RevlinkContext | int:
+    result = resolve_revlink_context(
+        str(config_path),
+        cwd,
+        project_name=project_name,
+        rel_path=rel_path,
+    )
     if isinstance(result, RevlinkResolveError):
         if result.message is not None:
             click.echo(result.message)

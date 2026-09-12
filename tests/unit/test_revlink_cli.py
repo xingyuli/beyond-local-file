@@ -111,9 +111,7 @@ def test_revlink_help_shows_description() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_nonexistent_path_exits_with_error(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_revlink_nonexistent_path_exits_with_error(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Test that a non-existent source path produces an error and exits 1.
 
     Requirement 3.1: WHEN the path argument does not exist, THE Revlink_Command
@@ -207,9 +205,7 @@ def test_revlink_force_allows_overwrite_when_dest_exists(
 # ---------------------------------------------------------------------------
 
 
-def test_revlink_dry_run_does_not_modify_filesystem(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_revlink_dry_run_does_not_modify_filesystem(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Test that --dry-run passes validation but leaves the filesystem unchanged.
 
     Requirement 3.4: WHEN --dry-run is active, THE Revlink_Command SHALL
@@ -229,9 +225,7 @@ def test_revlink_dry_run_does_not_modify_filesystem(
     assert not (managed / "myfile.txt").exists()
 
 
-def test_revlink_dry_run_prints_preview_output(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_revlink_dry_run_prints_preview_output(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Test that --dry-run prints [dry-run]-prefixed preview lines for all steps.
 
     Requirement 7.6: WHEN --dry-run is active, THE Revlink_Command SHALL prefix
@@ -276,14 +270,11 @@ def test_revlink_no_matching_project_exits_with_error(
     assert "No managed project found" in result.output
 
 
-def test_revlink_ambiguous_project_exits_with_error(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
-    """Test that multiple matching projects produce an ambiguity error and exit 1.
+def test_revlink_ambiguous_project_exits_with_error(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
+    """A new path on a multi-hub target without a TTY choice lists names and exits 1.
 
-    Requirement 2.6: WHEN multiple managed projects' target paths match the CWD,
-    THE Revlink_Command SHALL print a descriptive error message listing the
-    ambiguous projects and exit with a non-zero status code.
+    Create cannot pick a hub without an interview. Restore/remove resolve by
+    PATH owner instead of this CWD-level failure.
     """
     first = tmp_path / "project-a"
     second = tmp_path / "project-b"
@@ -291,12 +282,22 @@ def test_revlink_ambiguous_project_exits_with_error(
     first.mkdir()
     second.mkdir()
     target.mkdir()
+    (first / "a-only.txt").write_text("a\n")
+    (second / "b-only.txt").write_text("b\n")
+    (target / "a-only.txt").write_text("a\n")
+    (target / "b-only.txt").write_text("b\n")
     (target / "myfile.txt").write_text("content")
     config_path = tmp_path / "config.yml"
-    config_path.write_text(f"project-a: {target}\nproject-b: {target}\n")
+    config_path.write_text(
+        f"project-a:\n  target: {target}\n  subpath:\n    - a-only.txt\n"
+        f"project-b:\n  target: {target}\n  subpath:\n    - b-only.txt\n"
+    )
     monkeypatch.chdir(target)
 
     result = invoke_with_daemon(config_path, ["revlink", "create", "myfile.txt"], isolated_home)
 
     assert result.exit_code == 1
-    assert "Ambiguous" in result.output
+    assert "project-a" in result.output
+    assert "project-b" in result.output
+    assert not (first / "myfile.txt").exists()
+    assert not (second / "myfile.txt").exists()

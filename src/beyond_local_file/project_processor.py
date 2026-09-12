@@ -15,6 +15,7 @@ import yaml
 from .blfrc import BlfrcError, resolve_config_from_blfrc
 from .config import Config, ConfigError
 from .constants import DEFAULT_CONFIG_FILE
+from .contribution import contribution_owner, projects_targeting
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_processing
 from .operations import CmdOperation
@@ -59,13 +60,16 @@ class RevlinkResolveError:
 def resolve_revlink_context(
     config: str | None,
     cwd: Path,
+    *,
+    project_name: str | None = None,
+    rel_path: str | Path | None = None,
 ) -> RevlinkContext | RevlinkResolveError:
     """Resolve config, match CWD to a project, and build a RevlinkContext.
 
     Encapsulates the full resolution sequence shared by ``revlink create``,
     ``revlink restore``, and ``remove``: load the config, match ``cwd`` to
-    exactly one managed project, find the mapping whose targets include
-    ``cwd``, and return a
+    managed projects, optionally disambiguate by ``project_name`` or the
+    contribution source of ``rel_path``, and return a
     :class:`~beyond_local_file.operations.revlink.RevlinkContext` ready for
     the caller to pass to a standalone reverse-link or removal operation.
 
@@ -74,12 +78,17 @@ def resolve_revlink_context(
             to use the default resolution order (``~/.blfrc`` → ``config.yml``).
         cwd: The current working directory to match against each mapping's
             target paths.
+        project_name: When set, use this managed project; it must still
+            target ``cwd``. Create sends this after a shell interview.
+        rel_path: Target-relative path used by restore and remove to pick
+            the unique contribution source among projects targeting ``cwd``.
 
     Returns:
         A :class:`~beyond_local_file.operations.revlink.RevlinkContext` when a
         unique project is found and its mapping is resolved.  A
         :class:`RevlinkResolveError` when config loading fails, no project
-        matches ``cwd``, or multiple projects match ``cwd`` (ambiguous).
+        matches ``cwd``, ``rel_path`` is not a managed item, or multiple
+        projects match ``cwd`` with no owner and no ``project_name``.
         When the error message is empty, :func:`load_config_projects` has
         already printed the diagnostic; callers must skip ``click.echo``.
     """
@@ -97,8 +106,9 @@ def resolve_revlink_context(
         return RevlinkResolveError(message=f"No managed project found for current directory: {cwd}\n{hint}")
 
     if isinstance(project, list):
-        names = ", ".join(p.managed_project_name for p in project)
-        return RevlinkResolveError(message=f"Ambiguous: multiple projects target {cwd}: {names}")
+        project = _disambiguate_revlink_project(project, result.projects, cwd, project_name, rel_path)
+        if isinstance(project, RevlinkResolveError):
+            return project
 
     matched_mapping = next(m for m in project.mappings if cwd in m.targets)
 
@@ -110,6 +120,40 @@ def resolve_revlink_context(
         managed_project_path=project.managed_project_path,
         mappings=project.mappings,
     )
+
+
+def _disambiguate_revlink_project(
+    matches: list[ConfigProject],
+    projects: dict[str, ConfigProject],
+    cwd: Path,
+    project_name: str | None,
+    rel_path: str | Path | None,
+) -> ConfigProject | RevlinkResolveError:
+    """Pick one of *matches* by explicit name or contribution source.
+
+    Args:
+        matches: Managed projects whose mappings include *cwd*.
+        projects: Full loaded project map.
+        cwd: Target directory.
+        project_name: Explicit hub from the create shell, if any.
+        rel_path: Path used to derive contribution source.
+
+    Returns:
+        The chosen project, or a resolve error when the owner is missing.
+    """
+    if project_name:
+        for candidate in matches:
+            if candidate.managed_project_name == project_name:
+                return candidate
+        return RevlinkResolveError(message=f"Project '{project_name}' does not target {cwd}")
+    if rel_path is not None:
+        rel = Path(rel_path).as_posix()
+        owner = contribution_owner(projects, cwd, rel)
+        if owner is None:
+            return RevlinkResolveError(message=f"'{rel}' is not a managed item")
+        return owner
+    names = ", ".join(candidate.managed_project_name for candidate in matches)
+    return RevlinkResolveError(message=f"Ambiguous: multiple projects target {cwd}: {names}")
 
 
 class ProjectProcessor:
@@ -317,9 +361,7 @@ def _resolve_project_from_cwd(
         ``None`` when no project targets ``cwd``, or a ``list[ConfigProject]``
         when two or more projects target ``cwd``.
     """
-    matches: list[ConfigProject] = [
-        project for project in config_projects.values() for mapping in project.mappings if cwd in mapping.targets
-    ]
+    matches = projects_targeting(config_projects, cwd)
 
     if len(matches) == 1:
         return matches[0]

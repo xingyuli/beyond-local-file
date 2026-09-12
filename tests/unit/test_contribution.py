@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
-from beyond_local_file.contribution import find_item_path_overlaps, item_paths_overlap
+from beyond_local_file.contribution import find_item_path_overlaps, item_covers_rel, item_paths_overlap
 from beyond_local_file.model.config import ConfigProject, Mapping
 
 
 def test_sibling_names_do_not_overlap() -> None:
     """CONTEXT.md is not a prefix of CONTEXT-MAP.md."""
+    assert not item_covers_rel("CONTEXT.md", "CONTEXT-MAP.md")
+    assert not item_covers_rel("CONTEXT-MAP.md", "CONTEXT.md")
     assert not item_paths_overlap("CONTEXT.md", "CONTEXT-MAP.md")
     assert not item_paths_overlap(".kiro/hooks", ".kiro/settings")
 

@@ -16,9 +16,14 @@ from beyond_local_file.cli import cli
 _POLL_S = 0.05
 
 
-def invoke_cli(args: list[str], env: dict[str, str] | None = None) -> Result:
+def invoke_cli(
+    args: list[str],
+    env: dict[str, str] | None = None,
+    *,
+    input: str | None = None,
+) -> Result:
     """Invoke the CLI in-process."""
-    return CliRunner().invoke(cli, args, env=env)
+    return CliRunner().invoke(cli, args, env=env, input=input)
 
 
 def start_daemon(config_path: Path, env: dict[str, str] | None = None) -> None:
@@ -58,10 +63,12 @@ def invoke_with_daemon(
     config_path: Path,
     args: list[str],
     env: dict[str, str] | None = None,
+    *,
+    input: str | None = None,
 ) -> Result:
     """Start the daemon, invoke *args* with ``--config``, then stop the daemon."""
     with daemon_running(config_path, env):
-        return invoke_cli(["--config", str(config_path), *args], env=env)
+        return invoke_cli(["--config", str(config_path), *args], env=env, input=input)
 
 
 @contextmanager

@@ -105,7 +105,7 @@ The pure structural transformation that converts a config with M mappings and N 
 _Avoid_: Translation, flattening, config parsing
 
 **Revlink**:
-The reverse adoption workflow: copy an item that already exists in a target project into the managed project, leave the target path as a real file, and register it as a projection. The inverse unregisters the item and leaves the target file in place.
+The reverse adoption workflow: copy an item that already exists in a target project into the managed project, leave the target path as a real file, and register it as a projection. The inverse unregisters the item and leaves the target file in place. Restore and remove resolve the hub from PATH's contribution source when several managed projects target the working directory. Create of a new item there interviews in the shell for a hub; an already-covered path uses that owner without a prompt.
 _Avoid_: Adopt, import, reverse sync
 
 **Git exclude**:
@@ -113,7 +113,7 @@ An entry in a target project's `.git/info/exclude` that prevents Git from tracki
 _Avoid_: Gitignore entry, ignore rule
 
 **Contribution source**:
-The managed project that owns an item on a target. Derived at runtime from committed mappings after item discovery. Not persisted. A target path belongs to the unique item whose name equals that path or is a prefix of it; that item belongs to one managed project.
+The managed project that owns an item on a target. Derived at runtime from committed mappings after item discovery. Not persisted. A target path belongs to the unique item whose name equals that path or is a prefix of it; that item belongs to one managed project. Restore and remove use that owner. Create uses it to skip the hub interview when PATH is already an item.
 _Avoid_: Overlay owner, source index, persisted owner
 
 **Item overlap**:
