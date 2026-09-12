@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import signal
+import sys
 import threading
+from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from types import FrameType
+from typing import TextIO
 
 from beyond_local_file.config import Config
 from beyond_local_file.contribution import echo_item_path_overlaps
@@ -27,6 +31,7 @@ def run_worker(config_path: Path) -> int:
     Returns:
         Process exit code.
     """
+    _stamp_worker_streams()
     shutdown = threading.Event()
 
     def _handle(signum: int, frame: FrameType | None) -> None:
@@ -97,3 +102,50 @@ def _catch_up_and_persist(
     save_baseline(config_path, trees)
     save_snapshot(config_path, projects)
     return projects, trees
+
+
+def _stamp_worker_streams() -> None:
+    """Prefix each new stdout and stderr line with the host local time and offset."""
+    sys.stdout = _TimestampedStream(sys.stdout)
+    sys.stderr = _TimestampedStream(sys.stderr)
+
+
+def _line_stamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+class _TimestampedStream:
+    """Text stream that stamps each new line at write time."""
+
+    def __init__(self, stream: TextIO) -> None:
+        self._stream = stream
+        self._at_line_start = True
+
+    def write(self, data: str | bytes) -> int:
+        if not data:
+            return 0
+        written = len(data)
+        if isinstance(data, bytes):
+            encoding = getattr(self._stream, "encoding", None) or "utf-8"
+            text = data.decode(encoding, errors="replace")
+        else:
+            text = data
+        stamped: list[str] = []
+        for chunk in text.splitlines(keepends=True):
+            if self._at_line_start:
+                stamped.append(f"{_line_stamp()} {chunk}")
+            else:
+                stamped.append(chunk)
+            self._at_line_start = chunk.endswith(("\n", "\r"))
+        self._stream.write("".join(stamped))
+        return written
+
+    def writelines(self, lines: Iterable[str | bytes]) -> None:
+        for line in lines:
+            self.write(line)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._stream, name)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from beyond_local_file.sync_state import SyncState
 _WORKER_FLAG = "--worker"
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
+_LOG_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}) (.*)$")
 
 
 def _invoke(args: list[str], env: dict[str, str] | None = None) -> Result:
@@ -69,6 +71,19 @@ def _pid_path(config_path: Path) -> Path:
 
 def _log_path(config_path: Path) -> Path:
     return _state_dir(config_path) / "daemon.log"
+
+
+def _stamped_log_messages(log_file: Path) -> list[str]:
+    """Return message bodies after asserting every log line has a local-offset stamp."""
+    messages: list[str] = []
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        match = _LOG_STAMP.match(line)
+        assert match, f"unstamped log line: {line!r}"
+        messages.append(match.group(2))
+    assert messages, "daemon.log had no lines"
+    return messages
 
 
 def _snapshot_path(config_path: Path) -> Path:
@@ -214,6 +229,79 @@ def test_daemon_start_backgrounds_one_process_stop_status_and_logs(
     status_stopped = _invoke(["--config", str(config_path), "daemon", "status"], env=daemon_env)
     assert status_stopped.exit_code == 0, status_stopped.output
     assert "not running" in status_stopped.output.lower()
+
+
+def test_daemon_log_lines_begin_with_local_offset_timestamp(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """After start, worker log lines begin with a local-offset timestamp then the message."""
+    config_path, managed_dirs, _targets = daemon_workspace
+    log_file = _log_path(config_path)
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+    _wait_until(lambda: log_file.exists() and "daemon worker starting" in log_file.read_text(encoding="utf-8"))
+
+    (managed_dirs[0] / "shared.txt").write_text("from-hub")
+    _wait_until(lambda: "live:" in log_file.read_text(encoding="utf-8"))
+
+    messages = _stamped_log_messages(log_file)
+    assert "daemon worker starting" in messages
+    assert any(message.startswith("catch-up:") for message in messages)
+    assert any(message.startswith("live:") for message in messages)
+
+
+def test_daemon_logs_prints_stamped_lines_unchanged(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """daemon logs reprints daemon.log lines as stored, including the timestamp prefix."""
+    config_path, _managed, _targets = daemon_workspace
+    log_file = _log_path(config_path)
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+    _wait_until(lambda: log_file.exists() and log_file.stat().st_size > 0)
+
+    stored = log_file.read_text(encoding="utf-8")
+    first_stored = stored.splitlines()[0]
+    assert _LOG_STAMP.match(first_stored), first_stored
+
+    logs_proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "beyond_local_file",
+            "--config",
+            str(config_path),
+            "daemon",
+            "logs",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env={**os.environ, **daemon_env},
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        collected = ""
+        assert logs_proc.stdout is not None
+        while time.monotonic() < deadline:
+            line = logs_proc.stdout.readline()
+            if line:
+                collected += line
+                break
+            if logs_proc.poll() is not None:
+                break
+        assert collected, "logs did not print existing log content"
+        assert collected.splitlines()[0] == first_stored
+        logs_proc.send_signal(signal.SIGINT)
+        logs_proc.wait(timeout=5)
+    finally:
+        if logs_proc.poll() is None:
+            logs_proc.kill()
+            logs_proc.wait(timeout=5)
 
 
 def test_second_start_errors_while_daemon_is_running(
