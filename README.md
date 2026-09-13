@@ -152,6 +152,8 @@ cd ~/my-dev-files
 blf daemon start
 ```
 
+`daemon start` stays in the foreground until phase `ready`. On a TTY it rewrites one status line (`Catching up i/n … item`).
+
 3. Check status:
 
 ```bash
@@ -164,9 +166,11 @@ blf link check
 Error: daemon is not running. Start it with: blf daemon start
 ```
 
+If the process is in phase `catch-up`, those shells wait until `ready` rather than failing.
+
 ## Configuration
 
-The `config.yml` file maps project names to target paths. Three formats are supported:
+The mapping file (`config.yml`) maps project names to target paths. Three formats are supported:
 
 ### 1. Simple string — single target
 
@@ -204,21 +208,29 @@ Unsupported option 'copy: true' (project: my-project, mapping: 1, key: copy)
 
 For detailed examples, see [docs/configuration-reference.md](docs/configuration-reference.md).
 
-### Config File Location
+### Configuration set
 
-By default the tool looks for `config.yml` in the current directory. You can override this with `--config`, or create `~/.blfrc` to set a persistent default:
+One daemon process loads one **configuration set** — the mapping yaml files that worker uses.
+
+Resolution order:
+
+1. `-c` / `--config PATH` — a **singleton set** identified by that file's resolved path
+2. `~/.blf/config` — the **global set**, a pointer list of mapping yaml paths
+3. `config.yml` in the current directory — a singleton set
 
 ```yaml
-# ~/.blfrc — point to your managed-files config
+# ~/.blf/config — pointer list (not itself a mapping document)
 config_file: ~/my-dev-files/config.yml
 
-# Or combine personal and company configs
+# Or combine personal and company mapping files in one daemon process
 config_file:
   - ~/personal/config.yml
   - ~/company/config.yml
 ```
 
-See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order) in the CLI reference for full details.
+A mapping file already loaded by a running set is served by that process — `-c` does not start a second watcher. Starting a set that shares a mapping file with another running set is an error.
+
+See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI reference for full details.
 
 ## Available Commands
 
@@ -228,7 +240,7 @@ See [Config File Resolution](docs/cli-reference.md#config-file-resolution-order)
 | `blf daemon stop` | Stop the running daemon |
 | `blf daemon status` | Show whether the daemon is running, plus out-of-sync paths and held copies |
 | `blf daemon logs` | Follow the daemon log (Ctrl-C stops following, not the daemon) |
-| `blf daemon reload` | Apply external mapping edits from the config file |
+| `blf daemon reload` | Apply external mapping edits from the set's mapping files |
 | `blf link check [PROJECT]` | Check copy projections and Git excludes |
 | `blf revlink create PATH` | Adopt an existing file or directory as a copy projection |
 | `blf revlink restore PATH` | Stop managing PATH and leave the target file in place |
@@ -243,11 +255,11 @@ The managed project is the hub. After a successful hub apply, the daemon fans th
 
 If two target projects edit the same path, the first apply wins. The loser is **out-of-sync** for that path: later fan-out skips it, and further edits from it are discarded. The live path on the hub and on in-sync replicas keeps moving.
 
-A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `.blf-held/` in the managed project (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `start` and `reload` warn and ask you to continue; 0.5.0 does not interview you to pick winners.
+A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `start` and `reload` warn and ask you to continue; 0.5.0 does not interview you to pick winners.
 
 ### Mapping edits
 
-Edit `config.yml` by hand, then run `blf daemon start` (if the daemon is down) or `blf daemon reload` (if it is already up). Adds apply automatically. Removals print one plan and require confirmation; decline commits nothing. The daemon does not watch the config file.
+Edit a mapping file by hand, then run `blf daemon start` (if the daemon is down) or `blf daemon reload` (if it is already up). Adds apply automatically. Removals print one plan and require confirmation; decline commits nothing. The daemon does not watch mapping files.
 
 For full option details and usage examples, see [docs/cli-reference.md](docs/cli-reference.md).
 

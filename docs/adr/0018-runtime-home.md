@@ -33,4 +33,4 @@ accepted
 
 - ``BLF_HOME`` continues to relocate the home used for ``~/.blf`` in tests.
 - Two configuration sets cannot share a pid file; that is why run directories are per set.
-- User-facing docs that say ``~/.blfrc`` or ``<config-dir>/.blf/`` are stale until updated.
+- User-facing docs describe ``~/.blf/config`` and the runtime home, not ``~/.blfrc`` or hub-local ``.blf/``.

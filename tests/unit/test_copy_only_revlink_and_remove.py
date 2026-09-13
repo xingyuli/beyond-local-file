@@ -157,7 +157,6 @@ def test_revlink_create_holds_divergent_replica_then_overwrites(
     assert "reason: create-overwrite" in result.output
     assert "WARNING" in result.output
     assert str(held_root) in result.output
-    assert not (managed / ".blf-held").exists()
 
 
 def test_revlink_create_leaves_directory_as_real_tree(

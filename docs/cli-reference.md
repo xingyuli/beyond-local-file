@@ -24,7 +24,7 @@ There is no `link sync`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `-c, --config PATH` | Path | `config.yml` | Path to configuration file |
+| `-c, --config PATH` | Path | — | Mapping yaml for a **singleton set**. See [Configuration set](#configuration-set). |
 | `--version` | Flag | - | Show the installed version and exit |
 | `--help` | Flag | - | Show help message and exit |
 
@@ -42,24 +42,24 @@ blf --config /path/to/config.yml link check
 
 ### `daemon` — Runtime
 
-One background process that catch-up's copy projections, observes the hub and replicas, and is the only writer of mappings that originate from blf commands.
+One OS process per **configuration set**. It catch-up's copy projections, observes the hub and replicas in that set, and is the only writer of mappings that originate from blf commands. Two sets never watch the same mapping file at once.
 
 ```bash
 blf daemon SUBCOMMAND
 ```
 
 **Subcommands:**
-- `start` — Start the daemon in the background
+- `start` — Start the daemon; stays in the foreground until phase `ready`
 - `stop` — Stop the running daemon
-- `status` — Show whether it is running, plus out-of-sync paths and held copies
-- `logs` — Follow the daemon log
-- `reload` — Apply external mapping edits from the config file
+- `status` — Show pid and phase, plus out-of-sync paths and held copies
+- `logs` — Follow the set's `daemon.log`
+- `reload` — Apply external mapping edits from the set's mapping files
 
 ---
 
 ## `daemon start` — Start the Runtime
 
-Start the daemon in the background after optional foreground ingest of mapping edits.
+Spawn the worker, ingest mapping edits if needed, catch-up in the foreground until phase `ready`, then return. The worker keeps running in the background.
 
 ### Syntax
 
@@ -69,12 +69,15 @@ blf daemon start
 
 ### Behavior
 
-1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
-2. Fails if a daemon is already running for that config.
-3. If the config file differs from the mapping snapshot, classifies the diff in the foreground (same as `reload`): removals print one plan and require confirmation; adds apply after. Decline (or no TTY when removals exist) starts nothing.
-4. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths. Same rule inside one project's subpaths.
-5. Warns about out-of-sync paths and held copies and asks you to continue.
-6. Catch-up then observation: with no baseline, every projection is made to match the managed project (fresh catch-up). With a baseline, only paths that differ are queued (update catch-up). Leftover blf symlinks to the correct managed item become copies. Nested symlink nodes inside a directory item are copied as symlinks.
+1. Resolves the configuration set (`--config` → `~/.blf/config` → CWD `config.yml`).
+2. Fails if a daemon is already running for that set.
+3. Fails if a mapping file in the set is already loaded by another running set, naming the owner.
+4. First start deletes leftover hub-local `.blf/` next to each mapping file and prints each removed path (skips `~/.blf` itself).
+5. If the set's mapping files differ from the mapping snapshot, classifies the diff in the foreground (same as `reload`): removals print one plan and require confirmation; adds apply after. Decline (or no TTY when removals exist) starts nothing.
+6. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths. Same rule inside one project's subpaths.
+7. Warns about out-of-sync paths and held copies and asks you to continue.
+8. Binds IPC, then catch-up. `daemon start` stays in the foreground until phase `ready`. On a TTY it rewrites one status line (`Catching up i/n … item`). Non-TTY has no status line. Live observation starts only in `ready`.
+9. Catch-up: with no baseline, every projection is made to match the managed project (fresh catch-up). With a baseline, only paths that differ are queued (update catch-up). Leftover blf symlinks to the correct managed item become copies. Nested symlink nodes inside a directory item are copied as symlinks.
 
 ### Examples
 
@@ -82,14 +85,22 @@ blf daemon start
 # Start from the managed-files directory
 blf daemon start
 
-# Use a custom config file (global option)
+# Singleton set (global option)
 blf -c custom.yml daemon start
 ```
 
 ### Output
 
+On a TTY, one rewritten status line, then:
+
 ```
 Daemon started (pid 12345)
+```
+
+If a mapping file is already loaded by another running set:
+
+```
+Error: mapping file /Users/username/company/config.yml is already loaded by the running global set (pid 12345)
 ```
 
 If mapping removals need confirmation:
@@ -112,7 +123,7 @@ Error: overlapping items on /Users/username/workspace/project: proj-a 'local-fil
 
 ## `daemon stop` — Stop the Runtime
 
-Stop the running daemon for the loaded config.
+Stop the running daemon for the resolved configuration set.
 
 ### Syntax
 
@@ -136,7 +147,7 @@ Daemon is not running
 
 ## `daemon status` — Runtime Status
 
-Show whether the daemon is running, plus out-of-sync paths and held copies.
+Show whether the daemon is running (pid and phase), plus out-of-sync paths and held copies.
 
 ### Syntax
 
@@ -147,8 +158,10 @@ blf daemon status
 ### Output
 
 ```
-Daemon is running (pid 12345)
+Daemon is running (pid 12345, phase ready)
 ```
+
+During catch-up the phase is `catch-up`. The pid is always present while the process is up.
 
 or
 
@@ -163,7 +176,7 @@ Out-of-sync:
   /Users/username/workspace/project-b  notes.md
 Held copies:
   delete applied past the generation window; kept hub bytes of notes.md (reason: delete-gap)
-Held at /Users/username/my-dev-files/project-a/.blf-held/...
+Held at /Users/username/.blf/held/<sha256>/...
 ```
 
 0.5.0 has no resolve/restore/discard shells for these. Status is enough to copy by hand; `start` and `reload` warn and continue.
@@ -172,7 +185,7 @@ Held at /Users/username/my-dev-files/project-a/.blf-held/...
 
 ## `daemon logs` — Follow the Log
 
-Print the daemon log and follow new lines until interrupted. Ctrl-C stops following, not the daemon. The command prints `.blf/daemon.log` as stored.
+Print the daemon log and follow new lines until interrupted. Ctrl-C stops following, not the daemon. The command prints `daemon.log` in the set run directory (`~/.blf/run/global/daemon.log` or `~/.blf/run/file-<sha256>/daemon.log`) as stored.
 
 Each new worker line is prefixed at write time with the daemon host's local timezone and offset:
 
@@ -198,7 +211,7 @@ Daemon log not found
 
 ## `daemon reload` — Apply Mapping Edits
 
-Classify external mapping edits by diffing the config file against the mapping snapshot, then commit them in the running daemon.
+Classify external mapping edits by diffing the configuration set's mapping files against the mapping snapshot, then commit them in the running daemon.
 
 ### Syntax
 
@@ -215,12 +228,12 @@ blf daemon reload
 5. Decline commits nothing. No TTY when removals exist also commits nothing.
 6. Warns about out-of-sync paths and held copies and asks you to continue.
 
-The daemon does not watch `config.yml`. Internal mapping edits from `revlink` / `remove` do not go through reload.
+The daemon does not watch mapping files. Internal mapping edits from `revlink` / `remove` do not go through reload.
 
 ### Examples
 
 ```bash
-# After editing config.yml by hand
+# After editing a mapping file by hand
 blf daemon reload
 ```
 
@@ -269,7 +282,7 @@ blf remove .vscode/settings.json
 # Preview the validation and cleanup actions
 blf remove --dry-run .vscode/settings.json
 
-# Use an explicit configuration file
+# Singleton set
 blf --config ~/my-dev-files/config.yml remove .vscode/settings.json
 ```
 
@@ -296,7 +309,9 @@ blf link SUBCOMMAND [OPTIONS] [ARGUMENTS]
 
 ## `link check` — Verify Status
 
-Check the status of copy projections and Git exclude entries for each project and target location. This is a daemon query.
+Check the status of copy projections and Git exclude entries for each project and target location. This is a daemon query: it hashes managed vs target **now**. Match is in-sync. Mismatch is labeled from the baseline when one exists (managed-changed / target-changed / both-changed). There is no `sync-state.yml`.
+
+If the process is in phase `catch-up`, check waits until `ready` rather than failing. On a TTY the shell rewrites one status line (`Checking i/n … item`), then prints the table. Non-TTY: table only. `--format verbose` stays line-oriented.
 
 ### Syntax
 
@@ -321,7 +336,7 @@ blf link check [PROJECT_NAME] [OPTIONS]
 
 #### Table Format (Default)
 
-Compact Rich table showing status for all projects and targets.
+Compact Rich table showing status for all projects and targets. The table is printed once at the end; it does not show `i/n` progress.
 
 ```bash
 blf link check
@@ -392,15 +407,15 @@ Git Exclude Status: ✓
 
 | Status | Description |
 |--------|-------------|
-| `in sync` | Files are identical to the recorded baseline |
-| `manually synced` | Bytes match after a previous isolation or catch-up |
-| `managed changed` | Only the hub (managed) file changed |
-| `target changed` | Only the replica file changed |
-| `conflict - both changed` | Both files changed relative to the baseline |
+| `in sync` | Live hashes of managed and target match |
+| `mismatch` | Hashes differ and there is no baseline to label which side moved |
+| `managed changed` | Live mismatch; only the hub differs from baseline |
+| `target changed` | Live mismatch; only the replica differs from baseline |
+| `conflict - both changed` | Live mismatch; both sides differ from baseline |
 | `missing` | Target copy doesn't exist |
 | `not a copy` | Target path exists but is not a regular copy |
 
-While the daemon is running, hub/fan-out applies these changes live. `link check` reports the daemon's view; it does not copy.
+While the daemon is running, hub/fan-out applies these changes live. `link check` hashes now; it does not copy.
 
 ### Examples
 
@@ -420,7 +435,7 @@ blf link check --format verbose
 # Check specific project with verbose output
 blf link check my-project --format verbose
 
-# Use custom config file (global option)
+# Singleton set (global option)
 blf -c custom.yml link check
 
 # All options combined
@@ -473,15 +488,15 @@ blf revlink create [OPTIONS] PATH
 
 ### Behavior
 
-1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
+1. Resolves the configuration set (`--config` → `~/.blf/config` → CWD `config.yml`).
 2. Chooses the hub. One managed project targeting CWD: no prompt. PATH already covered by an item: that contribution source, no prompt (then the existing already-covered error). Several hubs targeting CWD and PATH a new item: the same command prompts for a 1-based managed project name. No TTY (or an aborted prompt) lists the names and exits 1.
 3. Validates the source path (must exist, must not already be a symlink).
 4. Copies the source to `<managed_project_path>/<relative-path>`. Nested symlink nodes inside a directory are copied as symlinks.
 5. Verifies the copy via MD5 checksum; aborts and deletes the copy on mismatch.
 6. Leaves the original as a regular file or directory.
 7. Adds the item name to `.git/info/exclude` if the current directory is a Git repository.
-8. If the matched mapping uses selective projection (`subpath` list), appends the item name to that list in the config file so that the daemon and `link check` will manage it going forward. Mappings that project everything (no `subpath`) are unaffected.
-9. Fans the hub copy out to other in-sync replicas of that managed project. If a replica already had different bytes, those bytes are stored under `.blf-held/` (`create-overwrite`) and the hub overwrites the live path.
+8. If the matched mapping uses selective projection (`subpath` list), appends the item name to that list in the mapping file so that the daemon and `link check` will manage it going forward. Mappings that project everything (no `subpath`) are unaffected.
+9. Fans the hub copy out to other in-sync replicas of that managed project. If a replica already had different bytes, those bytes are stored under `~/.blf/held/<sha256 of the managed project path>/` (`create-overwrite`) and the hub overwrites the live path.
 
 ### Examples
 
@@ -498,7 +513,7 @@ blf revlink create --dry-run myfile.txt
 # Overwrite an existing managed copy
 blf revlink create --force myfile.txt
 
-# Use a custom config file
+# Singleton set
 blf -c ~/my-files/config.yml revlink create myfile.txt
 ```
 
@@ -579,13 +594,13 @@ blf revlink restore [OPTIONS] PATH
 
 ### Behavior
 
-1. Loads config using the standard resolution order (`--config` → `~/.blfrc` → `config.yml`).
+1. Resolves the configuration set (`--config` → `~/.blf/config` → CWD `config.yml`).
 2. Resolves the hub from PATH (contribution source). Run it inside the target. Several managed projects targeting CWD is not CWD-level ambiguity.
 3. Validates the path (must exist as a regular file, directory, or leftover symlink; managed copy must exist).
 4. Leaves the requesting target's file in place (or, for a leftover symlink, replaces it with a real copy).
 5. Deletes the managed copy (non-fatal if this fails — a warning is printed and the restore is still considered successful).
 6. Removes the item name from `.git/info/exclude` if the current directory is a Git repository.
-7. If the matched mapping uses selective projection (`subpath` list), removes the item name from that list in the config file.
+7. If the matched mapping uses selective projection (`subpath` list), removes the item name from that list in the mapping file.
 
 ### Examples
 
@@ -599,7 +614,7 @@ blf revlink restore .kiro/hooks
 # Preview without making changes
 blf revlink restore --dry-run myfile.txt
 
-# Use a custom config file
+# Singleton set
 blf -c ~/my-files/config.yml revlink restore myfile.txt
 ```
 
@@ -704,33 +719,39 @@ Upgrade manually using the command that matches how you installed the tool:
 
 ---
 
-## Configuration File
+## Configuration Set
 
-The CLI reads configuration from `config.yml` in the current directory (or path specified with `-c`).
+One daemon process loads one **configuration set** — the mapping yaml files that worker uses. The **global set** is the pointer list in `~/.blf/config`. `-c PATH` is a **singleton set** identified by that file's resolved path. With neither, `config.yml` in the current directory is a singleton set.
 
-### Config File Resolution Order
+### Resolution order
 
-The tool resolves the config file in this order:
+The tool resolves which set to load in this order:
 
-1. **`-c / --config` flag** — explicit path always wins
-2. **`~/.blfrc`** — if present and contains a `config_file` field
-3. **`config.yml`** in the current directory — default fallback
+1. **`-c` / `--config` flag** — explicit mapping yaml; a singleton set
+2. **`~/.blf/config`** — if present and it lists mapping yaml paths; the global set
+3. **`config.yml`** in the current directory — a singleton set
 
-### `~/.blfrc` — Centralized Config Pointer
+Pid, port, log, mapping snapshot, and baseline live under `~/.blf/run/global/` (global set) or `~/.blf/run/file-<sha256 of the resolved mapping yaml>/` (singleton set). Held copies live under `~/.blf/held/<sha256 of the managed project path>/`. Mapping files stay where you keep them.
 
-Create `~/.blfrc` to avoid specifying `--config` on every invocation, or to combine multiple config files (e.g., personal and company projects):
+A mapping file already loaded by a running set is served by that process — `-c` does not start a second watcher. Starting a set that shares a mapping file with another running set is an error and names the owner.
+
+`revlink`, `remove`, and `link check` without `-c` use the global process when `~/.blf/config` exists.
+
+### `~/.blf/config` — Global pointer list
+
+Create `~/.blf/config` to avoid specifying `--config` on every invocation, or to load several mapping files in **one** daemon process (for example personal and company projects):
 
 ```yaml
-# Single config file
+# ~/.blf/config — not itself a mapping document
 config_file: ~/my-dev-files/config.yml
 
-# OR multiple config files (personal + company)
+# OR several mapping files in one set (personal + company)
 config_file:
   - ~/personal/config.yml
   - ~/company/config.yml
 ```
 
-**Path formats supported:** absolute (`/path/to/config.yml`), tilde (`~/path/to/config.yml`), or relative to home directory (`path/to/config.yml`).
+**Path formats supported:** absolute (`/path/to/config.yml`), tilde (`~/path/to/config.yml`), or relative to the home directory (`path/to/config.yml`).
 
 **Disabling temporarily:** Comment out `config_file` to fall back to `config.yml` in CWD — no need to rename or delete the file:
 
@@ -738,9 +759,11 @@ config_file:
 # config_file: ~/my-dev-files/config.yml  # temporarily disabled
 ```
 
-**Multiple config files:** Each managed project must appear in exactly one config file (identified by its absolute path). Duplicate managed project paths across files are an error.
+**Several mapping files:** The global list is one configuration set, loaded by one OS process. Each managed project must appear in exactly one mapping file (identified by its absolute path). Duplicate managed project paths across files are an error.
 
-See [Configuration Reference](configuration-reference.md) for complete format documentation.
+`~/.blfrc` is not read.
+
+See [Configuration Reference](configuration-reference.md) for mapping-file format documentation.
 
 ---
 
@@ -771,7 +794,7 @@ blf daemon status
 # Check copy status
 blf link check
 
-# After editing config.yml by hand
+# After editing a mapping file by hand
 blf daemon reload
 ```
 
@@ -797,7 +820,7 @@ blf daemon logs
 
 ### Working Directory
 
-Start the daemon from your managed files directory (where `config.yml` is located). Shells that take a `PATH` (`revlink`, `remove`) run from the target project.
+With neither `-c` nor `~/.blf/config`, start the daemon from the directory that contains `config.yml`. With a global set, `link check` without `-c` talks to that one process from any directory. Shells that take a `PATH` (`revlink`, `remove`) run from the target project.
 
 ```bash
 cd ~/my-dev-files
@@ -805,11 +828,10 @@ blf daemon start
 blf link check
 ```
 
-### Config File Location
+### Configuration set
 
-Default: `config.yml` in current directory
+See [Configuration set](#configuration-set). Override with `-c` or `--config`:
 
-Override with `-c` or `--config` (global option):
 ```bash
 blf -c /path/to/custom.yml daemon start
 blf --config /path/to/custom.yml link check

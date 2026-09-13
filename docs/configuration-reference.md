@@ -1,14 +1,16 @@
 # Configuration Reference
 
-Complete reference for `config.yml` configuration file.
+Complete reference for a **mapping file** (typically `config.yml`).
 
 Every projection is a physical copy (file or directory). `copy: true` is not a valid option.
+
+One daemon process loads one **configuration set** of mapping files: `-c PATH` is a singleton set; `~/.blf/config` is the global set (a pointer list, not a mapping document); with neither, `config.yml` in CWD is a singleton set. See [Configuration set](cli-reference.md#configuration-set).
 
 ---
 
 ## Configuration Structure
 
-The configuration file maps managed project names to their target locations. Each project can have one or more mappings to target locations.
+The mapping file maps managed project names to their target locations. Each project can have one or more mappings to target locations.
 
 ### Basic Structure
 
@@ -273,7 +275,7 @@ project-g:
 
 ### Subpath Mapping
 
-By default, all top-level items in a managed project are projected (except the reserved `.blf-held/` directory). Use `subpath` to project only specific items:
+By default, all top-level items in a managed project are projected. Use `subpath` to project only specific items:
 
 ```yaml
 my-project:
@@ -477,7 +479,7 @@ legacy-app:
 
 ### Apply mapping edits through the daemon
 
-The daemon does not watch `config.yml`. After a manual edit, run `blf daemon start` (if it is down) or `blf daemon reload` (if it is already up). Removals print one plan and require confirmation; decline commits nothing.
+The daemon does not watch mapping files. After a manual edit, run `blf daemon start` (if it is down) or `blf daemon reload` (if it is already up). Removals print one plan and require confirmation; decline commits nothing.
 
 ---
 
@@ -493,7 +495,7 @@ If two replicas edit the same path, the first apply wins. The loser is out-of-sy
 
 ### Held copies
 
-A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `.blf-held/` in the managed project (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. `.blf-held/` is reserved: it is not an item and is never projected. `status` lists held copies; there is no restore/discard command in 0.5.0.
+A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. That tree is not an item and is never projected. `status` lists held copies; there is no restore/discard command in 0.5.0.
 
 ---
 

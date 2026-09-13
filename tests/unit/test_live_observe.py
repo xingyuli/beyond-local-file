@@ -255,7 +255,6 @@ def test_delete_past_generation_gap_holds_then_removes_live_path(
     slots = [path for path in held_root.iterdir() if path.is_dir()]
     assert len(slots) == 1
     assert (slots[0] / "content").read_text() == "a4"
-    assert not (managed / ".blf-held").exists()
 
 
 def test_fan_out_does_not_write_replica_whose_disk_hash_is_not_expected_base(

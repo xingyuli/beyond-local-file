@@ -22,6 +22,6 @@ The stamp is the daemon host's local timezone with offset. `daemon logs` prints 
 
 ## Consequences
 
-New worker lines in `.blf/daemon.log` are timestamped; old unstamped lines are not rewritten. Shell request stdout captured via `redirect_stdout` is not stamped. Direct writes to the file descriptor bypass the wrapper.
+New worker lines in the set's `daemon.log` are timestamped; old unstamped lines are not rewritten. Shell request stdout captured via `redirect_stdout` is not stamped. Direct writes to the file descriptor bypass the wrapper.
 
 Stamp in `daemon logs` when displaying was rejected: the file would still have no clock, and two viewers would disagree. Changing every `print` was rejected: easy to miss; the stream wrapper covers all worker prints. Host-side stamping in `spawn_and_wait` was rejected: line writes happen in the child.

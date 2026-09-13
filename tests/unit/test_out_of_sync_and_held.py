@@ -215,47 +215,16 @@ def test_delete_past_generation_gap_holds_then_delete_wins(
     meta = yaml.safe_load((slots[0] / "reason.yml").read_text())
     assert meta["reason"] == "delete-gap"
     assert meta["clause"] == _DELETE_GAP_CLAUSE
-    assert not (managed / ".blf-held").exists()
-    assert not (target_a / ".blf-held").exists()
-    assert not (target_b / ".blf-held").exists()
 
 
-def test_held_directory_is_not_projected_including_sync_all(tmp_path: Path) -> None:
-    """Leftover ``.blf-held`` is skipped by discovery, observers, and catch-up."""
-    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
-    held_slot = managed / ".blf-held" / "slot"
-    held_slot.mkdir(parents=True)
-    (held_slot / "content").write_text("secret")
-    live = _live_sync(config_path)
-
-    assert not (target_a / ".blf-held").exists()
-    assert not (target_b / ".blf-held").exists()
-    (held_slot / "content").write_text("secret-changed")
-    live.tick()
-    assert not (target_a / ".blf-held").exists()
-    assert not (target_b / ".blf-held").exists()
-    (managed / "shared.txt").write_text("after-held")
-    live.tick()
-    assert (target_a / "shared.txt").read_text() == "after-held"
-    assert (target_b / "shared.txt").read_text() == "after-held"
-    assert not (target_a / ".blf-held").exists()
-    assert not (target_b / ".blf-held").exists()
-    assert held_slot.is_dir()
-    assert (held_slot / "content").read_text() == "secret-changed"
-
-
-def test_store_held_copy_writes_under_runtime_home_not_managed_attic(
+def test_store_held_copy_writes_under_runtime_home(
     tmp_path: Path, isolated_home: dict[str, str]
 ) -> None:
-    """New holds land under ~/.blf/held/<hash>/ and do not create .blf-held/."""
+    """New holds land under ~/.blf/held/<hash>/."""
     managed = tmp_path / "proj"
     replica = tmp_path / "target"
     managed.mkdir()
     replica.mkdir()
-    leftover = managed / ".blf-held" / "old-slot"
-    leftover.mkdir(parents=True)
-    (leftover / "content").write_text("leftover")
-    (leftover / "reason.yml").write_text("reason: delete-gap\npath: old.txt\nreplica: /tmp/old\n")
     source = tmp_path / "bytes.txt"
     source.write_text("kept-hub-bytes")
 
@@ -274,20 +243,15 @@ def test_store_held_copy_writes_under_runtime_home_not_managed_attic(
     assert len(copies) == 1
     assert copies[0].slot == slot
     assert copies[0].reason == "delete-gap"
-    assert leftover.is_dir()
-    assert (leftover / "content").read_text() == "leftover"
 
 
 def test_status_lists_out_of_sync_and_held_copies(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
     isolated_home: dict[str, str],
 ) -> None:
-    """daemon status lists runtime-home held paths and ignores leftover .blf-held/."""
+    """daemon status lists runtime-home held paths."""
     live, config_path, managed, target_a, target_b = live_workspace
     _mark_loser_out_of_sync(live, target_a, target_b)
-    leftover = managed / ".blf-held" / "old-slot"
-    leftover.mkdir(parents=True)
-    (leftover / "content").write_text("leftover")
     sidecar = config_path.parent / "hub-bytes.txt"
     sidecar.write_text("kept-hub-bytes")
     slot = store_held_copy(
@@ -309,9 +273,6 @@ def test_status_lists_out_of_sync_and_held_copies(
     held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
     assert str(held_root) in result.output
     assert str(slot) in result.output
-    assert str(leftover) not in result.output
-    assert leftover.is_dir()
-    assert leftover.parent.is_dir()
 
 
 def test_start_warns_and_acks_without_blocking(

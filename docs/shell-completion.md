@@ -1,6 +1,6 @@
 # Shell Completion
 
-`beyond-local-file` supports tab completion for `PROJECT_NAME` arguments in `link check`. Completions are read dynamically from the active config file, respecting `--config` and `~/.blfrc`.
+`beyond-local-file` supports tab completion for `PROJECT_NAME` arguments in `link check`. Completions are read from the mapping files in the resolved configuration set (`--config`, else `~/.blf/config`, else CWD `config.yml`).
 
 ## Before You Start: the `blf` Alias
 
@@ -57,9 +57,9 @@ blf link check <TAB>      # shows: project-a  project-b  project-c
 blf link check pro<TAB>   # narrows to names starting with "pro"
 ```
 
-Completions come from whichever config is active — the `--config` flag, `~/.blfrc`, or the default `config.yml` in the current directory.
+Completions come from the resolved configuration set — the `--config` flag, else `~/.blf/config`, else `config.yml` in the current directory.
 
 ## See Also
 
 - **[CLI Reference](cli-reference.md)** — Complete command documentation
-- **[Config File Resolution](cli-reference.md#config-file-resolution-order)** — How the active config is determined
+- **[Configuration set](cli-reference.md#configuration-set)** — How the active mapping files are determined
