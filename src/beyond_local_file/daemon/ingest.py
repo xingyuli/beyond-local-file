@@ -8,10 +8,10 @@ from pathlib import Path
 
 import click
 
-from beyond_local_file.config import Config
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import remove_path, run_catch_up
 from .process import state_dir
@@ -301,9 +301,7 @@ def _persist_pruned_baseline(
 def _load_file_and_snapshot(
     config_path: Path,
 ) -> tuple[dict[str, ConfigProject], dict[str, ConfigProject] | None]:
-    cfg = Config(config_path)
-    cfg.load()
-    return cfg.get_config_projects(), load_snapshot(config_path)
+    return load_set_projects(config_path), load_snapshot(config_path)
 
 
 def _index_projects(projects: dict[str, ConfigProject]) -> dict[str, _ProjectIndex]:

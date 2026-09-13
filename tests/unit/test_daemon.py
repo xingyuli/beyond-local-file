@@ -142,7 +142,7 @@ def _stop_daemon(config_path: Path, env: dict[str, str]) -> None:
 
 @pytest.fixture
 def daemon_env(isolated_home: dict[str, str]) -> dict[str, str]:
-    """Environment that bypasses the real ~/.blfrc."""
+    """Environment that bypasses the real ~/.blf/config."""
     return isolated_home
 
 

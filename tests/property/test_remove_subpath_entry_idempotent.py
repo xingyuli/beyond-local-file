@@ -59,7 +59,7 @@ def _build_config_yaml(target: str, subpath_entries: list[str]) -> str:
         "  subpath:",
     ]
     for entry in subpath_entries:
-        lines.append(f"    - {entry}")
+        lines.append(f"    - {entry!r}")
     return "\n".join(lines) + "\n"
 
 

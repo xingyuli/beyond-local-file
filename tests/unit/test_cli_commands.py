@@ -86,7 +86,7 @@ def test_default_config_file_discovery(temp_dir: Path, isolated_home) -> None:
 
     Args:
         temp_dir: Temporary directory fixture (unused in this test).
-        isolated_home: Env dict that bypasses the real ~/.blfrc.
+        isolated_home: Env dict that bypasses the real ~/.blf/config.
     """
     runner = CliRunner()
 

@@ -56,6 +56,7 @@ def snapshot_from_projects(projects: dict[str, ConfigProject]) -> SnapshotData:
     for name in sorted(projects):
         project = projects[name]
         data[name] = {
+            "managed_project_name": project.managed_project_name,
             "managed_project_path": str(project.managed_project_path),
             "mappings": [
                 {
@@ -87,7 +88,7 @@ def projects_from_snapshot(data: SnapshotData) -> dict[str, ConfigProject]:
             for mapping in raw.get("mappings") or []
         ]
         projects[name] = ConfigProject(
-            managed_project_name=name,
+            managed_project_name=str(raw.get("managed_project_name") or name),
             managed_project_path=Path(raw["managed_project_path"]),
             mappings=mappings,
         )

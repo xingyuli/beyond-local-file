@@ -1,4 +1,4 @@
-"""Tests for .blfrc configuration file support."""
+"""Tests for ~/.blf/config pointer-list support."""
 
 import sys
 from pathlib import Path
@@ -8,8 +8,15 @@ import pytest
 from beyond_local_file.blfrc import (
     BlfrcError,
     get_home_directory,
-    resolve_config_from_blfrc,
+    resolve_global_mapping_files,
 )
+
+
+def _write_pointer(home: Path, content: str) -> Path:
+    path = home / ".blf" / "config"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
 
 
 @pytest.fixture
@@ -66,39 +73,44 @@ class TestGetHomeDirectory:
         assert result == Path.home()
 
 
-class TestResolveConfigFromBlfrc:
-    """Tests for resolve_config_from_blfrc function."""
+class TestResolveGlobalMappingFiles:
+    """Tests for resolve_global_mapping_files function."""
 
-    def test_returns_none_when_blfrc_not_exists(self, temp_home):
-        """Test that None is returned when .blfrc doesn't exist."""
-        result = resolve_config_from_blfrc()
+    def test_returns_none_when_global_config_not_exists(self, temp_home):
+        """Test that None is returned when ~/.blf/config doesn't exist."""
+        result = resolve_global_mapping_files()
+
+        assert result is None
+
+    def test_does_not_read_dot_blfrc(self, temp_home, config_file):
+        """Test that leftover ~/.blfrc is ignored."""
+        (temp_home / ".blfrc").write_text(f"config_file: {config_file}\n")
+
+        result = resolve_global_mapping_files()
 
         assert result is None
 
     def test_returns_none_when_config_file_field_missing(self, temp_home):
         """Test that None is returned when config_file field is missing."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("other_field: value\n")
+        _write_pointer(temp_home, "other_field: value\n")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result is None
 
-    def test_returns_none_when_blfrc_is_empty(self, temp_home):
-        """Test that None is returned when .blfrc is empty."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("")
+    def test_returns_none_when_global_config_is_empty(self, temp_home):
+        """Test that None is returned when ~/.blf/config is empty."""
+        _write_pointer(temp_home, "")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result is None
 
     def test_single_absolute_path(self, temp_home, config_file):
         """Test resolving single absolute path."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text(f"config_file: {config_file}\n")
+        _write_pointer(temp_home, f"config_file: {config_file}\n")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result == [config_file]
 
@@ -108,10 +120,9 @@ class TestResolveConfigFromBlfrc:
         config.parent.mkdir()
         config.write_text("test: /tmp/target\n")
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: configs/test.yml\n")
+        _write_pointer(temp_home, "config_file: configs/test.yml\n")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result == [config]
 
@@ -120,10 +131,9 @@ class TestResolveConfigFromBlfrc:
         config = temp_home / "test.yml"
         config.write_text("test: /tmp/target\n")
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: ~/test.yml\n")
+        _write_pointer(temp_home, "config_file: ~/test.yml\n")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result == [config]
 
@@ -134,100 +144,88 @@ class TestResolveConfigFromBlfrc:
         config1.write_text("project1: /tmp/target1\n")
         config2.write_text("project2: /tmp/target2\n")
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text(f"config_file:\n  - {config1}\n  - {config2}\n")
+        _write_pointer(temp_home, f"config_file:\n  - {config1}\n  - {config2}\n")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result == [config1, config2]
 
     @pytest.mark.skipif(sys.platform == "win32", reason="chmod-based permission denial is ineffective on Windows")
     def test_error_on_permission_denied(self, temp_home):
-        """Test that BlfrcError is raised when .blfrc is not readable."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: test.yml\n")
-        blfrc.chmod(0o000)
+        """Test that BlfrcError is raised when ~/.blf/config is not readable."""
+        pointer = _write_pointer(temp_home, "config_file: test.yml\n")
+        pointer.chmod(0o000)
 
         with pytest.raises(BlfrcError, match=r"Cannot read.*Permission denied"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
-        # Cleanup
-        blfrc.chmod(0o644)
+        pointer.chmod(0o644)
 
     def test_error_on_invalid_yaml(self, temp_home):
         """Test that BlfrcError is raised on invalid YAML syntax."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: [\n")  # Invalid YAML
+        _write_pointer(temp_home, "config_file: [\n")
 
         with pytest.raises(BlfrcError, match="Invalid YAML"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_empty_string(self, temp_home):
         """Test that BlfrcError is raised when config_file is empty string."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text('config_file: ""\n')
+        _write_pointer(temp_home, 'config_file: ""\n')
 
         with pytest.raises(BlfrcError, match="cannot be empty"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_whitespace_only(self, temp_home):
         """Test that BlfrcError is raised when config_file is whitespace only."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text('config_file: "   "\n')
+        _write_pointer(temp_home, 'config_file: "   "\n')
 
         with pytest.raises(BlfrcError, match="cannot be empty"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_empty_list(self, temp_home):
         """Test that BlfrcError is raised when config_file is empty list."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: []\n")
+        _write_pointer(temp_home, "config_file: []\n")
 
         with pytest.raises(BlfrcError, match="cannot be an empty list"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_wrong_type_number(self, temp_home):
         """Test that BlfrcError is raised when config_file is a number."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: 123\n")
+        _write_pointer(temp_home, "config_file: 123\n")
 
         with pytest.raises(BlfrcError, match="must be a string or list of strings"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_wrong_type_dict(self, temp_home):
         """Test that BlfrcError is raised when config_file is a dict."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file:\n  key: value\n")
+        _write_pointer(temp_home, "config_file:\n  key: value\n")
 
         with pytest.raises(BlfrcError, match="must be a string or list of strings"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_list_with_non_string(self, temp_home):
         """Test that BlfrcError is raised when list contains non-string."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file:\n  - test.yml\n  - 123\n")
+        _write_pointer(temp_home, "config_file:\n  - test.yml\n  - 123\n")
 
         with pytest.raises(BlfrcError, match="must be strings"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_config_file_not_found(self, temp_home):
         """Test that BlfrcError is raised when config file doesn't exist."""
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text("config_file: nonexistent.yml\n")
+        _write_pointer(temp_home, "config_file: nonexistent.yml\n")
 
         with pytest.raises(BlfrcError, match="Config file not found"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_error_on_config_file_is_directory(self, temp_home):
         """Test that BlfrcError is raised when config file is a directory."""
         config_dir = temp_home / "configs"
         config_dir.mkdir()
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text(f"config_file: {config_dir}\n")
+        _write_pointer(temp_home, f"config_file: {config_dir}\n")
 
         with pytest.raises(BlfrcError, match="is a directory"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     @pytest.mark.skipif(sys.platform == "win32", reason="chmod-based permission denial is ineffective on Windows")
     def test_error_on_config_file_not_readable(self, temp_home):
@@ -236,13 +234,11 @@ class TestResolveConfigFromBlfrc:
         config.write_text("test: /tmp/target\n")
         config.chmod(0o000)
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text(f"config_file: {config}\n")
+        _write_pointer(temp_home, f"config_file: {config}\n")
 
         with pytest.raises(BlfrcError, match=r"Cannot read config file.*Permission denied"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
-        # Cleanup
         config.chmod(0o644)
 
     def test_error_message_includes_file_number_for_multiple_files(self, temp_home):
@@ -250,20 +246,18 @@ class TestResolveConfigFromBlfrc:
         config1 = temp_home / "config1.yml"
         config1.write_text("test: /tmp/target\n")
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text(f"config_file:\n  - {config1}\n  - nonexistent.yml\n")
+        _write_pointer(temp_home, f"config_file:\n  - {config1}\n  - nonexistent.yml\n")
 
         with pytest.raises(BlfrcError, match="file 2 of 2"):
-            resolve_config_from_blfrc()
+            resolve_global_mapping_files()
 
     def test_strips_whitespace_from_paths(self, temp_home):
         """Test that whitespace is stripped from config file paths."""
         config = temp_home / "test.yml"
         config.write_text("test: /tmp/target\n")
 
-        blfrc = temp_home / ".blfrc"
-        blfrc.write_text(f"config_file: '  {config}  '\n")
+        _write_pointer(temp_home, f"config_file: '  {config}  '\n")
 
-        result = resolve_config_from_blfrc()
+        result = resolve_global_mapping_files()
 
         assert result == [config]

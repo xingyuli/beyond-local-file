@@ -10,7 +10,6 @@ from pathlib import Path
 
 import click
 
-from beyond_local_file.config import Config
 from beyond_local_file.operations.link_check import CheckOperation
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
 from beyond_local_file.operations.revlink import (
@@ -21,7 +20,12 @@ from beyond_local_file.operations.revlink import (
     RevlinkContext,
 )
 from beyond_local_file.options import OutputFormat
-from beyond_local_file.project_processor import ProjectProcessor, RevlinkResolveError, resolve_revlink_context
+from beyond_local_file.project_processor import (
+    ProjectProcessor,
+    RevlinkResolveError,
+    load_set_projects,
+    resolve_revlink_context,
+)
 
 from .catchup import record_baseline
 from .ingest import commit_reload
@@ -72,9 +76,7 @@ def _handle_reload(config_path: Path, request: Request) -> int:
 def _handle_check(config_path: Path, request: Request) -> int:
     projects = load_snapshot(config_path)
     if projects is None:
-        cfg = Config(config_path)
-        cfg.load()
-        projects = cfg.get_config_projects()
+        projects = load_set_projects(config_path)
     project_name = request.get("project_name")
     if project_name:
         projects = {key: project for key, project in projects.items() if project.managed_project_name == project_name}
@@ -201,8 +203,6 @@ def _resolve_context(
 
 
 def _persist_committed_state(config_path: Path) -> None:
-    cfg = Config(config_path)
-    cfg.load()
-    projects = cfg.get_config_projects()
+    projects = load_set_projects(config_path)
     save_snapshot(config_path, projects)
     save_baseline(config_path, record_baseline(projects, load_baseline(config_path)))

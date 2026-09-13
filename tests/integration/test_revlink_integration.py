@@ -385,7 +385,7 @@ class TestRevlinkConfigResolution:
 
         Requirement 2.1: THE Revlink_Command SHALL load the config using the
         same resolution order as other BLF commands: explicit --config flag,
-        then ~/.blfrc, then config.yml in the current directory.
+        then ~/.blf/config, then config.yml in the current directory.
         """
         # Place config.yml in the target dir (which will be the CWD)
         target_dir = tmp_path / "target"
@@ -416,12 +416,12 @@ class TestRevlinkConfigResolution:
         assert (managed_dir / "notes.txt").read_text() == "my notes"
 
     def test_blfrc_config_resolves_correctly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that config referenced via ~/.blfrc is used for revlink.
+        """Test that config referenced via ~/.blf/config is used for revlink.
 
         Requirement 2.1: THE Revlink_Command SHALL load the config using the
-        same resolution order as other BLF commands, including ~/.blfrc.
+        same resolution order as other BLF commands, including ~/.blf/config.
         """
-        # Set up isolated home with a .blfrc pointing to our config
+        # Set up isolated home with a global pointer list
         home_dir = tmp_path / "home"
         home_dir.mkdir()
         monkeypatch.setenv("BLF_HOME", str(home_dir))
@@ -436,9 +436,9 @@ class TestRevlinkConfigResolution:
         managed_dir.mkdir()
         config_path.write_text(f"my-project: {target_dir}\n")
 
-        # Write .blfrc pointing to our config
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text(f"config_file: {config_path}\n")
+        pointer = home_dir / ".blf" / "config"
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(f"config_file: {config_path}\n")
 
         source_file = target_dir / "readme.txt"
         source_file.write_text("readme content")
@@ -1113,7 +1113,7 @@ class TestRevlinkGitExcludeNestedPath:
             managed_dir = base / "my-project"
             managed_dir.mkdir()
 
-            # Isolated home so .blfrc is not used
+            # Isolated home so ~/.blf/config is not used
             home_dir = base / "home"
             home_dir.mkdir()
             env = {"BLF_HOME": str(home_dir)}
@@ -1165,7 +1165,7 @@ class TestRevlinkGitExcludeNestedPath:
             managed_dir = base / "my-project"
             managed_dir.mkdir()
 
-            # Isolated home so .blfrc is not used
+            # Isolated home so ~/.blf/config is not used
             home_dir = base / "home"
             home_dir.mkdir()
             env = {"BLF_HOME": str(home_dir)}

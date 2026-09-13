@@ -12,10 +12,16 @@ from pathlib import Path
 import click
 import yaml
 
-from .blfrc import BlfrcError, resolve_config_from_blfrc
+from .blfrc import (
+    BlfrcError,
+    global_config_path,
+    is_global_config_path,
+    resolve_global_mapping_files,
+)
 from .config import Config, ConfigError
 from .constants import DEFAULT_CONFIG_FILE
 from .contribution import contribution_owner, projects_targeting
+from .daemon.process import mapping_files_for, running_owner_of
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_processing
 from .operations import CmdOperation
@@ -28,13 +34,16 @@ class ConfigLoadResult:
 
     Attributes:
         projects: Mapping of project key to :class:`~beyond_local_file.model.config.ConfigProject`.
-        config_file: Resolved path to the config file that was loaded.
-            Use ``.parent`` when a directory path is needed (e.g. for
-            :class:`~beyond_local_file.operations.SyncOperation`).
+        config_file: Set identity path used to talk to the daemon. The global
+            set uses ``~/.blf/config``; a singleton set uses its mapping yaml.
+        mapping_files: Mapping yaml files this set loads.
+        project_sources: Managed-project path to the mapping yaml that defined it.
     """
 
     projects: dict[str, ConfigProject]
     config_file: Path
+    mapping_files: tuple[Path, ...] = ()
+    project_sources: dict[Path, Path] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -75,7 +84,7 @@ def resolve_revlink_context(
 
     Args:
         config: Path to the YAML config file (from ``--config``), or ``None``
-            to use the default resolution order (``~/.blfrc`` → ``config.yml``).
+            to use the default resolution order (``~/.blf/config`` → ``config.yml``).
         cwd: The current working directory to match against each mapping's
             target paths.
         project_name: When set, use this managed project; it must still
@@ -111,9 +120,10 @@ def resolve_revlink_context(
             return project
 
     matched_mapping = next(m for m in project.mappings if cwd in m.targets)
+    source = result.project_sources.get(project.managed_project_path, result.config_file)
 
     return RevlinkContext(
-        config_path=result.config_file,
+        config_path=source,
         project_name=project.managed_project_name,
         matched_mapping=matched_mapping,
         cwd=cwd,
@@ -202,12 +212,15 @@ class ProjectProcessor:
 
 
 def load_config_projects(config: str | None, project_name: str | None = None) -> ConfigLoadResult | None:
-    """Load configuration using new model structure with .blfrc support.
+    """Load configuration for shells, routing ``-c`` to a running owner set.
 
     Config resolution order:
     1. Explicit config parameter (from --config flag)
-    2. ~/.blfrc file (if present and has config_file field)
+    2. ``~/.blf/config`` pointer list (the global set)
     3. Default to config.yml in current directory
+
+    When ``-c`` names a mapping yaml already loaded by a running set, the
+    result identifies that running set so shells do not start a second watcher.
 
     Args:
         config: Path to the YAML configuration file from --config flag,
@@ -218,24 +231,71 @@ def load_config_projects(config: str | None, project_name: str | None = None) ->
     Returns:
         A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
     """
-    # 1. Explicit --config flag
+    result = resolve_configuration_set(config, project_name)
+    if result is None or config is None:
+        return result
+    path = Path(_get_absolute_path(config))
+    if is_global_config_path(path):
+        return result
+    owner = running_owner_of(path)
+    if owner is None or owner.resolve() == result.config_file.resolve():
+        return result
+    return resolve_configuration_set(str(owner), project_name)
+
+
+def resolve_configuration_set(config: str | None, project_name: str | None = None) -> ConfigLoadResult | None:
+    """Resolve the configuration set the caller asked for, without overlap routing.
+
+    Args:
+        config: Path from ``--config``, or None to use global then CWD.
+        project_name: Optional project name to filter.
+
+    Returns:
+        A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
+    """
     if config is not None:
+        path = Path(_get_absolute_path(config))
+        if is_global_config_path(path):
+            return _load_global_set(project_name)
         return _load_config_from_path(config, project_name)
 
-    # 2. ~/.blfrc
     try:
-        blfrc_paths = resolve_config_from_blfrc()
+        global_files = resolve_global_mapping_files()
     except BlfrcError as e:
         click.echo(f"Error: {e}")
         return None
 
-    if blfrc_paths:
-        if len(blfrc_paths) == 1:
-            return _load_single_config(blfrc_paths[0], project_name)
-        return _load_and_combine_configs(blfrc_paths, project_name)
+    if global_files:
+        return _load_global_set(project_name)
 
-    # 3. Default config.yml in current directory
     return _load_config_from_path(DEFAULT_CONFIG_FILE, project_name, show_hint=True)
+
+
+def load_set_projects(config_path: Path, project_name: str | None = None) -> dict[str, ConfigProject]:
+    """Load mapping projects for a configuration set identity path.
+
+    The global set loads every mapping file listed in ``~/.blf/config``.
+    A singleton set loads that one mapping yaml.
+
+    Args:
+        config_path: Set identity path (global config or a mapping yaml).
+        project_name: Optional project name to filter.
+
+    Returns:
+        Combined config projects.
+
+    Raises:
+        ConfigError: If mapping files conflict or cannot be loaded.
+    """
+    paths = mapping_files_for(config_path)
+    if not paths:
+        raise ConfigError(f"No mapping files for {config_path}")
+    if len(paths) == 1:
+        cfg = Config(paths[0])
+        cfg.load()
+        return cfg.get_config_projects(project_name)
+    projects, _sources = combine_mapping_projects(paths, project_name)
+    return projects
 
 
 def _load_config_from_path(
@@ -258,7 +318,7 @@ def _load_config_from_path(
     if not config_path.exists():
         msg = f"Config file not found: {config_path}"
         if show_hint:
-            msg += "\nHint: use --config <path> or add 'config_file' to ~/.blfrc"
+            msg += "\nHint: use --config <path> or add mapping files to ~/.blf/config"
         click.echo(msg)
         return None
     return _load_single_config(config_path, project_name)
@@ -275,62 +335,112 @@ def _load_single_config(config_path: Path | str, project_name: str | None) -> Co
         A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
     """
     try:
-        cfg = Config(Path(config_path))
+        resolved = Path(config_path).resolve()
+        cfg = Config(resolved)
         cfg.load()
         projects = cfg.get_config_projects(project_name)
-        return ConfigLoadResult(projects=projects, config_file=Path(config_path))
+        sources = {project.managed_project_path: resolved for project in projects.values()}
+        return ConfigLoadResult(
+            projects=projects,
+            config_file=resolved,
+            mapping_files=(resolved,),
+            project_sources=sources,
+        )
     except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(str(e))
         return None
 
 
-def _load_and_combine_configs(config_paths: list[Path], project_name: str | None) -> ConfigLoadResult | None:
-    """Load and combine multiple config files with conflict detection.
-
-    Each config file's project names are resolved relative to that config
-    file's own directory, preserving correct managed project paths. Each
-    config file is read exactly once.
+def _load_global_set(project_name: str | None) -> ConfigLoadResult | None:
+    """Load every mapping file listed in the global pointer list.
 
     Args:
-        config_paths: List of config file paths to load.
         project_name: Optional project name to filter.
 
     Returns:
-        A :class:`ConfigLoadResult` whose ``config_file`` is the first path in
-        ``config_paths``, or ``None`` if loading failed.
+        The global set, or ``None`` if loading failed.
     """
     try:
-        combined_projects: dict[str, ConfigProject] = {}
-        managed_project_sources: dict[Path, Path] = {}
-
-        for path in config_paths:
-            cfg = Config(path)
-            cfg.load()
-            projects = cfg.get_config_projects()
-
-            for proj in projects.values():
-                managed_path = proj.managed_project_path
-
-                if managed_path in managed_project_sources:
-                    existing = managed_project_sources[managed_path]
-                    raise ConfigError(
-                        f"Managed project '{managed_path}' defined in multiple config files: {existing}, {path}"
-                    )
-
-                managed_project_sources[managed_path] = path
-                combined_projects[str(managed_path)] = proj
-
-        if project_name:
-            matches = {k: v for k, v in combined_projects.items() if v.managed_project_name == project_name}
-            if not matches:
-                click.echo(f"Project '{project_name}' not found in config")
-                return None
-            combined_projects = matches
-
-        return ConfigLoadResult(projects=combined_projects, config_file=config_paths[0])
+        paths = resolve_global_mapping_files()
+    except BlfrcError as e:
+        click.echo(f"Error: {e}")
+        return None
+    if not paths:
+        click.echo(f"Error: no mapping files in {global_config_path()}")
+        return None
+    try:
+        projects, sources = _projects_for_global_paths(paths, project_name)
     except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(f"Error: {e}")
         return None
+    if projects is None:
+        return None
+    if project_name and not projects:
+        click.echo(f"Project '{project_name}' not found in config")
+        return None
+    return ConfigLoadResult(
+        projects=projects,
+        config_file=global_config_path(),
+        mapping_files=tuple(paths),
+        project_sources=sources,
+    )
+
+
+def _projects_for_global_paths(
+    paths: list[Path],
+    project_name: str | None,
+) -> tuple[dict[str, ConfigProject], dict[Path, Path]] | tuple[None, None]:
+    if len(paths) == 1:
+        loaded = _load_single_config(paths[0], project_name)
+        if loaded is None:
+            return None, None
+        return loaded.projects, loaded.project_sources
+    return combine_mapping_projects(paths, project_name)
+
+
+def combine_mapping_projects(
+    config_paths: list[Path],
+    project_name: str | None = None,
+) -> tuple[dict[str, ConfigProject], dict[Path, Path]]:
+    """Load and combine mapping files, erroring on duplicate managed paths.
+
+    Args:
+        config_paths: Mapping yaml paths to load.
+        project_name: Optional project name to filter.
+
+    Returns:
+        Combined projects and a map of managed-project path to source yaml.
+
+    Raises:
+        ConfigError: If the same managed project is defined in more than one file.
+    """
+    combined_projects: dict[str, ConfigProject] = {}
+    sources: dict[Path, Path] = {}
+
+    for path in config_paths:
+        cfg = Config(path)
+        cfg.load()
+        for proj in cfg.get_config_projects().values():
+            managed_path = proj.managed_project_path
+            if managed_path in sources:
+                existing = sources[managed_path]
+                raise ConfigError(
+                    f"Managed project '{managed_path}' defined in multiple config files: {existing}, {path}"
+                )
+            sources[managed_path] = path
+            combined_projects[str(managed_path)] = proj
+
+    if project_name:
+        combined_projects = {
+            key: project for key, project in combined_projects.items() if project.managed_project_name == project_name
+        }
+        sources = {
+            managed: source
+            for managed, source in sources.items()
+            if any(project.managed_project_path == managed for project in combined_projects.values())
+        }
+
+    return combined_projects, sources
 
 
 def _resolve_project_from_cwd(

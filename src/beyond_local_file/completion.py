@@ -6,7 +6,7 @@ import click
 import click.shell_completion
 import yaml
 
-from .blfrc import resolve_config_from_blfrc
+from .blfrc import resolve_global_mapping_files
 from .constants import DEFAULT_CONFIG_FILE
 
 
@@ -18,7 +18,7 @@ def complete_project_names(
     """Return project name completions from the active config file.
 
     Reads the same config that the command would use (respecting --config
-    and ~/.blfrc), then filters project names by the incomplete prefix.
+    and ~/.blf/config), then filters project names by the incomplete prefix.
     Returns an empty list on any error so completion never crashes the shell.
 
     Args:
@@ -30,46 +30,41 @@ def complete_project_names(
         List of CompletionItem objects for matching project names.
     """
     try:
-        config_path = _resolve_config_path(ctx)
-        if config_path is None or not config_path.exists():
-            return []
-
-        with open(config_path) as f:
-            data = yaml.safe_load(f)
-
-        if not isinstance(data, dict):
-            return []
-
-        return [click.shell_completion.CompletionItem(name) for name in data if name.startswith(incomplete)]
+        names: list[str] = []
+        for config_path in _resolve_mapping_files(ctx):
+            if not config_path.exists():
+                continue
+            with open(config_path) as f:
+                data = yaml.safe_load(f)
+            if not isinstance(data, dict):
+                continue
+            names.extend(name for name in data if name.startswith(incomplete) and name not in names)
+        return [click.shell_completion.CompletionItem(name) for name in names]
     except Exception:
         return []
 
 
-def _resolve_config_path(ctx: click.Context) -> Path | None:
-    """Resolve the config file path from context, .blfrc, or default.
+def _resolve_mapping_files(ctx: click.Context) -> list[Path]:
+    """Resolve mapping files from context, the global config, or CWD.
 
-    Mirrors the resolution order of load_config_projects but returns
-    None instead of printing errors, so completion stays silent.
+    Mirrors the resolution order of load_config_projects but stays silent.
 
     Args:
         ctx: The current Click context.
 
     Returns:
-        Resolved Path to the config file, or None if unresolvable.
+        Mapping yaml paths to read project names from.
     """
-    # 1. Explicit --config flag
     config_obj = ctx.obj or {}
     explicit = config_obj.get("config")
     if explicit is not None:
-        return Path(explicit).resolve()
+        return [Path(explicit).resolve()]
 
-    # 2. ~/.blfrc
     try:
-        blfrc_paths = resolve_config_from_blfrc()
-        if blfrc_paths:
-            return blfrc_paths[0]  # first config is sufficient for name listing
+        global_files = resolve_global_mapping_files()
+        if global_files:
+            return global_files
     except Exception:
         pass
 
-    # 3. Default config.yml in CWD
-    return Path(DEFAULT_CONFIG_FILE).resolve()
+    return [Path(DEFAULT_CONFIG_FILE).resolve()]

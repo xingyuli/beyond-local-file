@@ -17,7 +17,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from beyond_local_file.blfrc import BlfrcError, resolve_config_from_blfrc
+from beyond_local_file.blfrc import BlfrcError, resolve_global_mapping_files
 from beyond_local_file.constants import DEFAULT_CONFIG_FILE
 from beyond_local_file.daemon.client import DAEMON_RUNNING_HINT
 from beyond_local_file.daemon.process import is_running
@@ -177,10 +177,10 @@ def _config_path_if_present(config: str | None) -> Path | None:
         path = Path(config).expanduser().resolve()
         return path if path.exists() else None
     try:
-        blfrc_paths = resolve_config_from_blfrc()
+        global_files = resolve_global_mapping_files()
     except BlfrcError:
-        blfrc_paths = []
-    if blfrc_paths:
-        return blfrc_paths[0]
+        global_files = []
+    if global_files:
+        return global_files[0]
     default = Path(DEFAULT_CONFIG_FILE).resolve()
     return default if default.exists() else None

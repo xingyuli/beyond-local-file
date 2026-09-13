@@ -20,11 +20,11 @@ def temp_dir():
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    """Create an isolated home directory with no .blfrc, bypassing the real ~/.blfrc.
+    """Create an isolated home directory with no global config.
 
     Sets the BLF_HOME environment variable to a temporary directory so that
-    ``resolve_config_from_blfrc()`` finds no .blfrc file and falls through to
-    the default ``config.yml`` discovery logic.
+    ``resolve_global_mapping_files()`` finds no ``~/.blf/config`` and falls
+    through to the default ``config.yml`` discovery logic.
 
     Args:
         tmp_path: Pytest temporary directory fixture.

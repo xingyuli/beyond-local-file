@@ -6,12 +6,13 @@ from pathlib import Path
 
 import click
 
-from beyond_local_file.config import Config
+from beyond_local_file.blfrc import is_global_config_path
 from beyond_local_file.daemon.client import DAEMON_DOWN_HINT, call_daemon
 from beyond_local_file.daemon.ingest import ingest_before_start, prepare_ingest, stdin_is_tty
 from beyond_local_file.daemon.process import (
     follow_log,
     is_running,
+    overlapping_running_set,
     print_status,
     read_pid,
     spawn_and_wait,
@@ -21,7 +22,7 @@ from beyond_local_file.daemon.runtime import run_worker
 from beyond_local_file.daemon.store import iter_out_of_sync, load_baseline, load_snapshot
 from beyond_local_file.held import list_held_copies
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.project_processor import load_config_projects
+from beyond_local_file.project_processor import load_config_projects, load_set_projects, resolve_configuration_set
 
 
 def start_daemon(config: str | None, *, worker: bool) -> int:
@@ -34,13 +35,19 @@ def start_daemon(config: str | None, *, worker: bool) -> int:
     Returns:
         Process exit code.
     """
-    result = load_config_projects(config)
+    result = resolve_configuration_set(config)
     if result is None:
         return 1
     if worker:
         return run_worker(result.config_file)
     if is_running(result.config_file):
         click.echo(f"Error: daemon is already running (pid {read_pid(result.config_file)})")
+        return 1
+    overlap = overlapping_running_set(list(result.mapping_files))
+    if overlap is not None:
+        identity, pid, mapping = overlap
+        owner = "global set" if is_global_config_path(identity) else f"set {identity}"
+        click.echo(f"Error: mapping file {mapping} is already loaded by the running {owner} (pid {pid})")
         return 1
     ingest_code = ingest_before_start(result.config_file)
     if ingest_code != 0:
@@ -182,6 +189,4 @@ def _projects_for_isolation(config_path: Path) -> dict[str, ConfigProject]:
     snapshot = load_snapshot(config_path)
     if snapshot is not None:
         return snapshot
-    cfg = Config(config_path)
-    cfg.load()
-    return cfg.get_config_projects()
+    return load_set_projects(config_path)

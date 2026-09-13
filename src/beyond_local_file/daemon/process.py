@@ -13,13 +13,20 @@ from pathlib import Path
 
 import click
 
-from beyond_local_file.blfrc import runtime_home
+from beyond_local_file.blfrc import (
+    global_config_path,
+    is_global_config_path,
+    resolve_global_mapping_files,
+    runtime_home,
+)
 from beyond_local_file.sync_state import STATE_DIR
 
 PID_NAME = "daemon.pid"
 LOG_NAME = "daemon.log"
 READY_NAME = "daemon.ready"
 PORT_NAME = "daemon.port"
+MAPPING_FILES_NAME = "mapping-files"
+GLOBAL_SET_ID = "global"
 _START_TIMEOUT_S = 30.0
 _STOP_TIMEOUT_S = 10.0
 _POLL_S = 0.05
@@ -39,16 +46,94 @@ def singleton_set_id(config_path: Path) -> str:
     return f"file-{digest}"
 
 
-def state_dir(config_path: Path) -> Path:
-    """Return the set run directory for the singleton set of *config_path*.
+def set_id_for(config_path: Path) -> str:
+    """Return the run-directory name for the configuration set of *config_path*.
 
     Args:
-        config_path: Path to the loaded mapping file.
+        config_path: Set identity path (global config or a mapping yaml).
+
+    Returns:
+        ``global`` or ``file-<sha256 of the resolved mapping yaml path>``.
+    """
+    if is_global_config_path(config_path):
+        return GLOBAL_SET_ID
+    return singleton_set_id(config_path)
+
+
+def state_dir(config_path: Path) -> Path:
+    """Return the set run directory for the configuration set of *config_path*.
+
+    Args:
+        config_path: Set identity path (global config or a mapping yaml).
 
     Returns:
         Directory that holds pid, log, port, snapshot, and baseline files.
     """
-    return runtime_home() / "run" / singleton_set_id(config_path)
+    return runtime_home() / "run" / set_id_for(config_path)
+
+
+def mapping_files_for(config_path: Path) -> list[Path]:
+    """Return the mapping files loaded by the set identified by *config_path*.
+
+    Args:
+        config_path: Set identity path (global config or a mapping yaml).
+
+    Returns:
+        Resolved mapping yaml paths.
+    """
+    if is_global_config_path(config_path):
+        return list(resolve_global_mapping_files() or [])
+    return [Path(config_path).resolve()]
+
+
+def running_owner_of(mapping_file: Path) -> Path | None:
+    """Return the identity path of the running set that loaded *mapping_file*.
+
+    Args:
+        mapping_file: A mapping yaml path.
+
+    Returns:
+        Global config path or the singleton mapping path, or None.
+    """
+    resolved = mapping_file.resolve()
+    overlap = overlapping_running_set([resolved])
+    if overlap is None:
+        return None
+    identity, _pid, _mapping = overlap
+    return identity
+
+
+def overlapping_running_set(mapping_files: list[Path]) -> tuple[Path, int, Path] | None:
+    """Return a running set that already loaded one of *mapping_files*.
+
+    Args:
+        mapping_files: Mapping yaml paths the caller wants to load.
+
+    Returns:
+        ``(identity_path, pid, overlapping_mapping_file)`` or None.
+    """
+    wanted = {path.resolve() for path in mapping_files}
+    if not wanted:
+        return None
+    run_root = runtime_home() / "run"
+    if not run_root.is_dir():
+        return None
+    for entry in sorted(run_root.iterdir(), key=lambda path: path.name):
+        if not entry.is_dir():
+            continue
+        pid = _read_pid_file(entry / PID_NAME)
+        if pid is None or not pid_is_alive(pid):
+            continue
+        loaded = _loaded_mapping_files(entry)
+        if not loaded and entry.name != GLOBAL_SET_ID:
+            loaded = [path for path in wanted if singleton_set_id(path) == entry.name]
+        for loaded_path in loaded:
+            if loaded_path.resolve() in wanted:
+                identity = _identity_path_for_run_dir(entry, loaded)
+                if identity is None:
+                    continue
+                return identity, pid, loaded_path.resolve()
+    return None
 
 
 def pid_path(config_path: Path) -> Path:
@@ -108,16 +193,7 @@ def read_pid(config_path: Path) -> int | None:
     Returns:
         The stored pid, or None when missing or invalid.
     """
-    path = pid_path(config_path)
-    if not path.exists():
-        return None
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return None
-    try:
-        return int(text.splitlines()[0])
-    except ValueError:
-        return None
+    return _read_pid_file(pid_path(config_path))
 
 
 def pid_is_alive(pid: int) -> bool:
@@ -173,9 +249,12 @@ def spawn_and_wait(config_path: Path) -> int:
         click.echo(f"Error: daemon is already running (pid {read_pid(config_path)})")
         return 1
 
-    for path in _remove_hub_local_state(config_path):
-        click.echo(str(path))
+    mapping_files = mapping_files_for(config_path)
+    for mapping in mapping_files:
+        for path in _remove_hub_local_state(mapping):
+            click.echo(str(path))
     _clear_runtime_files(config_path)
+    _write_mapping_files(config_path, mapping_files)
     log_file = log_path(config_path)
     log_file.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_file, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
@@ -392,6 +471,53 @@ def _echo_log_tail(path: Path, *, lines: int = 20) -> None:
     tail = "\n".join(text.splitlines()[-lines:])
     if tail:
         click.echo(tail)
+
+
+def _write_mapping_files(config_path: Path, mapping_files: list[Path]) -> None:
+    path = state_dir(config_path) / MAPPING_FILES_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{item.resolve()}\n" for item in mapping_files), encoding="utf-8")
+
+
+def _read_mapping_files(run_dir: Path) -> list[Path]:
+    path = run_dir / MAPPING_FILES_NAME
+    if not path.exists():
+        return []
+    files: list[Path] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if text:
+            files.append(Path(text))
+    return files
+
+
+def _loaded_mapping_files(run_dir: Path) -> list[Path]:
+    files = _read_mapping_files(run_dir)
+    if files:
+        return files
+    if run_dir.name == GLOBAL_SET_ID:
+        return list(resolve_global_mapping_files() or [])
+    return []
+
+
+def _identity_path_for_run_dir(run_dir: Path, loaded: list[Path]) -> Path | None:
+    if run_dir.name == GLOBAL_SET_ID:
+        return global_config_path()
+    if loaded:
+        return loaded[0].resolve()
+    return None
+
+
+def _read_pid_file(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return None
+    try:
+        return int(text.splitlines()[0])
+    except ValueError:
+        return None
 
 
 def _pid_is_alive_windows(pid: int) -> bool:

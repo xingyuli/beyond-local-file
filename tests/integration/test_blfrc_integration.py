@@ -1,4 +1,4 @@
-"""Integration tests for .blfrc configuration file support."""
+"""Integration tests for ~/.blf/config pointer-list support."""
 
 from pathlib import Path
 
@@ -6,7 +6,19 @@ import pytest
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
-from tests.daemon_support import daemon_running, start_daemon, stop_daemon
+from tests.daemon_support import daemon_running, invoke_cli
+
+
+def _write_pointer(home: Path, mapping_files: list[Path] | str) -> Path:
+    path = home / ".blf" / "config"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(mapping_files, str):
+        path.write_text(mapping_files)
+        return path
+    lines = ["config_file:"]
+    lines.extend(f"  - {mapping}" for mapping in mapping_files)
+    path.write_text("\n".join(lines) + "\n")
+    return path
 
 
 def _assert_copy_projection(path: Path) -> None:
@@ -32,11 +44,11 @@ def temp_home(tmp_path, monkeypatch):
     yield home_dir, {"BLF_HOME": str(home_dir)}
 
 
-class TestBlfrcIntegration:
-    """Integration tests for .blfrc support."""
+class TestGlobalConfigIntegration:
+    """Integration tests for ~/.blf/config support."""
 
-    def test_uses_config_from_blfrc_single_file(self, temp_home, tmp_path):
-        """Test that config is loaded from .blfrc with single file."""
+    def test_uses_config_from_global_pointer_single_file(self, temp_home, tmp_path):
+        """Test that config is loaded from ~/.blf/config with single file."""
         home_dir, env = temp_home
 
         # Create managed project and target
@@ -51,17 +63,17 @@ class TestBlfrcIntegration:
         config = tmp_path / "my-config.yml"
         config.write_text(f"test-project: {target}\n")
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text(f"config_file: {config}\n")
+        _write_pointer(home_dir, [config])
 
-        with daemon_running(config, env):
-            pass
+        started = invoke_cli(["daemon", "start"], env=env)
+        assert started.exit_code == 0, started.output
+        invoke_cli(["daemon", "stop"], env=env)
 
         _assert_copy_projection(target / "file1.txt")
         _assert_copy_projection(target / "file2.txt")
 
-    def test_uses_config_from_blfrc_multiple_files(self, temp_home, tmp_path):
-        """Test that multiple configs are combined from .blfrc."""
+    def test_uses_config_from_global_pointer_multiple_files(self, temp_home, tmp_path):
+        """Test that one daemon loads every mapping file in ~/.blf/config."""
         home_dir, env = temp_home
 
         # Two separate directories each with their own managed project and config
@@ -83,21 +95,19 @@ class TestBlfrcIntegration:
         config1.write_text(f"project1: {target1}\n")
         config2.write_text(f"project2: {target2}\n")
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text(f"config_file:\n  - {config1}\n  - {config2}\n")
+        _write_pointer(home_dir, [config1, config2])
 
         try:
-            start_daemon(config1, env)
-            start_daemon(config2, env)
+            started = invoke_cli(["daemon", "start"], env=env)
+            assert started.exit_code == 0, started.output
         finally:
-            stop_daemon(config1, env)
-            stop_daemon(config2, env)
+            invoke_cli(["daemon", "stop"], env=env)
 
         _assert_copy_projection(target1 / "file1.txt")
         _assert_copy_projection(target2 / "file2.txt")
 
-    def test_explicit_config_flag_overrides_blfrc(self, temp_home, tmp_path):
-        """Test that explicit --config flag overrides .blfrc."""
+    def test_explicit_config_flag_overrides_global_config(self, temp_home, tmp_path):
+        """Test that explicit --config flag overrides ~/.blf/config."""
         home_dir, env = temp_home
 
         managed = tmp_path / "test-project"
@@ -113,8 +123,7 @@ class TestBlfrcIntegration:
         blfrc_config.write_text(f"test-project: {wrong_target}\n")
         explicit_config.write_text(f"test-project: {right_target}\n")
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text(f"config_file: {blfrc_config}\n")
+        _write_pointer(home_dir, [blfrc_config])
 
         with daemon_running(explicit_config, env):
             pass
@@ -122,11 +131,11 @@ class TestBlfrcIntegration:
         _assert_copy_projection(right_target / "file1.txt")
         assert not (wrong_target / "file1.txt").exists()
 
-    def test_falls_back_to_default_when_blfrc_missing(self, temp_home):
-        """Test that default config.yml is used when .blfrc doesn't exist."""
+    def test_falls_back_to_default_when_global_config_missing(self, temp_home):
+        """Test that default config.yml is used when ~/.blf/config doesn't exist."""
         _home_dir, env = temp_home
 
-        # No .blfrc — build everything inside isolated_filesystem so config.yml
+        # No ~/.blf/config — build everything inside isolated_filesystem so config.yml
         # is in the CWD that the CLI will use
         runner = CliRunner()
         with runner.isolated_filesystem() as td:
@@ -146,11 +155,10 @@ class TestBlfrcIntegration:
             _assert_copy_projection(target / "file1.txt")
 
     def test_falls_back_when_config_file_field_missing(self, temp_home):
-        """Test fallback to default when .blfrc exists but config_file is missing."""
+        """Test fallback to default when ~/.blf/config exists but config_file is missing."""
         home_dir, env = temp_home
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text("other_field: value\n")
+        _write_pointer(home_dir, "other_field: value\n")
 
         runner = CliRunner()
         with runner.isolated_filesystem() as td:
@@ -169,12 +177,11 @@ class TestBlfrcIntegration:
 
             _assert_copy_projection(target / "file1.txt")
 
-    def test_error_on_invalid_blfrc(self, temp_home, tmp_path):
-        """Test that error is shown when .blfrc is invalid."""
+    def test_error_on_invalid_global_config(self, temp_home, tmp_path):
+        """Test that error is shown when ~/.blf/config is invalid."""
         home_dir, env = temp_home
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text("config_file: [\n")  # Invalid YAML
+        _write_pointer(home_dir, "config_file: [\n")
 
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -185,11 +192,10 @@ class TestBlfrcIntegration:
         assert "Invalid YAML" in result.output
 
     def test_error_on_config_file_not_found(self, temp_home, tmp_path):
-        """Test that error is shown when config file from .blfrc doesn't exist."""
+        """Test that error is shown when config file from ~/.blf/config doesn't exist."""
         home_dir, env = temp_home
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text("config_file: /nonexistent/config.yml\n")
+        _write_pointer(home_dir, "config_file: /nonexistent/config.yml\n")
 
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -213,8 +219,7 @@ class TestBlfrcIntegration:
         config1.write_text(f"test-project: {tmp_path / 'target1'}\n")
         config2.write_text(f"test-project: {tmp_path / 'target2'}\n")
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text(f"config_file:\n  - {config1}\n  - {config2}\n")
+        _write_pointer(home_dir, [config1, config2])
 
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -247,15 +252,13 @@ class TestBlfrcIntegration:
         config1.write_text(f"my-project: {target1}\n")
         config2.write_text(f"my-project: {target2}\n")
 
-        blfrc = home_dir / ".blfrc"
-        blfrc.write_text(f"config_file:\n  - {config1}\n  - {config2}\n")
+        _write_pointer(home_dir, [config1, config2])
 
         try:
-            start_daemon(config1, env)
-            start_daemon(config2, env)
+            started = invoke_cli(["daemon", "start"], env=env)
+            assert started.exit_code == 0, started.output
         finally:
-            stop_daemon(config1, env)
-            stop_daemon(config2, env)
+            invoke_cli(["daemon", "stop"], env=env)
 
         _assert_copy_projection(target1 / "file1.txt")
         _assert_copy_projection(target2 / "file2.txt")

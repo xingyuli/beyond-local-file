@@ -11,9 +11,9 @@ from pathlib import Path
 from types import FrameType
 from typing import TextIO
 
-from beyond_local_file.config import Config
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
 from .handlers import handle_request
@@ -79,9 +79,7 @@ def _catch_up_and_persist(
     Returns:
         Projects and baseline trees, or None when start must not continue.
     """
-    cfg = Config(config_path)
-    cfg.load()
-    file_projects = cfg.get_config_projects()
+    file_projects = load_set_projects(config_path)
     snapshot_projects = load_snapshot(config_path)
     if snapshot_projects is None:
         projects = file_projects
