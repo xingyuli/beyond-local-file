@@ -35,7 +35,7 @@ def run_catch_up(
 
     Args:
         projects: Committed mappings to catch up.
-        config_dir: Directory that stores ``sync-state.yml``.
+        config_dir: Set run directory passed through to CopyManager.
         baseline: Previous baseline, or None for a first catch-up.
         on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
 
@@ -148,9 +148,7 @@ def _fresh_catch_up_unit(
             on_progress(index, total, item.name)
         destination = unit.target_project_path / item.name
         replace_with_copy(item.path, destination)
-        copy_mgr.sync_state.update_record(item.path, destination)
         print(f"catch-up: copied {item.name} -> {destination}", flush=True)
-    copy_mgr.sync_state.save()
     copy_mgr.add_git_excludes()
 
 

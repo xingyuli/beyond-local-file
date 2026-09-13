@@ -10,6 +10,7 @@ from pathlib import Path
 
 import click
 
+from beyond_local_file.model.translator import translate_config_to_processing
 from beyond_local_file.operations.link_check import CheckOperation
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
 from beyond_local_file.operations.revlink import (
@@ -29,26 +30,31 @@ from beyond_local_file.project_processor import (
 
 from .catchup import record_baseline
 from .ingest import commit_reload
-from .ipc import Request, Response
+from .ipc import ProgressCallback, Request, Response, format_status_line
 from .process import state_dir
 from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
 
 type Handler = Callable[[Path, Request], int]
 
 
-def handle_request(config_path: Path, request: Request) -> Response:
+def handle_request(
+    config_path: Path,
+    request: Request,
+    on_progress: ProgressCallback | None = None,
+) -> Response:
     """Run one daemon request and capture its stdout.
 
     Args:
         config_path: Path to the loaded config file.
         request: JSON request from a shell.
+        on_progress: Optional callback for streamed status lines.
 
     Returns:
         ``exit_code`` and captured ``stdout``.
     """
     op = request.get("op")
     dispatch: dict[str, Handler] = {
-        "check": _handle_check,
+        "check": lambda path, req: _handle_check(path, req, on_progress),
         "create": _handle_create,
         "restore": _handle_restore,
         "remove": _handle_remove,
@@ -73,7 +79,11 @@ def _handle_reload(config_path: Path, request: Request) -> int:
     return commit_reload(config_path, confirmed=bool(request.get("confirmed")))
 
 
-def _handle_check(config_path: Path, request: Request) -> int:
+def _handle_check(
+    config_path: Path,
+    request: Request,
+    on_progress: ProgressCallback | None = None,
+) -> int:
     projects = load_snapshot(config_path)
     if projects is None:
         projects = load_set_projects(config_path)
@@ -85,7 +95,17 @@ def _handle_check(config_path: Path, request: Request) -> int:
             return 1
     extra_exclude = bool(request.get("extra_exclude"))
     output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
+    units = translate_config_to_processing(projects)
+
+    def emit_item(index: int, total: int, item: str) -> None:
+        if on_progress is None:
+            return
+        on_progress(format_status_line("Checking", index, total, item))
+
     operation = CheckOperation(state_dir(config_path), extra_exclude, output_format)
+    operation.baseline = load_baseline(config_path)
+    operation.on_progress = emit_item
+    operation.unit_count = len(units)
     ProjectProcessor.process_all_units(projects, operation)
     operation.render()
     return 0

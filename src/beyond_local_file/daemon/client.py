@@ -132,7 +132,7 @@ def _is_connect_error(error: OSError) -> bool:
 
 
 class _StatusLine:
-    """Rewrites one catch-up status line on a TTY stderr."""
+    """Rewrites one status line on a TTY stderr."""
 
     def __init__(self) -> None:
         self._width = 0

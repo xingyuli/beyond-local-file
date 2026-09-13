@@ -1,40 +1,35 @@
-"""Sync state tracking for physically copied files.
+"""Live hash comparison for copy projections.
 
-Stores per-item SHA-256 hashes so that change detection can distinguish
-which side (managed, target, or both) has been modified since the last sync.
+Match is in-sync. Mismatch is labeled from the baseline when one exists.
+There is no persisted ``sync-state.yml``.
 """
+
+from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
-import yaml
+from .daemon.store import BaselineTrees, get_state, state_equal
 
 
 class SyncStatus(StrEnum):
-    """Sync status for a copied file.
+    """Live copy status for a managed item vs its projection.
 
     Attributes:
-        IN_SYNC: Managed and target files are identical and match recorded state.
-        MANUALLY_SYNCED: Managed and target files are identical but differ from recorded state.
-        MANAGED_CHANGED: Only the managed (source) file changed since last sync.
-        TARGET_CHANGED: Only the target file changed since last sync.
-        BOTH_CHANGED: Both files changed — conflict.
+        IN_SYNC: Managed and target hashes match right now.
+        MISMATCH: Hashes differ and there is no baseline to label which side moved.
+        MANAGED_CHANGED: Live mismatch; only the managed side differs from baseline.
+        TARGET_CHANGED: Live mismatch; only the target side differs from baseline.
+        BOTH_CHANGED: Live mismatch; both sides differ from baseline.
     """
 
     IN_SYNC = "in_sync"
-    MANUALLY_SYNCED = "manually_synced"
+    MISMATCH = "mismatch"
     MANAGED_CHANGED = "managed_changed"
     TARGET_CHANGED = "target_changed"
     BOTH_CHANGED = "both_changed"
-
-
-STATE_DIR = ".blf"
-STATE_FILE = "sync-state.yml"
 
 
 def compute_file_hash(filepath: Path) -> str:
@@ -68,6 +63,40 @@ def compute_item_hash(path: Path) -> str:
     return compute_file_hash(path)
 
 
+type BaselineView = tuple[BaselineTrees, Path, Path, str]
+
+
+def detect_status(
+    managed_file: Path,
+    target_file: Path,
+    baseline: BaselineView | None = None,
+) -> SyncStatus:
+    """Classify live hashes of managed vs target, labeling from baseline.
+
+    Args:
+        managed_file: Absolute path to the managed item.
+        target_file: Absolute path to the target projection.
+        baseline: Optional ``(trees, managed_root, target_root, item_name)``.
+
+    Returns:
+        A SyncStatus value describing the live relationship.
+    """
+    if compute_item_hash(managed_file) == compute_item_hash(target_file):
+        return SyncStatus.IN_SYNC
+    if baseline is None:
+        return SyncStatus.MISMATCH
+    trees, managed_root, target_root, item_name = baseline
+    managed_changed = _item_changed(trees, managed_root, item_name)
+    target_changed = _item_changed(trees, target_root, item_name)
+    if not managed_changed and not target_changed:
+        return SyncStatus.MISMATCH
+    if managed_changed and target_changed:
+        return SyncStatus.BOTH_CHANGED
+    if managed_changed:
+        return SyncStatus.MANAGED_CHANGED
+    return SyncStatus.TARGET_CHANGED
+
+
 def _compute_directory_hash(directory: Path) -> str:
     """Hash a directory by walking relative paths and file contents."""
     sha256 = hashlib.sha256()
@@ -90,135 +119,16 @@ def _compute_directory_hash(directory: Path) -> str:
     return sha256.hexdigest()
 
 
-@dataclass
-class SyncRecord:
-    """A single file's sync state.
+def _item_changed(baseline: BaselineTrees, root: Path, item_name: str) -> bool:
+    from beyond_local_file.daemon.catchup import scan_items  # noqa: PLC0415 -- avoid import cycle with catch-up
 
-    Attributes:
-        managed_path: Absolute path to the managed (source) file.
-        target_path: Absolute path to the target (copied) file.
-        last_sync_hash: SHA-256 hash at the time of last successful sync.
-        last_sync_time: Timestamp of last successful sync.
-    """
-
-    managed_path: str
-    target_path: str
-    last_sync_hash: str
-    last_sync_time: str
-
-    def to_dict(self) -> dict[str, str]:
-        """Serialize to a plain dict for YAML output."""
-        return {
-            "managed_path": self.managed_path,
-            "target_path": self.target_path,
-            "last_sync_hash": self.last_sync_hash,
-            "last_sync_time": self.last_sync_time,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, str]) -> "SyncRecord":
-        """Deserialize from a plain dict."""
-        return cls(
-            managed_path=data["managed_path"],
-            target_path=data["target_path"],
-            last_sync_hash=data["last_sync_hash"],
-            last_sync_time=data["last_sync_time"],
-        )
+    live = scan_items(root, [item_name])
+    stored = baseline.get(str(root), {})
+    rels = set(live) | {rel for rel in stored if _rel_in_item(rel, item_name)}
+    if not any(_rel_in_item(rel, item_name) for rel in stored):
+        return False
+    return any(not state_equal(live.get(rel), get_state(baseline, root, rel)) for rel in rels)
 
 
-@dataclass
-class SyncState:
-    """Manages sync state for all copied files.
-
-    The state file lives at ``<config_dir>/sync-state.yml``. The daemon
-    passes the set run directory so the book is not hub-local.
-
-    Attributes:
-        config_dir: Directory that stores ``sync-state.yml``.
-        records: Mapping from target-relative path to its SyncRecord.
-    """
-
-    config_dir: Path
-    records: dict[str, SyncRecord] = field(default_factory=dict)
-
-    @property
-    def _state_file(self) -> Path:
-        return self.config_dir / STATE_FILE
-
-    # -- persistence -----------------------------------------------------------
-
-    def load(self) -> None:
-        """Load state from disk. No-op if the file does not exist."""
-        if not self._state_file.exists():
-            return
-        with open(self._state_file) as f:
-            data: dict[str, Any] = yaml.safe_load(f) or {}
-        synced_files = data.get("synced_files") or []
-        for entry in synced_files:
-            record = SyncRecord.from_dict(entry)
-            self.records[record.target_path] = record
-
-    def save(self) -> None:
-        """Persist current state to disk."""
-        self._state_file.parent.mkdir(parents=True, exist_ok=True)
-        data = {"synced_files": [r.to_dict() for r in self.records.values()]}
-        with open(self._state_file, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
-    # -- queries ---------------------------------------------------------------
-
-    def get_record(self, target_path: str) -> SyncRecord | None:
-        """Look up the sync record for a target path."""
-        return self.records.get(target_path)
-
-    def detect_status(self, managed_file: Path, target_file: Path) -> SyncStatus:
-        """Detect the sync status between managed and target files.
-
-        Args:
-            managed_file: Absolute path to the managed (source) file.
-            target_file: Absolute path to the target (copied) file.
-
-        Returns:
-            A SyncStatus value describing the relationship.
-        """
-        managed_hash = compute_item_hash(managed_file)
-        target_hash = compute_item_hash(target_file)
-
-        record = self.get_record(str(target_file))
-
-        # If files are identical
-        if managed_hash == target_hash:
-            # Check if they match the recorded state
-            if record is None or managed_hash != record.last_sync_hash:
-                # Files match but differ from sync-state: manual sync detected
-                return SyncStatus.MANUALLY_SYNCED
-            # Files match and match the recorded state
-            return SyncStatus.IN_SYNC
-
-        if record is None:
-            # No sync record exists - treat as managed changed (needs initial sync)
-            return SyncStatus.MANAGED_CHANGED
-
-        last = record.last_sync_hash
-        if managed_hash == last:
-            return SyncStatus.TARGET_CHANGED
-        if target_hash == last:
-            return SyncStatus.MANAGED_CHANGED
-        return SyncStatus.BOTH_CHANGED
-
-    # -- mutations -------------------------------------------------------------
-
-    def update_record(self, managed_file: Path, target_file: Path) -> None:
-        """Create or update the sync record after a successful copy.
-
-        Args:
-            managed_file: Absolute path to the managed (source) file.
-            target_file: Absolute path to the target (copied) file.
-        """
-        file_hash = compute_item_hash(target_file)
-        self.records[str(target_file)] = SyncRecord(
-            managed_path=str(managed_file),
-            target_path=str(target_file),
-            last_sync_hash=file_hash,
-            last_sync_time=datetime.now(tz=UTC).isoformat(),
-        )
+def _rel_in_item(rel: str, item_name: str) -> bool:
+    return rel == item_name or rel.startswith(f"{item_name}/")

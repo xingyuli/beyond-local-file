@@ -17,7 +17,6 @@ from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
 from beyond_local_file.daemon.process import state_dir
-from beyond_local_file.sync_state import SyncState
 
 _WORKER_FLAG = "--worker"
 _READY_WAIT_S = 15.0
@@ -520,10 +519,6 @@ def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
     managed = managed_dirs[0]
     target = target_dirs[0]
     projection = target / "shared.txt"
-    projection.write_text("hub-0")
-    state = SyncState(_state_dir(config_path))
-    state.update_record(managed / "shared.txt", projection)
-    state.save()
     projection.write_text("from-target")
 
     started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
@@ -531,6 +526,7 @@ def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
 
     assert (managed / "shared.txt").read_text() == "hub-0"
     assert projection.read_text() == "hub-0"
+    assert not (_state_dir(config_path) / "sync-state.yml").exists()
 
 
 def test_update_catch_up_applies_only_paths_that_differ_from_baseline(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..copy_manager import CopyManager
+from ..daemon.store import BaselineTrees
 from ..link_strategy_protocol import (
     CopyCheckDetails,
     GitExcludeCheckResult,
@@ -19,6 +21,8 @@ from ..model.processing import LinkStrategy, ProcessingUnit
 from ..options import OutputFormat
 from ..symlink_manager import SymlinkManager
 from .base import CmdOperation
+
+type ItemProgress = Callable[[int, int, str], None]
 
 # ---------------------------------------------------------------------------
 # Data containers
@@ -139,8 +143,8 @@ class LinkCheckFormatter:
         click.echo("\nCopy Sync Status:")
         for item in details.in_sync:
             click.echo(f"  ✓ {item} (in sync)")
-        for item in details.manually_synced:
-            click.echo(f"  ✓ {item} (manually synced)")
+        for item in details.mismatched:
+            click.echo(f"  ⚠ {item} (mismatch)")
         for item in details.managed_changed:
             click.echo(f"  ⚠ {item} (managed changed)")
         for item in details.target_changed:
@@ -342,13 +346,13 @@ class CheckTableFormatter:
             return "[dim]n/a[/dim]"
         details = link_result.details
         problems = (
-            len(details.managed_changed)
+            len(details.mismatched)
+            + len(details.managed_changed)
             + len(details.target_changed)
             + len(details.both_changed)
             + len(link_result.missing)
             + len(link_result.incorrect)
         )
-        manually_synced_count = len(details.manually_synced)
         if problems:
             parts: list[str] = []
             if link_result.missing:
@@ -360,9 +364,9 @@ class CheckTableFormatter:
             out_of_sync = len(details.managed_changed) + len(details.target_changed)
             if out_of_sync:
                 parts.append(f"{out_of_sync} out of sync")
+            if details.mismatched:
+                parts.append(f"{len(details.mismatched)} mismatch")
             return f"[red]✗ ({', '.join(parts)})[/red]"
-        if manually_synced_count:
-            return f"[green]✓[/green] [dim](+{manually_synced_count} manual)[/dim]"
         return "[green]✓[/green]"
 
     def _render_extra_entries(self, console: Console) -> None:
@@ -413,6 +417,10 @@ class CheckOperation(CmdOperation):
         self.config_dir = config_dir
         self.show_extra = show_extra
         self.output_format = output_format
+        self.baseline: BaselineTrees | None = None
+        self.on_progress: ItemProgress | None = None
+        self.unit_count = 0
+        self._unit_index = 0
         self._results: list[ProcessingUnitResults] = []
 
     @property
@@ -433,6 +441,7 @@ class CheckOperation(CmdOperation):
         Returns:
             Always True to continue processing.
         """
+        self._unit_index += 1
         symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
         copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
 
@@ -469,6 +478,8 @@ class CheckOperation(CmdOperation):
             all_valid_entries: All managed item names across both strategies.
         """
         if symlink_mgr:
+            for item in symlink_mgr.get_managed_items():
+                self._emit(item.name)
             link_result = symlink_mgr.check_links()
             git_result = symlink_mgr.check_git_excludes(all_valid_entries)
             LinkCheckFormatter(link_result, git_result, self.show_extra).print(
@@ -476,7 +487,11 @@ class CheckOperation(CmdOperation):
             )
 
         if copy_mgr:
-            link_result = copy_mgr.check_links()
+            link_result = copy_mgr.check_links(
+                baseline=self.baseline,
+                managed_root=unit.managed_project_path,
+                on_item=self._emit,
+            )
             git_result = copy_mgr.check_git_excludes(all_valid_entries)
             LinkCheckFormatter(link_result, git_result, self.show_extra).print(
                 unit.display_name, unit.target_project_path
@@ -500,13 +515,19 @@ class CheckOperation(CmdOperation):
         symlink_link_result = None
         symlink_git_result = None
         if symlink_mgr:
+            for item in symlink_mgr.get_managed_items():
+                self._emit(item.name)
             symlink_link_result = symlink_mgr.check_links()
             symlink_git_result = symlink_mgr.check_git_excludes(all_valid_entries)
 
         copy_link_result = None
         copy_git_result = None
         if copy_mgr:
-            copy_link_result = copy_mgr.check_links()
+            copy_link_result = copy_mgr.check_links(
+                baseline=self.baseline,
+                managed_root=unit.managed_project_path,
+                on_item=self._emit,
+            )
             copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
 
         self._results.append(
@@ -527,3 +548,8 @@ class CheckOperation(CmdOperation):
         if self.output_format != OutputFormat.VERBOSE and self._results:
             rows = CheckTableRenderer(self._results).transform()
             CheckTableFormatter(rows, self.show_extra).render()
+
+    def _emit(self, item_name: str) -> None:
+        if self.on_progress is None or self.output_format == OutputFormat.VERBOSE:
+            return
+        self.on_progress(self._unit_index, self.unit_count, item_name)

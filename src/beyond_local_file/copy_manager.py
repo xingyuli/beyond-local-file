@@ -9,6 +9,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
+from .daemon.store import BaselineTrees
 from .git_manager import GitExcludeManager
 from .link_strategy_protocol import (
     CopyCheckDetails,
@@ -21,7 +22,7 @@ from .link_strategy_protocol import (
 )
 from .model.processing import LinkStrategy, ManagedProjectItem
 from .options import CopyConflictResolution
-from .sync_state import SyncState, SyncStatus
+from .sync_state import SyncStatus, detect_status
 
 
 def copy_projection(source: Path, destination: Path) -> None:
@@ -59,8 +60,7 @@ class CopyManager:
     Attributes:
         copy_items: Managed project items that use the copy strategy.
         target_path: Target directory where copies are placed.
-        config_dir: Directory that stores ``sync-state.yml``.
-        sync_state: Persistent sync state tracker.
+        config_dir: Unused; retained so existing call sites keep the same signature.
         git_manager: Manager for Git exclude file operations.
 
     Note:
@@ -77,13 +77,11 @@ class CopyManager:
             copy_items: Items with ``strategy == LinkStrategy.COPY``.
             target_path: Target directory for file copies.  Must be the root of
                 a Git repository for git exclude operations to take effect.
-            config_dir: Directory that stores ``sync-state.yml``.
+            config_dir: Unused; retained for call-site compatibility.
         """
         self.copy_items = [i for i in copy_items if i.strategy == LinkStrategy.COPY]
         self.target_path = target_path
         self.config_dir = config_dir
-        self.sync_state = SyncState(config_dir)
-        self.sync_state.load()
         self.git_manager = GitExcludeManager(target_path)
 
     # Protocol methods (LinkStrategyManager interface)
@@ -128,72 +126,70 @@ class CopyManager:
             if target_file.is_symlink() or not target_file.exists():
                 # Missing projection, or a leftover symlink at the projection
                 # path, is replaced with a real copy.
-                if self._copy_and_record(managed_file, target_file, managed_file, target_file):
+                if self._copy_item(managed_file, target_file):
                     result.created.add(item.name)
                 else:
                     result.failed.add(item.name)
                 result.progress.completed_items += 1
                 continue
 
-            status = self.sync_state.detect_status(managed_file, target_file)
+            status = detect_status(managed_file, target_file)
 
             if status == SyncStatus.BOTH_CHANGED:
-                # Resolve conflict via user callback
                 action = (
                     conflict_callback(managed_file, target_file) if conflict_callback else CopyConflictResolution.SKIP
                 )
 
                 if action == CopyConflictResolution.MANAGED:
-                    if self._copy_and_record(managed_file, target_file, managed_file, target_file):
+                    if self._copy_item(managed_file, target_file):
                         result.created.add(item.name)
                     else:
                         result.failed.add(item.name)
                 elif action == CopyConflictResolution.TARGET:
-                    if self._copy_and_record(target_file, managed_file, managed_file, target_file):
+                    if self._copy_item(target_file, managed_file):
                         reverse_copied.add(item.name)
                     else:
                         result.failed.add(item.name)
                 else:
                     result.skipped.add(item.name)
-            elif status == SyncStatus.MANUALLY_SYNCED:
-                # Files match but sync-state is outdated: update record without copying
-                self.sync_state.update_record(managed_file, target_file)
-                result.already_correct.add(item.name)
             elif status == SyncStatus.IN_SYNC:
-                # Create missing record when target file was just added to managed project
-                if self.sync_state.get_record(str(target_file)) is None:
-                    self.sync_state.update_record(managed_file, target_file)
                 result.already_correct.add(item.name)
-            elif status == SyncStatus.MANAGED_CHANGED:
-                if self._copy_and_record(managed_file, target_file, managed_file, target_file):
+            elif status in {SyncStatus.MANAGED_CHANGED, SyncStatus.MISMATCH}:
+                if self._copy_item(managed_file, target_file):
                     result.created.add(item.name)
                 else:
                     result.failed.add(item.name)
             elif status == SyncStatus.TARGET_CHANGED:
-                if self._copy_and_record(target_file, managed_file, managed_file, target_file):
+                if self._copy_item(target_file, managed_file):
                     reverse_copied.add(item.name)
                 else:
                     result.failed.add(item.name)
 
             result.progress.completed_items += 1
 
-        self.sync_state.save()
-
-        # Create strategy-specific details
         result.details = CopyCreateDetails(reverse_copied=reverse_copied)
 
         return result
 
-    def check_links(self) -> LinkCheckResult:
-        """Check the status of links for all managed items (protocol method).
+    def check_links(
+        self,
+        *,
+        baseline: BaselineTrees | None = None,
+        managed_root: Path | None = None,
+        on_item: Callable[[str], None] | None = None,
+    ) -> LinkCheckResult:
+        """Check live hashes of managed vs target for all copy items.
 
-        Checks sync status of all copy items without modifying files.
+        Args:
+            baseline: Optional baseline used only to label which side moved.
+            managed_root: Managed-project root for baseline lookups.
+            on_item: Optional callback invoked with the current item name.
 
         Returns:
             LinkCheckResult containing the status of copies with detailed sync information.
         """
         in_sync_list: list[str] = []
-        manually_synced_list: list[str] = []
+        mismatched_list: list[str] = []
         managed_changed_list: list[str] = []
         target_changed_list: list[str] = []
         both_changed_list: list[str] = []
@@ -201,11 +197,11 @@ class CopyManager:
         incorrect_list: list[str] = []
 
         for item in self.copy_items:
+            if on_item is not None:
+                on_item(item.name)
             target_file = self.target_path / item.name
 
             if target_file.is_symlink():
-                # A symlink is not a copy projection, even if it points at
-                # the managed item.
                 incorrect_list.append(item.name)
                 continue
 
@@ -213,27 +209,32 @@ class CopyManager:
                 missing_list.append(item.name)
                 continue
 
-            status = self.sync_state.detect_status(item.path, target_file)
+            status = detect_status(
+                item.path,
+                target_file,
+                (baseline, managed_root, self.target_path, item.name)
+                if baseline is not None and managed_root is not None
+                else None,
+            )
             status_map = {
                 SyncStatus.IN_SYNC: in_sync_list,
-                SyncStatus.MANUALLY_SYNCED: manually_synced_list,
+                SyncStatus.MISMATCH: mismatched_list,
                 SyncStatus.MANAGED_CHANGED: managed_changed_list,
                 SyncStatus.TARGET_CHANGED: target_changed_list,
                 SyncStatus.BOTH_CHANGED: both_changed_list,
             }
             status_map[status].append(item.name)
 
-        # Create strategy-specific details
         details = CopyCheckDetails(
             in_sync=in_sync_list,
-            manually_synced=manually_synced_list,
+            mismatched=mismatched_list,
             managed_changed=managed_changed_list,
             target_changed=target_changed_list,
             both_changed=both_changed_list,
         )
 
         return LinkCheckResult(
-            exists=in_sync_list + manually_synced_list,
+            exists=in_sync_list,
             missing=missing_list,
             incorrect=incorrect_list,
             details=details,
@@ -301,23 +302,6 @@ class CopyManager:
         return result
 
     # -- internal helpers ------------------------------------------------------
-
-    def _copy_and_record(self, source: Path, destination: Path, managed: Path, target: Path) -> bool:
-        """Copy an item and update the sync record on success.
-
-        Args:
-            source: File to read from.
-            destination: File to write to.
-            managed: Managed file path (for the sync record).
-            target: Target file path (for the sync record).
-
-        Returns:
-            True on success, False on failure.
-        """
-        if not self._copy_item(source, destination):
-            return False
-        self.sync_state.update_record(managed, target)
-        return True
 
     @staticmethod
     def _copy_item(source: Path, destination: Path) -> bool:

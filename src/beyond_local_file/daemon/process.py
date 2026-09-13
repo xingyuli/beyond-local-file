@@ -19,7 +19,7 @@ from beyond_local_file.blfrc import (
     resolve_global_mapping_files,
     runtime_home,
 )
-from beyond_local_file.sync_state import STATE_DIR
+from beyond_local_file.constants import HUB_LOCAL_DIR
 
 PID_NAME = "daemon.pid"
 LOG_NAME = "daemon.log"
@@ -408,7 +408,7 @@ def _clear_runtime_files(config_path: Path) -> None:
 
 
 def _remove_hub_local_state(config_path: Path) -> list[Path]:
-    leftover = config_path.parent / STATE_DIR
+    leftover = config_path.parent / HUB_LOCAL_DIR
     try:
         if leftover.resolve() == runtime_home().resolve():
             return []

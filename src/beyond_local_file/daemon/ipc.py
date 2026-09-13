@@ -15,9 +15,25 @@ from .process import port_path
 
 type Request = dict[str, Any]
 type Response = dict[str, Any]
-type RequestHandler = Callable[[Path, Request], Response]
 type ProgressCallback = Callable[[str], None]
+type RequestHandler = Callable[[Path, Request, ProgressCallback | None], Response]
 type DaemonPhase = Literal["catch-up", "ready"]
+
+
+def format_status_line(verb: str, index: int, total: int, item: str) -> str:
+    """Return one status line: verb, unit i/n, and the current item name.
+
+    Args:
+        verb: Leading verb, such as ``Catching up`` or ``Checking``.
+        index: 1-based processing-unit index.
+        total: Number of processing units.
+        item: Current item name (not a per-file path).
+
+    Returns:
+        A single-line status string.
+    """
+    return f"{verb} {index}/{total} … {item}".rstrip()
+
 
 _RECV_SIZE = 65536
 _ACCEPT_TIMEOUT_S = 0.25
@@ -72,7 +88,7 @@ class WorkerState:
             item = self._item
         if total <= 0 and not item:
             return None
-        return f"Catching up {index}/{total} … {item}".rstrip()
+        return format_status_line("Catching up", index, total, item)
 
     def status_response(self) -> Response:
         """Return the immediate status RPC payload."""
@@ -93,7 +109,7 @@ def send_request(
 ) -> Response:
     """Send one JSON request to the daemon and return its response.
 
-    Progress messages streamed during catch-up are delivered to *on_progress*.
+    Progress messages streamed on this connection are delivered to *on_progress*.
 
     Args:
         config_path: Path to the loaded config file.
@@ -278,9 +294,15 @@ def _run_and_reply(
     handler: RequestHandler,
     before_request: Callable[[], None] | None,
 ) -> None:
+    def emit_progress(line: str) -> None:
+        try:
+            _write_json(conn, {"progress": line})
+        except OSError:
+            return
+
     _run_hook(before_request)
     try:
-        response = handler(config_path, request)
+        response = handler(config_path, request, emit_progress)
     except Exception as error:
         response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
     _reply(conn, response)

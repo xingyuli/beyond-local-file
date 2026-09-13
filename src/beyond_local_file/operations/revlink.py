@@ -11,7 +11,6 @@ import click
 
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.copy_manager import copy_projection
-from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import (
     REASON_CREATE_OVERWRITE,
@@ -19,7 +18,7 @@ from beyond_local_file.held import (
     store_held_copy,
 )
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.sync_state import SyncState, compute_item_hash
+from beyond_local_file.sync_state import compute_item_hash
 
 # ---------------------------------------------------------------------------
 # ChecksumVerifier
@@ -425,9 +424,8 @@ class CreateOperation:
     """Orchestrates the copy-verify-register workflow for a single source path.
 
     The operation proceeds through internal steps — ``_validate``,
-    ``_copy``, ``_verify``, ``_record_sync_state``, and ``_git_exclude`` —
-    each of which returns early with exit code 1 on failure.  The public
-    entry point is :meth:`run`.
+    ``_copy``, ``_verify``, and ``_git_exclude`` — each of which returns
+    early with exit code 1 on failure.  The public entry point is :meth:`run`.
 
     Attributes:
         source: Absolute path to the file or directory in the target directory
@@ -464,7 +462,7 @@ class CreateOperation:
         Derives ``dest`` as ``dest_root / rel_path``, preserving the full
         directory structure so the managed layout mirrors the target layout
         exactly.  Runs the pre-flight validation step, then proceeds through
-        copy, verify, record-sync-state, and git-exclude steps in order when
+        copy, verify, and git-exclude steps in order when
         not in dry-run mode.  In dry-run mode, previews all steps via the
         formatter without modifying the filesystem.
 
@@ -489,7 +487,6 @@ class CreateOperation:
                 return result
 
             self.formatter.target_left_in_place(self.source)
-            self._record_sync_state(dest, self.source)
             self._git_exclude(self.context.cwd if self.context is not None else None)
             self._update_config()
             self._fan_out(dest)
@@ -692,20 +689,6 @@ class CreateOperation:
         self.formatter.checksum_ok()
         return 0
 
-    def _record_sync_state(self, dest: Path, replica: Path) -> None:
-        """Record a hub/replica pair as in-sync so a later catch-up is a no-op.
-
-        Args:
-            dest: Managed-project copy path.
-            replica: Target-project path paired with *dest*.
-        """
-        if self.context is None:
-            return
-        sync_state = SyncState(state_dir(self.context.config_path))
-        sync_state.load()
-        sync_state.update_record(dest, replica)
-        sync_state.save()
-
     def _other_replica_roots(self) -> list[Path]:
         """Return other target-project roots for this managed project.
 
@@ -766,7 +749,6 @@ class CreateOperation:
                 )
                 self.formatter.held_overwrite_warning(clause, slot)
             self._copy_item(dest, replica_path)
-            self._record_sync_state(dest, replica_path)
             self._git_exclude(replica_root)
 
     def _update_config(self) -> None:

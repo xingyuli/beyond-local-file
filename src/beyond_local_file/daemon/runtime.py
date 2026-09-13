@@ -19,7 +19,7 @@ from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
 from .handlers import handle_request
-from .ipc import Request, Response, ServeLoop, WorkerState, serve_requests
+from .ipc import ProgressCallback, Request, Response, ServeLoop, WorkerState, serve_requests
 from .live import LiveSync
 from .process import state_dir, write_ready
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
@@ -65,8 +65,12 @@ def run_worker(config_path: Path) -> int:
         if live.tick():
             save_baseline(config_path, live.baseline)
 
-    def _handle_request(request_config: Path, request: Request) -> Response:
-        response = handle_request(request_config, request)
+    def _handle_request(
+        request_config: Path,
+        request: Request,
+        on_progress: ProgressCallback | None = None,
+    ) -> Response:
+        response = handle_request(request_config, request, on_progress=on_progress)
         live = live_holder.get("live")
         mutating = request.get("op") in {"create", "restore", "remove", "reload"} and not request.get("dry_run")
         if live is not None and mutating and response.get("exit_code") == 0:

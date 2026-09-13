@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from beyond_local_file.daemon.catchup import scan_items
 from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
 from beyond_local_file.operations.link_check import CheckOperation
 from beyond_local_file.options import OutputFormat
@@ -145,6 +146,155 @@ def test_link_check_treats_symlink_projection_as_not_a_copy(
     assert "(in sync)" not in output
     assert "(manually synced)" not in output
     assert "not a copy" in output.lower() or "incorrect" in output.lower()
+
+
+def test_live_match_is_in_sync_without_sync_state(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Matching live hashes are in-sync even when no sync-state.yml exists."""
+    target = sample_unit.target_project_path
+    (target / "file1.txt").write_text("content1")
+    (target / "file2.txt").write_text("content2")
+
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
+    assert operation.execute_unit(sample_unit)
+    output = capsys.readouterr().out
+
+    assert "(in sync)" in output
+    assert "(manually synced)" not in output
+    assert not (temp_config_dir / "sync-state.yml").exists()
+
+
+def test_live_mismatch_without_baseline_is_mismatch(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Differing live hashes with no baseline are unlabeled mismatch."""
+    target = sample_unit.target_project_path
+    (target / "file1.txt").write_text("target-side")
+    (target / "file2.txt").write_text("content2")
+
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
+    assert operation.execute_unit(sample_unit)
+    output = capsys.readouterr().out
+
+    assert "file1.txt" in output
+    assert "(mismatch)" in output
+    assert "(in sync)" in output
+    assert "(manually synced)" not in output
+    assert not (temp_config_dir / "sync-state.yml").exists()
+
+
+def test_live_mismatch_uses_baseline_labels_not_sync_state(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """When a baseline exists, mismatch rows are labeled from those hashes."""
+    managed = sample_unit.managed_project_path
+    target = sample_unit.target_project_path
+    (target / "file1.txt").write_text("content1")
+    (target / "file2.txt").write_text("content2")
+    names = ["file1.txt", "file2.txt"]
+    baseline = {
+        str(managed): scan_items(managed, names),
+        str(target): scan_items(target, names),
+    }
+    (managed / "file1.txt").write_text("managed-new")
+    (target / "file2.txt").write_text("target-new")
+
+    lying = temp_config_dir / "sync-state.yml"
+    lying.write_text("synced_files: []\n", encoding="utf-8")
+    before = lying.read_text(encoding="utf-8")
+
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
+    operation.baseline = baseline
+    assert operation.execute_unit(sample_unit)
+    output = capsys.readouterr().out
+
+    assert "(managed changed)" in output
+    assert "(target changed)" in output
+    assert "(mismatch)" not in output
+    assert "(manually synced)" not in output
+    assert lying.read_text(encoding="utf-8") == before
+
+
+def test_live_mismatch_both_changed_from_baseline(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """When both sides differ from baseline, the mismatch is both-changed."""
+    managed = sample_unit.managed_project_path
+    target = sample_unit.target_project_path
+    (target / "file1.txt").write_text("content1")
+    (target / "file2.txt").write_text("content2")
+    names = ["file1.txt", "file2.txt"]
+    baseline = {
+        str(managed): scan_items(managed, names),
+        str(target): scan_items(target, names),
+    }
+    (managed / "file1.txt").write_text("managed-new")
+    (target / "file1.txt").write_text("target-new")
+
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
+    operation.baseline = baseline
+    assert operation.execute_unit(sample_unit)
+    output = capsys.readouterr().out
+
+    assert "file1.txt" in output
+    assert "(conflict - both changed)" in output
+    assert "(mismatch)" not in output
+
+
+def test_live_match_ignores_stale_baseline_and_sync_state(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Live match is in-sync even when baseline hashes are stale."""
+    managed = sample_unit.managed_project_path
+    target = sample_unit.target_project_path
+    names = ["file1.txt", "file2.txt"]
+    baseline = {
+        str(managed): scan_items(managed, names),
+        str(target): scan_items(target, names),
+    }
+    (managed / "file1.txt").write_text("both-new")
+    (target / "file1.txt").write_text("both-new")
+    (target / "file2.txt").write_text("content2")
+
+    operation = CheckOperation(temp_config_dir, output_format=OutputFormat.VERBOSE)
+    operation.baseline = baseline
+    assert operation.execute_unit(sample_unit)
+    output = capsys.readouterr().out
+
+    assert "file1.txt" in output
+    assert "(in sync)" in output
+    assert "(both changed)" not in output
+    assert "(manually synced)" not in output
+
+
+def test_check_table_has_no_progress_fraction(
+    sample_unit: ProcessingUnit,
+    temp_config_dir: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """The compact table does not show k/n progress in cells."""
+    (sample_unit.target_project_path / "file1.txt").write_text("content1")
+    (sample_unit.target_project_path / "file2.txt").write_text("content2")
+
+    operation = CheckOperation(temp_config_dir)
+    assert operation.execute_unit(sample_unit)
+    operation.render()
+    output = capsys.readouterr().out
+
+    assert "Copy" in output
+    assert "k/n" not in output
+    assert "Checking " not in output
 
 
 def test_check_operation_mixed_strategies_no_false_extra(

@@ -155,15 +155,15 @@ class CopyCheckDetails:
     """Copy-specific details for check operations.
 
     Attributes:
-        in_sync: Items in sync (content matches).
-        manually_synced: Items manually synced (content matches but state outdated).
-        managed_changed: Items where managed file changed.
-        target_changed: Items where target file changed.
-        both_changed: Items where both sides changed (conflict).
+        in_sync: Items whose live hashes match.
+        mismatched: Live mismatch with no baseline label.
+        managed_changed: Live mismatch; only the managed side differs from baseline.
+        target_changed: Live mismatch; only the target side differs from baseline.
+        both_changed: Live mismatch; both sides differ from baseline.
     """
 
     in_sync: list[str] = field(default_factory=list)
-    manually_synced: list[str] = field(default_factory=list)
+    mismatched: list[str] = field(default_factory=list)
     managed_changed: list[str] = field(default_factory=list)
     target_changed: list[str] = field(default_factory=list)
     both_changed: list[str] = field(default_factory=list)
@@ -173,8 +173,8 @@ class CopyCheckDetails:
         parts = []
         if self.in_sync:
             parts.append(f"In sync: {len(self.in_sync)}")
-        if self.manually_synced:
-            parts.append(f"Manually synced: {len(self.manually_synced)}")
+        if self.mismatched:
+            parts.append(f"Mismatch: {len(self.mismatched)}")
         if self.managed_changed:
             parts.append(f"Managed changed: {len(self.managed_changed)}")
         if self.target_changed:
