@@ -18,13 +18,13 @@ def temp_dir():
         yield Path(tmpdir)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
-    """Create an isolated home directory with no global config.
+    """Point the runtime home at a per-test temp dir.
 
-    Sets the BLF_HOME environment variable to a temporary directory so that
-    ``resolve_global_mapping_files()`` finds no ``~/.blf/config`` and falls
-    through to the default ``config.yml`` discovery logic.
+    Autouse so daemon workers and ``runtime_home()`` never write under the
+    real ``~/.blf``. Tests that must see the system home call
+    ``monkeypatch.delenv("BLF_HOME")``.
 
     Args:
         tmp_path: Pytest temporary directory fixture.
@@ -34,7 +34,7 @@ def isolated_home(tmp_path, monkeypatch):
         dict: Environment variables dict suitable for passing to ``CliRunner.invoke``.
     """
     home_dir = tmp_path / "home"
-    home_dir.mkdir()
+    home_dir.mkdir(exist_ok=True)
     monkeypatch.setenv("BLF_HOME", str(home_dir))
     return {"BLF_HOME": str(home_dir)}
 

@@ -39,7 +39,7 @@ def temp_home(tmp_path, monkeypatch):
         Tuple of (Path to temporary home directory, env dict for CliRunner).
     """
     home_dir = tmp_path / "home"
-    home_dir.mkdir()
+    home_dir.mkdir(exist_ok=True)
     monkeypatch.setenv("BLF_HOME", str(home_dir))
     yield home_dir, {"BLF_HOME": str(home_dir)}
 

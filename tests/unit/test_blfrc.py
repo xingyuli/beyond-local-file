@@ -31,7 +31,7 @@ def temp_home(tmp_path, monkeypatch):
         Path to temporary home directory.
     """
     home_dir = tmp_path / "home"
-    home_dir.mkdir()
+    home_dir.mkdir(exist_ok=True)
     monkeypatch.setenv("BLF_HOME", str(home_dir))
     yield home_dir
 

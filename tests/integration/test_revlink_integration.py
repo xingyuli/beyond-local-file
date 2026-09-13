@@ -423,7 +423,7 @@ class TestRevlinkConfigResolution:
         """
         # Set up isolated home with a global pointer list
         home_dir = tmp_path / "home"
-        home_dir.mkdir()
+        home_dir.mkdir(exist_ok=True)
         monkeypatch.setenv("BLF_HOME", str(home_dir))
         env = {"BLF_HOME": str(home_dir)}
 

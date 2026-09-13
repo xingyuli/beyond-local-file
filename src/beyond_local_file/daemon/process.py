@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 
 from beyond_local_file.blfrc import (
+    get_home_directory,
     global_config_path,
     is_global_config_path,
     resolve_global_mapping_files,
@@ -259,12 +260,14 @@ def spawn_and_wait(config_path: Path) -> int:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_file, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
     try:
+        worker_env = os.environ.copy()
+        worker_env["BLF_HOME"] = str(get_home_directory())
         proc = subprocess.Popen(
             _worker_argv(config_path),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            env=os.environ.copy(),
+            env=worker_env,
             cwd=str(config_path.parent),
             **_popen_kwargs(),
         )

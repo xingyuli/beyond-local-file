@@ -16,7 +16,7 @@ import pytest
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
-from beyond_local_file.daemon.process import state_dir
+from beyond_local_file.daemon.process import singleton_set_id, state_dir
 
 _WORKER_FLAG = "--worker"
 _READY_WAIT_S = 15.0
@@ -619,6 +619,20 @@ def test_daemon_start_writes_state_under_runtime_home_file_hash(
     assert (run_dir / "baseline.yml").is_file()
     assert not hub_local.exists()
     assert not (Path(daemon_env["BLF_HOME"]) / ".blf" / "run" / "global").exists()
+
+
+def test_daemon_start_does_not_write_under_real_home(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """A test daemon must not create ``~/.blf/run/file-<hash>/`` on the real home."""
+    config_path, _managed, _targets = daemon_workspace
+    real_run = Path.home() / ".blf" / "run" / singleton_set_id(config_path)
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+    assert not real_run.exists()
+    assert (_expected_run_dir(config_path, Path(daemon_env["BLF_HOME"])) / "daemon.pid").is_file()
 
 
 def test_first_start_deletes_hub_local_blf_and_prints_removed_paths(
