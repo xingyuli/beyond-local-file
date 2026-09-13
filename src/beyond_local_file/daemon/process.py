@@ -272,7 +272,14 @@ def spawn_and_wait(config_path: Path) -> int:
         log_handle.close()
 
     _write_pid(config_path, proc.pid)
-    if not _wait_for_ready(config_path, proc):
+    if not _wait_for_port(config_path, proc):
+        _clear_runtime_files(config_path)
+        click.echo("Error: daemon failed to start")
+        _echo_log_tail(log_file)
+        return 1
+    from .client import wait_until_ready  # noqa: PLC0415
+
+    if wait_until_ready(config_path) != 0 or proc.poll() is not None:
         _clear_runtime_files(config_path)
         click.echo("Error: daemon failed to start")
         _echo_log_tail(log_file)
@@ -305,7 +312,7 @@ def stop_process(config_path: Path) -> int:
 
 
 def print_status(config_path: Path) -> int:
-    """Print whether the daemon is running.
+    """Print whether the daemon is running, including phase and pid.
 
     Args:
         config_path: Path to the loaded config file.
@@ -314,10 +321,19 @@ def print_status(config_path: Path) -> int:
         0 after printing status.
     """
     pid = read_pid(config_path)
-    if pid is not None and pid_is_alive(pid):
+    if pid is None or not pid_is_alive(pid):
+        click.echo("Daemon is not running")
+        return 0
+    from .client import send_when_up  # noqa: PLC0415
+
+    try:
+        response = send_when_up(config_path, {"op": "status"})
+    except OSError:
         click.echo(f"Daemon is running (pid {pid})")
         return 0
-    click.echo("Daemon is not running")
+    stdout = response.get("stdout") or ""
+    if stdout:
+        click.echo(stdout, nl=not str(stdout).endswith("\n"))
     return 0
 
 
@@ -412,11 +428,11 @@ def _remove_hub_local_state(config_path: Path) -> list[Path]:
     return removed
 
 
-def _wait_for_ready(config_path: Path, proc: subprocess.Popen[bytes]) -> bool:
-    marker = ready_path(config_path)
+def _wait_for_port(config_path: Path, proc: subprocess.Popen[bytes]) -> bool:
+    marker = port_path(config_path)
     deadline = time.monotonic() + _START_TIMEOUT_S
     while time.monotonic() < deadline:
-        if marker.exists():
+        if marker.exists() and marker.read_text(encoding="utf-8").strip():
             return True
         if proc.poll() is not None:
             return False

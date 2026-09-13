@@ -1,11 +1,13 @@
-"""Long-running daemon worker: catch-up, then serve shell requests until stop."""
+"""Long-running daemon worker: serve IPC, then catch-up, then live observe."""
 
 from __future__ import annotations
 
+import os
 import signal
 import sys
 import threading
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
@@ -17,14 +19,20 @@ from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
 from .handlers import handle_request
-from .ipc import Request, Response, serve_requests
+from .ipc import Request, Response, ServeLoop, WorkerState, serve_requests
 from .live import LiveSync
-from .process import state_dir
+from .process import state_dir, write_ready
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
+
+_TEST_HOLD_ENV = "BLF_TEST_CATCHUP_HOLD"
+_HOLD_POLL_S = 0.05
+_HOLD_TIMEOUT_S = 60.0
+
+type ProgressFn = Callable[[int, int, str], None]
 
 
 def run_worker(config_path: Path) -> int:
-    """Catch-up copy projections, then serve requests until SIGTERM/SIGINT.
+    """Bind IPC, catch-up while serving status, then live-observe until stop.
 
     Args:
         config_path: Path to the loaded config file.
@@ -34,6 +42,10 @@ def run_worker(config_path: Path) -> int:
     """
     _stamp_worker_streams()
     shutdown = threading.Event()
+    bound = threading.Event()
+    state = WorkerState()
+    live_holder: dict[str, LiveSync] = {}
+    failed = threading.Event()
 
     def _handle(signum: int, frame: FrameType | None) -> None:
         del signum, frame
@@ -43,38 +55,76 @@ def run_worker(config_path: Path) -> int:
     signal.signal(signal.SIGINT, _handle)
 
     print("daemon worker starting", flush=True)
-    caught = _catch_up_and_persist(config_path)
-    if caught is None:
-        return 1
-    projects, trees = caught
-    live = LiveSync(projects, trees)
 
     def _tick() -> None:
+        if not state.ready.is_set():
+            return
+        live = live_holder.get("live")
+        if live is None:
+            return
         if live.tick():
             save_baseline(config_path, live.baseline)
 
     def _handle_request(request_config: Path, request: Request) -> Response:
         response = handle_request(request_config, request)
+        live = live_holder.get("live")
         mutating = request.get("op") in {"create", "restore", "remove", "reload"} and not request.get("dry_run")
-        if mutating and response.get("exit_code") == 0:
+        if live is not None and mutating and response.get("exit_code") == 0:
             snapshot = load_snapshot(request_config)
             baseline = load_baseline(request_config)
             if snapshot is not None and baseline is not None:
                 live.reload(snapshot, baseline)
         return response
 
-    serve_requests(config_path, _handle_request, shutdown, on_idle=_tick, before_request=_tick)
+    def _catch_up() -> None:
+        if not bound.wait(timeout=10.0):
+            failed.set()
+            shutdown.set()
+            return
+        try:
+            caught = _catch_up_and_persist(config_path, on_progress=state.set_progress)
+        except Exception as error:
+            print(f"catch-up: failed: {error}", flush=True)
+            failed.set()
+            shutdown.set()
+            return
+        if caught is None:
+            failed.set()
+            shutdown.set()
+            return
+        if shutdown.is_set():
+            return
+        projects, trees = caught
+        live_holder["live"] = LiveSync(projects, trees)
+        write_ready(config_path)
+        print("daemon ready", flush=True)
+        state.set_ready()
+
+    threading.Thread(target=_catch_up, name="blf-catch-up", daemon=True).start()
+    serve_requests(
+        config_path,
+        _handle_request,
+        ServeLoop(
+            shutdown=shutdown,
+            bound=bound,
+            state=state,
+            on_idle=_tick,
+            before_request=_tick,
+        ),
+    )
     print("daemon stopping", flush=True)
-    return 0
+    return 1 if failed.is_set() else 0
 
 
 def _catch_up_and_persist(
     config_path: Path,
+    on_progress: ProgressFn | None = None,
 ) -> tuple[dict[str, ConfigProject], BaselineTrees] | None:
     """Catch up committed mappings, or abort when items overlap on a target.
 
     Args:
         config_path: Path to the loaded config file.
+        on_progress: Optional catch-up unit/item callback for IPC status lines.
 
     Returns:
         Projects and baseline trees, or None when start must not continue.
@@ -97,10 +147,26 @@ def _catch_up_and_persist(
     if echo_item_path_overlaps(projects):
         return None
 
-    trees = run_catch_up(projects, state_dir(config_path), load_baseline(config_path))
+    trees = run_catch_up(
+        projects,
+        state_dir(config_path),
+        load_baseline(config_path),
+        on_progress=on_progress,
+    )
     save_baseline(config_path, trees)
     save_snapshot(config_path, projects)
+    _await_test_hold()
     return projects, trees
+
+
+def _await_test_hold() -> None:
+    raw = os.environ.get(_TEST_HOLD_ENV)
+    if not raw:
+        return
+    path = Path(raw)
+    deadline = time.monotonic() + _HOLD_TIMEOUT_S
+    while path.exists() and time.monotonic() < deadline:
+        time.sleep(_HOLD_POLL_S)
 
 
 def _stamp_worker_streams() -> None:

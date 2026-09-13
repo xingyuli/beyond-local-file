@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from beyond_local_file.copy_manager import CopyManager, copy_projection
@@ -21,11 +22,14 @@ from .store import (
     state_equal,
 )
 
+type ProgressFn = Callable[[int, int, str], None]
+
 
 def run_catch_up(
     projects: dict[str, ConfigProject],
     config_dir: Path,
     baseline: BaselineTrees | None,
+    on_progress: ProgressFn | None = None,
 ) -> BaselineTrees:
     """Apply fresh or update catch-up and return the new baseline trees.
 
@@ -33,16 +37,17 @@ def run_catch_up(
         projects: Committed mappings to catch up.
         config_dir: Directory that stores ``sync-state.yml``.
         baseline: Previous baseline, or None for a first catch-up.
+        on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
 
     Returns:
         Newly recorded per-path baseline trees.
     """
     if baseline is None:
         print("catch-up: fresh", flush=True)
-        _fresh_catch_up(projects, config_dir)
+        _fresh_catch_up(projects, config_dir, on_progress)
     else:
         print("catch-up: update", flush=True)
-        _update_catch_up(projects, config_dir, baseline)
+        _update_catch_up(projects, config_dir, baseline, on_progress)
     return record_baseline(projects, previous=baseline)
 
 
@@ -95,21 +100,42 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
             slot[rel] = path_state(False, None, gen, oos=oos)
 
 
-def _fresh_catch_up(projects: dict[str, ConfigProject], config_dir: Path) -> None:
-    for unit in translate_config_to_processing(projects):
-        _fresh_catch_up_unit(unit, config_dir)
+def _fresh_catch_up(
+    projects: dict[str, ConfigProject],
+    config_dir: Path,
+    on_progress: ProgressFn | None,
+) -> None:
+    units = translate_config_to_processing(projects)
+    total = len(units)
+    for index, unit in enumerate(units, start=1):
+        _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=on_progress)
 
 
-def _update_catch_up(projects: dict[str, ConfigProject], config_dir: Path, baseline: BaselineTrees) -> None:
-    for unit in translate_config_to_processing(projects):
+def _update_catch_up(
+    projects: dict[str, ConfigProject],
+    config_dir: Path,
+    baseline: BaselineTrees,
+    on_progress: ProgressFn | None,
+) -> None:
+    units = translate_config_to_processing(projects)
+    total = len(units)
+    for index, unit in enumerate(units, start=1):
         if str(unit.target_project_path) not in baseline:
             print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
-            _fresh_catch_up_unit(unit, config_dir)
+            _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=on_progress)
         else:
+            _emit_unit_items(unit, index, total, on_progress)
             _apply_update_unit(unit, baseline)
 
 
-def _fresh_catch_up_unit(unit: ProcessingUnit, config_dir: Path) -> None:
+def _fresh_catch_up_unit(
+    unit: ProcessingUnit,
+    config_dir: Path,
+    *,
+    index: int = 1,
+    total: int = 1,
+    on_progress: ProgressFn | None = None,
+) -> None:
     if not unit.managed_project_path.exists():
         print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
         return
@@ -118,12 +144,26 @@ def _fresh_catch_up_unit(unit: ProcessingUnit, config_dir: Path) -> None:
         return
     copy_mgr = CopyManager(list(unit.items), unit.target_project_path, config_dir)
     for item in unit.items:
+        if on_progress is not None:
+            on_progress(index, total, item.name)
         destination = unit.target_project_path / item.name
         replace_with_copy(item.path, destination)
         copy_mgr.sync_state.update_record(item.path, destination)
         print(f"catch-up: copied {item.name} -> {destination}", flush=True)
     copy_mgr.sync_state.save()
     copy_mgr.add_git_excludes()
+
+
+def _emit_unit_items(
+    unit: ProcessingUnit,
+    index: int,
+    total: int,
+    on_progress: ProgressFn | None,
+) -> None:
+    if on_progress is None:
+        return
+    for item in unit.items:
+        on_progress(index, total, item.name)
 
 
 def _apply_update_unit(unit: ProcessingUnit, baseline: BaselineTrees) -> None:
