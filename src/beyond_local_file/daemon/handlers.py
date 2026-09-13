@@ -26,6 +26,7 @@ from beyond_local_file.project_processor import ProjectProcessor, RevlinkResolve
 from .catchup import record_baseline
 from .ingest import commit_reload
 from .ipc import Request, Response
+from .process import state_dir
 from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
 
 type Handler = Callable[[Path, Request], int]
@@ -82,7 +83,7 @@ def _handle_check(config_path: Path, request: Request) -> int:
             return 1
     extra_exclude = bool(request.get("extra_exclude"))
     output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
-    operation = CheckOperation(config_path.parent, extra_exclude, output_format)
+    operation = CheckOperation(state_dir(config_path), extra_exclude, output_format)
     ProjectProcessor.process_all_units(projects, operation)
     operation.render()
     return 0

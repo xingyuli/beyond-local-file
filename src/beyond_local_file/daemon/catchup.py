@@ -31,7 +31,7 @@ def run_catch_up(
 
     Args:
         projects: Committed mappings to catch up.
-        config_dir: Directory containing the config file.
+        config_dir: Directory that stores ``sync-state.yml``.
         baseline: Previous baseline, or None for a first catch-up.
 
     Returns:

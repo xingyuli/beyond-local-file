@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -11,6 +13,7 @@ from pathlib import Path
 
 import click
 
+from beyond_local_file.blfrc import runtime_home
 from beyond_local_file.sync_state import STATE_DIR
 
 PID_NAME = "daemon.pid"
@@ -23,16 +26,29 @@ _POLL_S = 0.05
 _FOLLOW_POLL_S = 0.2
 
 
-def state_dir(config_path: Path) -> Path:
-    """Return the ``.blf`` directory next to the loaded config file.
+def singleton_set_id(config_path: Path) -> str:
+    """Return the run-directory name for the singleton set of *config_path*.
 
     Args:
-        config_path: Path to the loaded config file.
+        config_path: Path to the loaded mapping file.
+
+    Returns:
+        ``file-<sha256 of the resolved mapping yaml path>``.
+    """
+    digest = hashlib.sha256(str(config_path.resolve()).encode("utf-8")).hexdigest()
+    return f"file-{digest}"
+
+
+def state_dir(config_path: Path) -> Path:
+    """Return the set run directory for the singleton set of *config_path*.
+
+    Args:
+        config_path: Path to the loaded mapping file.
 
     Returns:
         Directory that holds pid, log, port, snapshot, and baseline files.
     """
-    return config_path.parent / STATE_DIR
+    return runtime_home() / "run" / singleton_set_id(config_path)
 
 
 def pid_path(config_path: Path) -> Path:
@@ -157,6 +173,8 @@ def spawn_and_wait(config_path: Path) -> int:
         click.echo(f"Error: daemon is already running (pid {read_pid(config_path)})")
         return 1
 
+    for path in _remove_hub_local_state(config_path):
+        click.echo(str(path))
     _clear_runtime_files(config_path)
     log_file = log_path(config_path)
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -292,6 +310,27 @@ def _write_pid(config_path: Path, pid: int) -> None:
 def _clear_runtime_files(config_path: Path) -> None:
     for path in (pid_path(config_path), ready_path(config_path), port_path(config_path)):
         path.unlink(missing_ok=True)
+
+
+def _remove_hub_local_state(config_path: Path) -> list[Path]:
+    leftover = config_path.parent / STATE_DIR
+    try:
+        if leftover.resolve() == runtime_home().resolve():
+            return []
+    except OSError:
+        return []
+    if leftover.is_symlink() or leftover.is_file():
+        leftover.unlink()
+        return [leftover]
+    if not leftover.is_dir():
+        return []
+    removed: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(leftover, topdown=False):
+        current = Path(dirpath)
+        removed.extend(current / name for name in filenames)
+        removed.append(current)
+    shutil.rmtree(leftover)
+    return removed
 
 
 def _wait_for_ready(config_path: Path, proc: subprocess.Popen[bytes]) -> bool:

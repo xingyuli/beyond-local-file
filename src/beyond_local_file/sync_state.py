@@ -130,11 +130,11 @@ class SyncRecord:
 class SyncState:
     """Manages sync state for all copied files.
 
-    The state file lives at ``<config_dir>/.blf/sync-state.yml``
-    where config_dir is the directory containing the config file.
+    The state file lives at ``<config_dir>/sync-state.yml``. The daemon
+    passes the set run directory so the book is not hub-local.
 
     Attributes:
-        config_dir: The directory where the config file lives.
+        config_dir: Directory that stores ``sync-state.yml``.
         records: Mapping from target-relative path to its SyncRecord.
     """
 
@@ -143,7 +143,7 @@ class SyncState:
 
     @property
     def _state_file(self) -> Path:
-        return self.config_dir / STATE_DIR / STATE_FILE
+        return self.config_dir / STATE_FILE
 
     # -- persistence -----------------------------------------------------------
 

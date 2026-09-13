@@ -19,6 +19,7 @@ from .catchup import run_catch_up
 from .handlers import handle_request
 from .ipc import Request, Response, serve_requests
 from .live import LiveSync
+from .process import state_dir
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 
 
@@ -98,7 +99,7 @@ def _catch_up_and_persist(
     if echo_item_path_overlaps(projects):
         return None
 
-    trees = run_catch_up(projects, config_path.parent, load_baseline(config_path))
+    trees = run_catch_up(projects, state_dir(config_path), load_baseline(config_path))
     save_baseline(config_path, trees)
     save_snapshot(config_path, projects)
     return projects, trees

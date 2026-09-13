@@ -12,6 +12,7 @@ from pathlib import Path
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
+from beyond_local_file.daemon.process import pid_path
 
 _POLL_S = 0.05
 
@@ -35,7 +36,7 @@ def start_daemon(config_path: Path, env: dict[str, str] | None = None) -> None:
 def stop_daemon(config_path: Path, env: dict[str, str] | None = None) -> None:
     """Stop the daemon if it is running."""
     invoke_cli(["--config", str(config_path), "daemon", "stop"], env=env)
-    pid_file = config_path.parent / ".blf" / "daemon.pid"
+    pid_file = pid_path(config_path)
     if not pid_file.exists():
         return
     text = pid_file.read_text(encoding="utf-8").strip()

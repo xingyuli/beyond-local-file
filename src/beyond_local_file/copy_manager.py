@@ -59,7 +59,7 @@ class CopyManager:
     Attributes:
         copy_items: Managed project items that use the copy strategy.
         target_path: Target directory where copies are placed.
-        config_dir: Directory where the config file lives (for sync state storage).
+        config_dir: Directory that stores ``sync-state.yml``.
         sync_state: Persistent sync state tracker.
         git_manager: Manager for Git exclude file operations.
 
@@ -77,7 +77,7 @@ class CopyManager:
             copy_items: Items with ``strategy == LinkStrategy.COPY``.
             target_path: Target directory for file copies.  Must be the root of
                 a Git repository for git exclude operations to take effect.
-            config_dir: Directory where the config file lives.
+            config_dir: Directory that stores ``sync-state.yml``.
         """
         self.copy_items = [i for i in copy_items if i.strategy == LinkStrategy.COPY]
         self.target_path = target_path

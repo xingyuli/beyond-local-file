@@ -1,4 +1,4 @@
-"""Mapping snapshot and per-path baseline persisted next to the config."""
+"""Mapping snapshot and per-path baseline persisted in the set run directory."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ type BaselineTrees = dict[str, dict[str, PathState]]
 
 
 def snapshot_path(config_path: Path) -> Path:
-    """Return the mapping-snapshot path next to the loaded config.
+    """Return the mapping-snapshot path in the set run directory.
 
     Args:
-        config_path: Path to the loaded config file.
+        config_path: Path to the loaded mapping file.
 
     Returns:
         Path to ``mapping-snapshot.yml``.
@@ -32,10 +32,10 @@ def snapshot_path(config_path: Path) -> Path:
 
 
 def baseline_path(config_path: Path) -> Path:
-    """Return the baseline path next to the loaded config.
+    """Return the baseline path in the set run directory.
 
     Args:
-        config_path: Path to the loaded config file.
+        config_path: Path to the loaded mapping file.
 
     Returns:
         Path to ``baseline.yml``.

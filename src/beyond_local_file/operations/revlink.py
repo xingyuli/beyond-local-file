@@ -11,6 +11,7 @@ import click
 
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.copy_manager import copy_projection
+from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import (
     REASON_CREATE_OVERWRITE,
@@ -700,7 +701,7 @@ class CreateOperation:
         """
         if self.context is None:
             return
-        sync_state = SyncState(self.context.config_path.parent)
+        sync_state = SyncState(state_dir(self.context.config_path))
         sync_state.load()
         sync_state.update_record(dest, replica)
         sync_state.save()

@@ -17,6 +17,7 @@ import pytest
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
+from beyond_local_file.daemon.process import state_dir
 
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
@@ -29,7 +30,7 @@ def _invoke(args: list[str], env: dict[str, str] | None = None) -> Result:
 
 
 def _state_dir(config_path: Path) -> Path:
-    return config_path.parent / ".blf"
+    return state_dir(config_path)
 
 
 def _pid_path(config_path: Path) -> Path:
@@ -315,9 +316,7 @@ def test_create_restore_remove_change_state_through_the_daemon(
     config_path, managed, target = selective_workspace
     second = config_path.parent / "target-two"
     second.mkdir()
-    config_path.write_text(
-        f"managed:\n  - target: {target}\n    subpath: []\n  - target: {second}\n    subpath: []\n"
-    )
+    config_path.write_text(f"managed:\n  - target: {target}\n    subpath: []\n  - target: {second}\n    subpath: []\n")
     exclude = _make_git_repo(target)
     second_exclude = _make_git_repo(second)
     source = target / "item.txt"

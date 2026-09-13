@@ -1,6 +1,6 @@
 # Daemon log timestamps at write time
 
-Worker stdout is redirected to `.blf/daemon.log` with no clock. `daemon logs` tails the file as stored. Stamping belongs in the worker at write time so every `print` gets a local-offset prefix without changing callers or rewriting old unstamped lines.
+Worker stdout is redirected to ``daemon.log`` in the set run directory (0018) with no clock. `daemon logs` tails the file as stored. Stamping belongs in the worker at write time so every `print` gets a local-offset prefix without changing callers or rewriting old unstamped lines.
 
 ## Status
 
@@ -8,7 +8,7 @@ accepted
 
 ## Context
 
-The daemon worker's stdin is DEVNULL. Catch-up, live, and runtime progress is `print(..., flush=True)`. `spawn_and_wait` opens `.blf/daemon.log` as the child's stdout (stderr merged). `daemon logs` follows that file and must not add a display-only clock. Lines already in the file stay as written.
+The daemon worker's stdin is DEVNULL. Catch-up, live, and runtime progress is `print(..., flush=True)`. `spawn_and_wait` opens the set's `daemon.log` as the child's stdout (stderr merged). `daemon logs` follows that file and must not add a display-only clock. Lines already in the file stay as written. TTY status lines for catch-up and `link check` are streamed to the shell (0019); they are not a second clock on the log.
 
 ## Decision
 

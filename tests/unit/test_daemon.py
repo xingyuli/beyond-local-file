@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import signal
@@ -15,6 +16,7 @@ import pytest
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
+from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.sync_state import SyncState
 
 _WORKER_FLAG = "--worker"
@@ -61,8 +63,8 @@ def _write_workspace(tmp_path: Path, *, projects: int = 1) -> tuple[Path, list[P
 
 
 def _state_dir(config_path: Path) -> Path:
-    """Return the .blf directory next to the loaded config."""
-    return config_path.parent / ".blf"
+    """Return the set run directory for the loaded mapping file."""
+    return state_dir(config_path)
 
 
 def _pid_path(config_path: Path) -> Path:
@@ -519,7 +521,7 @@ def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
     target = target_dirs[0]
     projection = target / "shared.txt"
     projection.write_text("hub-0")
-    state = SyncState(config_path.parent)
+    state = SyncState(_state_dir(config_path))
     state.update_record(managed / "shared.txt", projection)
     state.save()
     projection.write_text("from-target")
@@ -594,3 +596,111 @@ def test_mapping_snapshot_survives_kill_and_start_does_not_delete_copies(
     assert (target / "shared.txt").read_text() == "hub-0"
     assert not (other_target / "shared.txt").exists()
     assert _read_pid(config_path) is None or not _pid_alive(_read_pid(config_path) or 0)
+
+
+def _expected_run_dir(config_path: Path, home: Path) -> Path:
+    digest = hashlib.sha256(str(config_path.resolve()).encode("utf-8")).hexdigest()
+    return home / ".blf" / "run" / f"file-{digest}"
+
+
+def test_daemon_start_writes_state_under_runtime_home_file_hash(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """start writes pid, port, log, snapshot, and baseline under ~/.blf/run/file-<hash>/."""
+    config_path, _managed, _targets = daemon_workspace
+    run_dir = _expected_run_dir(config_path, Path(daemon_env["BLF_HOME"]))
+    hub_local = config_path.parent / ".blf"
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+
+    assert (run_dir / "daemon.pid").is_file()
+    assert (run_dir / "daemon.port").is_file()
+    assert (run_dir / "daemon.ready").is_file()
+    assert (run_dir / "daemon.log").is_file()
+    assert (run_dir / "mapping-snapshot.yml").is_file()
+    assert (run_dir / "baseline.yml").is_file()
+    assert not hub_local.exists()
+    assert not (Path(daemon_env["BLF_HOME"]) / ".blf" / "run" / "global").exists()
+
+
+def test_first_start_deletes_hub_local_blf_and_prints_removed_paths(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """First start deletes leftover <mapping-parent>/.blf/ and prints each path."""
+    config_path, _managed, _targets = daemon_workspace
+    leftover = config_path.parent / ".blf"
+    leftover.mkdir()
+    old_pid = leftover / "daemon.pid"
+    old_pid.write_text("99999\n")
+    old_log = leftover / "daemon.log"
+    old_log.write_text("stale\n")
+
+    started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+    assert not leftover.exists()
+    assert str(old_pid) in started.output
+    assert str(old_log) in started.output
+    assert str(leftover) in started.output
+
+
+def test_cwd_config_yml_uses_singleton_run_directory(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CWD config.yml with no -c and no global config uses the file-<hash> run directory."""
+    config_path, _managed, _targets = daemon_workspace
+    run_dir = _expected_run_dir(config_path, Path(daemon_env["BLF_HOME"]))
+    monkeypatch.chdir(config_path.parent)
+
+    started = _invoke(["daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+    assert (run_dir / "daemon.pid").is_file()
+    assert not (config_path.parent / ".blf").exists()
+
+
+def test_demo_style_config_yml_flag_uses_singleton_run_directory(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--config config.yml is a singleton set and does not create a global worker."""
+    config_path, _managed, _targets = daemon_workspace
+    run_dir = _expected_run_dir(config_path, Path(daemon_env["BLF_HOME"]))
+    monkeypatch.chdir(config_path.parent)
+
+    started = _invoke(["--config", "config.yml", "daemon", "start"], env=daemon_env)
+    assert started.exit_code == 0, started.output
+    assert (run_dir / "daemon.pid").is_file()
+    assert not (Path(daemon_env["BLF_HOME"]) / ".blf" / "run" / "global").exists()
+    assert not (config_path.parent / ".blf").exists()
+
+
+def test_start_does_not_delete_runtime_home_when_mapping_file_is_in_home(
+    tmp_path: Path,
+    daemon_env: dict[str, str],
+) -> None:
+    """A mapping file in $HOME must not cause start to rmtree ~/.blf."""
+    home = Path(daemon_env["BLF_HOME"])
+    other_run = home / ".blf" / "run" / "file-other"
+    other_run.mkdir(parents=True)
+    marker = other_run / "keep.txt"
+    marker.write_text("keep\n")
+    managed = tmp_path / "proj-0"
+    target = tmp_path / "target-0"
+    managed.mkdir()
+    target.mkdir()
+    (managed / "shared.txt").write_text("hub")
+    config_path = home / "config.yml"
+    config_path.write_text(f"proj-0: {target}\n")
+    try:
+        started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+        assert started.exit_code == 0, started.output
+        assert marker.is_file()
+        assert marker.read_text() == "keep\n"
+        assert (_expected_run_dir(config_path, home) / "daemon.pid").is_file()
+    finally:
+        _stop_daemon(config_path, daemon_env)

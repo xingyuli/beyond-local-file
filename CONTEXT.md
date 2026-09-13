@@ -28,16 +28,40 @@ _Avoid_: Shortcut, alias, strategy
 The physical copy of a managed item that lives inside a target project.
 _Avoid_: Sync, deploy, copy
 
+**Configuration set**:
+The mapping yaml files one daemon process loads. The **global set** is the list in ``~/.blf/config``. ``-c PATH`` is a **singleton set** identified by that file's resolved path. With neither, ``config.yml`` in the current directory is a singleton set.
+_Avoid_: .blfrc, profile, config file (that name is the mapping yaml)
+
+**Global config**:
+``~/.blf/config`` — a pointer list of mapping yaml paths (the former ``~/.blfrc`` ``config_file`` list). It is not itself a mapping document.
+_Avoid_: .blfrc
+
+**Mapping file**:
+A yaml document of managed-project mappings (typically ``config.yml``). Several mapping files may belong to one configuration set.
+_Avoid_: global config, .blfrc
+
+**Runtime home**:
+``~/.blf/`` — daemon process state and held copies. Mapping files stay where the user keeps them. Resolution order for which set to load: ``-c`` / ``--config``, else the global config, else ``config.yml`` in CWD.
+_Avoid_: hub-local .blf, state beside config.yml
+
+**Set run directory**:
+``~/.blf/run/global/`` for the global set; ``~/.blf/run/file-<sha256 of the resolved mapping yaml>/`` for a singleton set. Pid, port, log, mapping snapshot, and baseline live here.
+_Avoid_: .blf next to config.yml
+
 **Daemon**:
-The sole runtime for projecting, catching up, and applying mapping changes. It observes each managed project and its target projects, queues typed changes, writes the hub, fans out (excluding the source replica), and is the only writer of mappings that originate from blf commands.
-_Avoid_: Coordinator, watcher, syncer, service
+One OS process per configuration set. It catch-up's, then observes each managed project and target in that set, queues typed changes, writes the hub, fans out (excluding the source replica), and is the only writer of mappings that originate from blf commands. Two sets never watch the same mapping file at once.
+_Avoid_: Coordinator, watcher, syncer, service, one process per mapping file
+
+**Daemon phase**:
+``catch-up`` or ``ready``. The process accepts IPC in both phases. Live observation starts only in ``ready``. ``daemon start`` stays in the foreground until ``ready``. ``status`` always includes the pid. Other shells wait through ``catch-up``.
+_Avoid_: starting, booting, warming
 
 **Shell**:
 A blf command that sends a request to the daemon. It does not copy, delete, or write mappings itself.
 _Avoid_: Client, wrapper, frontend
 
 **Mapping snapshot**:
-The daemon's last committed mappings, persisted on disk so a crash still has a before-state. Start and reload diff the config file against it to see external mapping edits.
+The daemon's last committed mappings for its configuration set, persisted in the set run directory so a crash still has a before-state. Start and reload diff the set's mapping files against it to see external mapping edits.
 _Avoid_: Cache, checkpoint, in-memory config
 
 **Baseline**:
@@ -45,15 +69,15 @@ The last recorded hashes and presence for each path on a managed project and its
 _Avoid_: Checkpoint, watermark, sync-state
 
 **Fresh catch-up**:
-Daemon start with no baseline: every projection is made to match the managed project, then observation begins.
+Daemon start with no baseline in the set run directory: every projection is made to match the managed project. IPC is already up (phase ``catch-up``); live observation begins at phase ``ready``.
 _Avoid_: Reset, initial sync, first sync
 
 **Update catch-up**:
-Daemon start (or reload) with a baseline: only paths that differ from the baseline are queued, then observation begins. This is the downtime window, not a reset.
+Daemon start (or reload) with a baseline: only paths that differ from the baseline are queued. IPC is already up; live observation begins at phase ``ready``. Not a reset.
 _Avoid_: Resync, full sync, recover
 
 **Reload**:
-Classify external mapping edits by diffing the config file against the mapping snapshot, then commit. Removals are confirmed as one plan, coarsest first (project-remove, then target-remove, then item-remove, with inner diffs subsumed); adds apply automatically after. `daemon start` runs this in the foreground when the file differs from the snapshot, then backgrounds; `daemon reload` runs it when the daemon is already up. Decline (or no TTY when removals exist) commits nothing. The daemon does not watch config files. Internal mapping edits do not go through reload.
+Classify external mapping edits by diffing the configuration set's mapping files against the mapping snapshot, then commit. Removals are confirmed as one plan, coarsest first (project-remove, then target-remove, then item-remove, with inner diffs subsumed); adds apply automatically after. `daemon start` classifies in the foreground when the files differ from the snapshot, then catch-up's (IPC is already up) until phase ``ready``; `daemon reload` runs it when the daemon is already ``ready``. Decline (or no TTY when removals exist) commits nothing. The daemon does not watch mapping files. Internal mapping edits do not go through reload.
 _Avoid_: Hot reload, config watch, live config
 
 **Path change**:
@@ -73,8 +97,8 @@ A per-path counter on the hub, incremented once per successful hub apply. A dele
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
-Bytes kept under `.blf-held/` in the managed project so a live path can change without losing the previous file. That directory is reserved: it is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command in 0.5.0.
-_Avoid_: Quarantine, trash, stash, lost+found, stale removal
+Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live path can change without losing the previous file. That tree is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command in 0.5.0. A leftover ``.blf-held/`` inside a managed project is still skipped by discovery; new holds are not written there.
+_Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
 A stable clause naming why a held copy exists. WARNINGs and the later resolve UI show it. 0.5.0 reasons: `create-overwrite` (item-add fan-out replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
@@ -93,8 +117,8 @@ An item declared explicitly in a mapping for selective projection. When no subpa
 _Avoid_: Filter, include, path entry
 
 **Sync status**:
-The relationship between a managed item and its physical copy in a target project, as determined by comparing current file hashes against a stored baseline: in-sync, managed-changed, target-changed, both-changed, or manually-synced.
-_Avoid_: Diff, state, status
+Whether a managed item and its projection match **right now** (live hashes). Match is in-sync. Mismatch is labeled from the baseline when one exists (managed-changed, target-changed, both-changed). There is no ``sync-state.yml`` and no manually-synced book from ``link sync``.
+_Avoid_: Diff, state, status, sync-state
 
 **Item discovery**:
 The process of determining which items a managed project contributes to a given mapping — either by enumerating the managed project directory (sync-all) or by resolving each declared subpath against the filesystem. A distinct concern from mapping expansion.
@@ -119,3 +143,11 @@ _Avoid_: Overlay owner, source index, persisted owner
 **Item overlap**:
 Two items on the same target whose names are equal or one is a path prefix of the other (``local-file`` and ``local-file/devops/k8s.md``). Illegal across managed projects and within one project's subpaths. Start and reload fail and name both projects and both paths. Distinct siblings on one target (``.vscode`` and ``.kiro/hooks``) are allowed.
 _Avoid_: Collision, conflict, duplicate mapping
+
+## Runtime
+
+One daemon process loads one configuration set. Process state lives in the runtime home, not next to mapping files or inside managed projects.
+
+A yaml file already loaded by a running set is served by that process (``-c`` is not a second watcher). Starting a set that shares a mapping file with another running set is an error.
+
+``link check`` hashes managed vs target now. Progress is one rewritten TTY status line (unit ``i/n``, current item name, no per-file paths). The table is printed once at the end. Non-TTY: no status line, final table only.

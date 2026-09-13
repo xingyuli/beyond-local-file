@@ -14,6 +14,7 @@ from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
 
 from .catchup import remove_path, run_catch_up
+from .process import state_dir
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 
 type Subpaths = frozenset[str] | None
@@ -201,7 +202,7 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     apply_removals(snapshot_projects, diff.removals)
     save_snapshot(config_path, file_projects)
     baseline = prune_removed_replicas(load_baseline(config_path), snapshot_projects, diff.removals)
-    trees = run_catch_up(file_projects, config_path.parent, baseline)
+    trees = run_catch_up(file_projects, state_dir(config_path), baseline)
     save_baseline(config_path, trees)
     return 0
 

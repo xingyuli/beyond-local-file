@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.sync_state import SyncState, SyncStatus
 from tests.daemon_support import invoke_with_daemon, start_daemon, stop_daemon
 
@@ -78,7 +79,7 @@ def test_revlink_create_records_pair_as_in_sync(tmp_path: Path, monkeypatch, iso
     result = invoke_with_daemon(config_path, ["revlink", "create", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
-    sync_state = SyncState(config_path.parent)
+    sync_state = SyncState(state_dir(config_path))
     sync_state.load()
     hub_copy = managed / "item.txt"
     assert sync_state.detect_status(hub_copy, source) == SyncStatus.IN_SYNC
@@ -92,9 +93,7 @@ def test_revlink_create_records_pair_as_in_sync(tmp_path: Path, monkeypatch, iso
         stop_daemon(config_path, isolated_home)
 
 
-def test_revlink_create_fans_out_to_other_replicas(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_revlink_create_fans_out_to_other_replicas(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Create copies the new item onto every other target of the managed project."""
     managed = tmp_path / "managed"
     first_target = tmp_path / "target-one"
@@ -119,7 +118,7 @@ def test_revlink_create_fans_out_to_other_replicas(
     assert "item.txt" in second_exclude.read_text()
     updated = config_path.read_text()
     assert updated.count("- item.txt") == updated.count("target:")
-    sync_state = SyncState(config_path.parent)
+    sync_state = SyncState(state_dir(config_path))
     sync_state.load()
     assert sync_state.detect_status(managed / "item.txt", replica) == SyncStatus.IN_SYNC
 

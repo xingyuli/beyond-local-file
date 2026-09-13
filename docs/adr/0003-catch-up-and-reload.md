@@ -4,7 +4,7 @@ The daemon distinguishes two starts by whether a baseline exists for that manage
 
 A new target project on an existing managed project is fresh **for that replica only**. Other replicas are not reset.
 
-Mapping files are not watched. External mapping edits take effect through the reload classifier (`daemon start` when the file differs from the snapshot, `daemon reload` when already running). The daemon is one OS process; each managed project has its own queue.
+Mapping files are not watched. External mapping edits take effect through the reload classifier (`daemon start` when the files differ from the snapshot, `daemon reload` when already running). One OS process loads one **configuration set** (0017); each managed project has its own queue.
 
 ## Status
 

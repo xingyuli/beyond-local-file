@@ -21,6 +21,17 @@ def get_home_directory() -> Path:
     return Path.home()
 
 
+def runtime_home() -> Path:
+    """Return the runtime home directory.
+
+    ``BLF_HOME`` relocates the home used for ``~/.blf``.
+
+    Returns:
+        ``<home>/.blf``.
+    """
+    return get_home_directory() / ".blf"
+
+
 def resolve_config_from_blfrc() -> list[Path] | None:
     """Resolve config file path(s) from ~/.blfrc.
 

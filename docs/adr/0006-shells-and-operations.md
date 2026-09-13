@@ -1,6 +1,8 @@
 # Shells require the daemon; three stop-syncing operations
 
-If the daemon is not running, shells fail and tell the user to start it. There is no offline copy engine and no auto-start. `link check` is a daemon query, same as the other shells.
+If the daemon for the resolved configuration set is not running, shells fail and tell the user to start it. There is no offline copy engine and no auto-start. `link check` is a daemon query, same as the other shells: it hashes managed vs target **now**. Progress is one rewritten TTY status line; the table is printed once at the end (0019).
+
+If the process is in phase ``catch-up``, shells other than ``status`` wait until ``ready`` rather than failing.
 
 Stop-syncing a path is three daemon operations, not one:
 
