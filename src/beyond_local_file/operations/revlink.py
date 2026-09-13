@@ -233,7 +233,7 @@ class CreateFormatter:
 
         Args:
             clause: Hold-reason clause for WARNINGs and the later resolve UI.
-            held_slot: Directory under ``.blf-held/`` that now holds the bytes.
+            held_slot: Directory under the runtime-home attic that now holds the bytes.
         """
         self._echo(f"WARNING: {clause}")
         self._echo(f"Held at {held_slot.as_posix()}")

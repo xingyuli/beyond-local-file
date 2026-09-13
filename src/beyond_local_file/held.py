@@ -1,7 +1,8 @@
-"""Held copies: reserved attic under the managed project."""
+"""Held copies: attic under the runtime home; leftover ``.blf-held`` stays skipped."""
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,7 +10,11 @@ from pathlib import Path
 
 import yaml
 
+from beyond_local_file.blfrc import runtime_home
+
 HELD_DIR = ".blf-held"
+"""Leftover managed-project attic name; still skipped, never written."""
+
 REASON_CREATE_OVERWRITE = "create-overwrite"
 REASON_DELETE_GAP = "delete-gap"
 _CONTENT_NAME = "content"
@@ -18,7 +23,7 @@ _META_NAME = "reason.yml"
 
 @dataclass(frozen=True)
 class HeldCopy:
-    """One held-copy slot under ``.blf-held/``."""
+    """One held-copy slot under the runtime home."""
 
     slot: Path
     reason: str
@@ -28,7 +33,7 @@ class HeldCopy:
 
 
 def is_held_item_name(name: str) -> bool:
-    """Return whether *name* is the reserved held-copy directory.
+    """Return whether *name* is the reserved leftover held-copy directory.
 
     Args:
         name: A top-level item name in a managed project.
@@ -37,6 +42,19 @@ def is_held_item_name(name: str) -> bool:
         ``True`` if the name must not be projected.
     """
     return name == HELD_DIR
+
+
+def held_dir_for(managed_root: Path) -> Path:
+    """Return the runtime-home attic for *managed_root*.
+
+    Args:
+        managed_root: Managed project directory.
+
+    Returns:
+        ``~/.blf/held/<sha256 of the resolved managed project path>``.
+    """
+    digest = hashlib.sha256(str(managed_root.resolve()).encode("utf-8")).hexdigest()
+    return runtime_home() / "held" / digest
 
 
 def reason_clause(reason: str, *, path: str, replica: str) -> str:
@@ -65,7 +83,7 @@ def store_held_copy(
     replica: Path,
     reason: str,
 ) -> Path:
-    """Move *source* into ``.blf-held/`` and write reason metadata.
+    """Move *source* into the runtime-home attic and write reason metadata.
 
     Args:
         managed_root: Managed project directory.
@@ -79,7 +97,7 @@ def store_held_copy(
     """
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     safe = rel_path.as_posix().replace("/", "--")
-    slot = managed_root / HELD_DIR / f"{stamp}_{safe}"
+    slot = held_dir_for(managed_root) / f"{stamp}_{safe}"
     slot.mkdir(parents=True)
     content = slot / _CONTENT_NAME
     shutil.move(str(source), str(content))
@@ -94,7 +112,7 @@ def store_held_copy(
 
 
 def list_held_copies(managed_root: Path) -> tuple[HeldCopy, ...]:
-    """Return held copies stored under ``.blf-held/`` in *managed_root*.
+    """Return held copies stored under the runtime home for *managed_root*.
 
     Args:
         managed_root: Managed project directory.
@@ -102,7 +120,7 @@ def list_held_copies(managed_root: Path) -> tuple[HeldCopy, ...]:
     Returns:
         Held copies in slot-name order, each carrying the hold-reason clause.
     """
-    root = managed_root / HELD_DIR
+    root = held_dir_for(managed_root)
     if not root.is_dir():
         return ()
     copies: list[HeldCopy] = []

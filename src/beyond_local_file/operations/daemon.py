@@ -184,7 +184,7 @@ def _projects_for_isolation(config_path: Path) -> dict[str, ConfigProject]:
         config_path: Path to the loaded config file.
 
     Returns:
-        Config projects whose managed directories are scanned for held copies.
+        Config projects whose runtime-home attics are listed for held copies.
     """
     snapshot = load_snapshot(config_path)
     if snapshot is not None:

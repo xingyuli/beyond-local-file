@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -50,8 +51,14 @@ def _wait_until(predicate: Callable[[], bool], *, timeout: float = _READY_WAIT_S
     raise TimeoutError("condition was not met")
 
 
+def _expected_held_dir(managed: Path, home: Path) -> Path:
+    """Return ``<home>/.blf/held/<sha256 of the resolved managed project path>``."""
+    digest = hashlib.sha256(str(managed.resolve()).encode("utf-8")).hexdigest()
+    return home / ".blf" / "held" / digest
+
+
 @pytest.fixture
-def live_workspace(tmp_path: Path) -> tuple[LiveSync, Path, Path, Path]:
+def live_workspace(tmp_path: Path, isolated_home: dict[str, str]) -> tuple[LiveSync, Path, Path, Path]:
     """In-process live observer after a fresh catch-up onto two targets."""
     config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
     live = _live_sync(config_path)
@@ -222,8 +229,9 @@ def test_delete_within_generation_gap_removes_live_path_on_hub_and_other_replica
 
 def test_delete_past_generation_gap_holds_then_removes_live_path(
     live_workspace: tuple[LiveSync, Path, Path, Path],
+    isolated_home: dict[str, str],
 ) -> None:
-    """Gap greater than 3 holds hub bytes, then delete-wins the live path."""
+    """Gap greater than 3 holds hub bytes under ~/.blf/held/<hash>/, then delete-wins."""
     live, managed, target_a, target_b = live_workspace
     (target_b / "shared.txt").write_text("divergent")
     (target_a / "shared.txt").write_text("a1")
@@ -243,9 +251,11 @@ def test_delete_past_generation_gap_holds_then_removes_live_path(
     assert not (managed / "shared.txt").exists()
     assert not (target_a / "shared.txt").exists()
     assert not (target_b / "shared.txt").exists()
-    slots = [path for path in (managed / ".blf-held").iterdir() if path.is_dir()]
+    held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
+    slots = [path for path in held_root.iterdir() if path.is_dir()]
     assert len(slots) == 1
     assert (slots[0] / "content").read_text() == "a4"
+    assert not (managed / ".blf-held").exists()
 
 
 def test_fan_out_does_not_write_replica_whose_disk_hash_is_not_expected_base(

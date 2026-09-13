@@ -1,10 +1,17 @@
 """Copy-only revlink create, restore, and remove at the public command seams."""
 
+import hashlib
 from pathlib import Path
 
 from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.sync_state import compute_item_hash
 from tests.daemon_support import invoke_with_daemon, start_daemon, stop_daemon
+
+
+def _expected_held_dir(managed: Path, home: Path) -> Path:
+    """Return ``<home>/.blf/held/<sha256 of the resolved managed project path>``."""
+    digest = hashlib.sha256(str(managed.resolve()).encode("utf-8")).hexdigest()
+    return home / ".blf" / "held" / digest
 
 
 def _write_selective_config(config_path: Path, managed_name: str, *targets: Path) -> None:
@@ -140,7 +147,7 @@ def test_revlink_create_holds_divergent_replica_then_overwrites(
 
     assert result.exit_code == 0, result.output
     assert (second_target / "item.txt").read_text() == "adopt me"
-    held_root = managed / ".blf-held"
+    held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
     slots = list(held_root.iterdir())
     assert len(slots) == 1
     content = slots[0] / "content"
@@ -149,6 +156,8 @@ def test_revlink_create_holds_divergent_replica_then_overwrites(
     assert "create-overwrite" in meta
     assert "reason: create-overwrite" in result.output
     assert "WARNING" in result.output
+    assert str(held_root) in result.output
+    assert not (managed / ".blf-held").exists()
 
 
 def test_revlink_create_leaves_directory_as_real_tree(

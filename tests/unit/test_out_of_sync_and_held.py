@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,12 +16,18 @@ from beyond_local_file.config import Config
 from beyond_local_file.daemon.catchup import run_catch_up
 from beyond_local_file.daemon.live import LiveSync
 from beyond_local_file.daemon.store import save_baseline, save_snapshot
-from beyond_local_file.held import REASON_DELETE_GAP, reason_clause, store_held_copy
+from beyond_local_file.held import REASON_DELETE_GAP, list_held_copies, reason_clause, store_held_copy
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
 
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
 _DELETE_GAP_CLAUSE = "delete applied past the generation window; kept hub bytes of shared.txt (reason: delete-gap)"
+
+
+def _expected_held_dir(managed: Path, home: Path) -> Path:
+    """Return ``<home>/.blf/held/<sha256 of the resolved managed project path>``."""
+    digest = hashlib.sha256(str(managed.resolve()).encode("utf-8")).hexdigest()
+    return home / ".blf" / "held" / digest
 
 
 def _write_two_target_workspace(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -101,7 +108,7 @@ def _mark_loser_out_of_sync(live: LiveSync, target_a: Path, target_b: Path) -> N
 
 
 @pytest.fixture
-def live_workspace(tmp_path: Path) -> tuple[LiveSync, Path, Path, Path, Path]:
+def live_workspace(tmp_path: Path, isolated_home: dict[str, str]) -> tuple[LiveSync, Path, Path, Path, Path]:
     """In-process live observer after a fresh catch-up onto two targets."""
     config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
     live = _live_sync(config_path)
@@ -180,8 +187,9 @@ def test_equal_hashes_clear_out_of_sync_and_rejoin_fan_out(
 
 def test_delete_past_generation_gap_holds_then_delete_wins(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
+    isolated_home: dict[str, str],
 ) -> None:
-    """Gap greater than 3 stores hub bytes under .blf-held, then live-delete-wins."""
+    """Gap greater than 3 stores hub bytes under ~/.blf/held/<hash>/, then live-delete-wins."""
     live, _config_path, managed, target_a, target_b = live_workspace
     (target_b / "shared.txt").write_text("divergent")
     (target_a / "shared.txt").write_text("a1")
@@ -200,19 +208,20 @@ def test_delete_past_generation_gap_holds_then_delete_wins(
     assert not (managed / "shared.txt").exists()
     assert not (target_a / "shared.txt").exists()
     assert not (target_b / "shared.txt").exists()
-    held_root = managed / ".blf-held"
+    held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
     slots = [path for path in held_root.iterdir() if path.is_dir()]
     assert len(slots) == 1
     assert (slots[0] / "content").read_text() == "a4"
     meta = yaml.safe_load((slots[0] / "reason.yml").read_text())
     assert meta["reason"] == "delete-gap"
     assert meta["clause"] == _DELETE_GAP_CLAUSE
+    assert not (managed / ".blf-held").exists()
     assert not (target_a / ".blf-held").exists()
     assert not (target_b / ".blf-held").exists()
 
 
 def test_held_directory_is_not_projected_including_sync_all(tmp_path: Path) -> None:
-    """``.blf-held`` is reserved and is not copied onto targets, including sync-all."""
+    """Leftover ``.blf-held`` is skipped by discovery, observers, and catch-up."""
     config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
     held_slot = managed / ".blf-held" / "slot"
     held_slot.mkdir(parents=True)
@@ -231,18 +240,57 @@ def test_held_directory_is_not_projected_including_sync_all(tmp_path: Path) -> N
     assert (target_b / "shared.txt").read_text() == "after-held"
     assert not (target_a / ".blf-held").exists()
     assert not (target_b / ".blf-held").exists()
+    assert held_slot.is_dir()
+    assert (held_slot / "content").read_text() == "secret-changed"
+
+
+def test_store_held_copy_writes_under_runtime_home_not_managed_attic(
+    tmp_path: Path, isolated_home: dict[str, str]
+) -> None:
+    """New holds land under ~/.blf/held/<hash>/ and do not create .blf-held/."""
+    managed = tmp_path / "proj"
+    replica = tmp_path / "target"
+    managed.mkdir()
+    replica.mkdir()
+    leftover = managed / ".blf-held" / "old-slot"
+    leftover.mkdir(parents=True)
+    (leftover / "content").write_text("leftover")
+    (leftover / "reason.yml").write_text("reason: delete-gap\npath: old.txt\nreplica: /tmp/old\n")
+    source = tmp_path / "bytes.txt"
+    source.write_text("kept-hub-bytes")
+
+    slot = store_held_copy(
+        managed,
+        rel_path=Path("shared.txt"),
+        source=source,
+        replica=replica,
+        reason=REASON_DELETE_GAP,
+    )
+
+    held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
+    assert slot.parent == held_root
+    assert (slot / "content").read_text() == "kept-hub-bytes"
+    copies = list_held_copies(managed)
+    assert len(copies) == 1
+    assert copies[0].slot == slot
+    assert copies[0].reason == "delete-gap"
+    assert leftover.is_dir()
+    assert (leftover / "content").read_text() == "leftover"
 
 
 def test_status_lists_out_of_sync_and_held_copies(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
     isolated_home: dict[str, str],
 ) -> None:
-    """daemon status lists out-of-sync paths and held-copy clauses."""
+    """daemon status lists runtime-home held paths and ignores leftover .blf-held/."""
     live, config_path, managed, target_a, target_b = live_workspace
     _mark_loser_out_of_sync(live, target_a, target_b)
+    leftover = managed / ".blf-held" / "old-slot"
+    leftover.mkdir(parents=True)
+    (leftover / "content").write_text("leftover")
     sidecar = config_path.parent / "hub-bytes.txt"
     sidecar.write_text("kept-hub-bytes")
-    store_held_copy(
+    slot = store_held_copy(
         managed,
         rel_path=Path("shared.txt"),
         source=sidecar,
@@ -258,8 +306,12 @@ def test_status_lists_out_of_sync_and_held_copies(
     assert "shared.txt" in result.output
     assert str(target_b) in result.output
     assert _DELETE_GAP_CLAUSE in result.output
-    assert ".blf-held" in result.output
-    assert (managed / ".blf-held").is_dir()
+    held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
+    assert str(held_root) in result.output
+    assert str(slot) in result.output
+    assert str(leftover) not in result.output
+    assert leftover.is_dir()
+    assert leftover.parent.is_dir()
 
 
 def test_start_warns_and_acks_without_blocking(
@@ -268,8 +320,17 @@ def test_start_warns_and_acks_without_blocking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """start prints isolation WARNINGs, requires ack, and still backgrounds on no."""
-    live, config_path, _managed, target_a, target_b = live_workspace
+    live, config_path, managed, target_a, target_b = live_workspace
     _mark_loser_out_of_sync(live, target_a, target_b)
+    sidecar = config_path.parent / "hub-bytes.txt"
+    sidecar.write_text("kept-hub-bytes")
+    slot = store_held_copy(
+        managed,
+        rel_path=Path("shared.txt"),
+        source=sidecar,
+        replica=target_b,
+        reason=REASON_DELETE_GAP,
+    )
     _persist(config_path, live)
     monkeypatch.setattr("beyond_local_file.operations.daemon.stdin_is_tty", lambda: True)
 
@@ -279,6 +340,8 @@ def test_start_warns_and_acks_without_blocking(
     assert "WARNING" in result.output
     assert "shared.txt" in result.output
     assert str(target_b) in result.output
+    assert _DELETE_GAP_CLAUSE in result.output
+    assert str(slot) in result.output
     assert "without resolving" in result.output.lower() or "continue" in result.output.lower()
     status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
     assert "running" in status.output.lower()
@@ -298,6 +361,15 @@ def test_reload_warns_and_acks_without_blocking(
     (target_b / "shared.txt").write_text("from-b")
     _wait_until(lambda: (managed / "shared.txt").read_text() == "from-a")
     _wait_until(lambda: (target_b / "shared.txt").read_text() == "from-b")
+    sidecar = config_path.parent / "hub-bytes.txt"
+    sidecar.write_text("kept-hub-bytes")
+    slot = store_held_copy(
+        managed,
+        rel_path=Path("shared.txt"),
+        source=sidecar,
+        replica=target_b,
+        reason=REASON_DELETE_GAP,
+    )
     monkeypatch.setattr("beyond_local_file.operations.daemon.stdin_is_tty", lambda: True)
 
     result = _invoke_reload(config_path, isolated_home, input_text="n\n")
@@ -306,6 +378,8 @@ def test_reload_warns_and_acks_without_blocking(
     assert "WARNING" in result.output
     assert "shared.txt" in result.output
     assert str(target_b) in result.output
+    assert _DELETE_GAP_CLAUSE in result.output
+    assert str(slot) in result.output
     assert "without resolving" in result.output.lower() or "continue" in result.output.lower()
     status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
     assert "running" in status.output.lower()
@@ -314,7 +388,4 @@ def test_reload_warns_and_acks_without_blocking(
 
 def test_reason_clause_delete_gap_is_stable() -> None:
     """Hold-reason clause text is the same string status and WARNINGs must show."""
-    assert (
-        reason_clause("delete-gap", path="shared.txt", replica="/tmp/target-b")
-        == _DELETE_GAP_CLAUSE
-    )
+    assert reason_clause("delete-gap", path="shared.txt", replica="/tmp/target-b") == _DELETE_GAP_CLAUSE
