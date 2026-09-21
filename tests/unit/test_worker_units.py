@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from click.testing import Result
 
+from beyond_local_file.daemon.client import send_when_up
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
 
 _POLL_S = 0.05
@@ -389,3 +390,92 @@ def test_reload_of_one_project_does_not_catch_up_another_held_unit(
     finally:
         hold.unlink(missing_ok=True)
         stop_daemon(config_path, env)
+
+
+def test_create_streams_waiting_while_the_worker_unit_is_busy(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A mutating TTY status line is Waiting while that unit is in idle observe."""
+    managed = tmp_path / "alpha"
+    target = tmp_path / "lab-app"
+    managed.mkdir()
+    target.mkdir()
+    (managed / "shared.txt").write_text("hello")
+    (target / "item.txt").write_text("adopt me")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {target}\n")
+    hold = tmp_path / "idle-hold"
+    hold.write_text("1")
+    entered = Path(str(hold) + ".entered")
+    env = {**isolated_home, "BLF_TEST_IDLE_HOLD": str(hold)}
+    start_daemon(config_path, env)
+    try:
+        deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < deadline and not entered.exists():
+            time.sleep(_POLL_S)
+        assert entered.exists(), "idle observe never entered the test hold"
+        progress: list[str] = []
+        result: dict[str, object] = {}
+
+        def _create() -> None:
+            result["response"] = send_when_up(
+                config_path,
+                {
+                    "op": "create",
+                    "cwd": str(target),
+                    "path": "item.txt",
+                    "project_name": "alpha",
+                },
+                on_progress=progress.append,
+            )
+
+        thread = threading.Thread(target=_create)
+        thread.start()
+        wait_deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < wait_deadline and not any(line.startswith("Waiting") for line in progress):
+            time.sleep(_POLL_S)
+        assert any(line.startswith("Waiting") for line in progress), progress
+        hold.unlink(missing_ok=True)
+        thread.join(2.0)
+        assert not thread.is_alive()
+        response = result["response"]
+        assert isinstance(response, dict)
+        assert int(response.get("exit_code", 1)) == 0
+        assert (managed / "item.txt").read_text() == "adopt me"
+    finally:
+        hold.unlink(missing_ok=True)
+        stop_daemon(config_path, env)
+
+
+def test_create_streams_op_and_baseline_status_lines(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """After Waiting, a mutating TTY shows the op then the item baseline write."""
+    managed = tmp_path / "alpha"
+    target = tmp_path / "lab-app"
+    managed.mkdir()
+    target.mkdir()
+    (managed / "shared.txt").write_text("hello")
+    (target / "item.txt").write_text("adopt me")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {target}\n")
+    start_daemon(config_path, isolated_home)
+    try:
+        progress: list[str] = []
+        response = send_when_up(
+            config_path,
+            {
+                "op": "create",
+                "cwd": str(target),
+                "path": "item.txt",
+                "project_name": "alpha",
+            },
+            on_progress=progress.append,
+        )
+        assert int(response.get("exit_code", 1)) == 0
+        assert any(line.startswith("Creating") for line in progress), progress
+        assert any(line.startswith("Writing baseline") for line in progress), progress
+    finally:
+        stop_daemon(config_path, isolated_home)

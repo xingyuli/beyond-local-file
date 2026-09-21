@@ -105,6 +105,8 @@ def _handle_live_request(
     unit = route_worker_unit(request, runtime.units, request_config)
     if unit is None:
         return handle_request(request_config, request, on_progress=on_progress)
+    if unit.busy and on_progress is not None and request.get("op") in {"create", "restore", "remove"}:
+        on_progress("Waiting …")
     return unit.submit(lambda: _run_unit_request(request_config, request, on_progress, unit))
 
 
@@ -212,6 +214,10 @@ def _run_unit_request(
     unit: WorkerUnit,
 ) -> Response:
     op = request.get("op")
+    if op in {"create", "restore", "remove"} and on_progress is not None:
+        verbs = {"create": "Creating", "restore": "Restoring", "remove": "Removing"}
+        item = str(request.get("path") or "").strip()
+        on_progress(f"{verbs[str(op)]} … {item}".rstrip())
     if op in {"create", "restore", "remove", "reload"}:
         applied = unit.live.apply()
         if applied:

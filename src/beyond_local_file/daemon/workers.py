@@ -43,7 +43,13 @@ class WorkerUnit:
         self.shutdown = shutdown
         self.offset = offset
         self._jobs: queue.Queue[Job | None] = queue.Queue()
+        self._busy = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"blf-unit-{name}", daemon=True)
+
+    @property
+    def busy(self) -> bool:
+        """Return whether this unit is in idle observe or running a job."""
+        return self._busy.is_set()
 
     def start(self) -> None:
         """Start the unit thread."""
@@ -110,12 +116,20 @@ class WorkerUnit:
                 continue
             if job is None:
                 return
-            job()
+            self._busy.set()
+            try:
+                job()
+            finally:
+                self._busy.clear()
 
     def _idle(self) -> None:
-        await_idle_hold(self.name)
-        if self.live.tick(reason="idle"):
-            save_baseline(self.config_path, self.live.baseline, self.live.projects)
+        self._busy.set()
+        try:
+            await_idle_hold(self.name)
+            if self.live.tick(reason="idle"):
+                save_baseline(self.config_path, self.live.baseline, self.live.projects)
+        finally:
+            self._busy.clear()
 
 
 def build_worker_units(

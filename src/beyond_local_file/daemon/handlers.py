@@ -71,6 +71,8 @@ def handle_request(
         exit_code = handler(config_path, request)
         if exit_code == 0 and op in {"create", "restore", "remove"} and not request.get("dry_run"):
             try:
+                if on_progress is not None:
+                    on_progress("Writing baseline …")
                 changed_rel = request.get("path")
                 _persist_committed_state(
                     config_path,
