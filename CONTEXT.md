@@ -52,6 +52,14 @@ _Avoid_: .blf next to config.yml
 One OS process per configuration set. It catch-up's, then observes each managed project and target in that set, queues typed changes, writes the hub, fans out (excluding the source replica), and is the only writer of mappings that originate from blf commands. Two sets never watch the same mapping file at once.
 _Avoid_: Coordinator, watcher, syncer, service, one process per mapping file
 
+**Worker unit**:
+The threading grain: one queue for **one managed project** (hub and every target). Idle observe, mailbox apply, catch-up, and mutating shells for that hub run as jobs on that queue. At most one job per worker unit. Distinct worker units run in parallel.
+_Avoid_: Processing unit, thread per target, set-wide lock
+
+**Mapping unit**:
+The expanded **managed project × one target** with that mapping's items. Check rows, git exclude, and fan-out destinations. Not its own thread. A ConfigProject with M mappings and N total targets becomes M×N mapping units.
+_Avoid_: Processing unit, worker unit, execution thread
+
 **Daemon phase**:
 ``catch-up`` or ``ready``. The process accepts IPC in both phases. Live observation starts only in ``ready``. ``daemon start`` stays in the foreground until ``ready``. ``status`` always includes the pid. Other shells wait through ``catch-up``.
 _Avoid_: starting, booting, warming
@@ -152,6 +160,6 @@ A yaml file already loaded by a running set is served by that process (``-c`` is
 
 ``link check`` hashes managed vs target now. Progress is one rewritten TTY status line (unit ``i/n``, current item name, no per-file paths). The table is printed once at the end. Non-TTY: no status line, final table only.
 
-The set's ``daemon.log`` records each served shell request (op, PATH, cwd, start, end, exit), mutating-op steps with durations, and observe/persist work (live tick / item scan, baseline record, snapshot and item-document write) with duration and size context. Request stdout captured for the CLI is not a substitute. See 0015 and 0020.
+The set's ``daemon.log`` records each served shell request (op, PATH, cwd, start, end, exit), mutating-op steps with durations, and observe/persist work (live tick / item scan, baseline record, snapshot and item-document write) with duration and size context. Request stdout captured for the CLI is not a substitute. See 0015, 0020, and 0021.
 
-The accept thread binds the port and answers ``status``. It does not hash. Idle observe runs on a background thread, 15 s from the end of the last idle observe. A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. After persist, live observation continues from the new baseline without a reload scan.
+The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating shells routed by mapping snapshot / contribution source. A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. After persist, live observation continues from the new baseline without a reload scan.
