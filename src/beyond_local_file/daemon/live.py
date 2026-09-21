@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -11,12 +12,14 @@ from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_processing
 
 from .catchup import (
+    ScanStats,
     rel_in_items,
     remove_path,
     replace_with_copy,
     scan_items,
     scan_path_state,
 )
+from .log import duration_ms, log_duration, worker_print
 from .store import (
     BaselineTrees,
     PathState,
@@ -29,6 +32,9 @@ from .store import (
 
 DELETE_WINDOW = 3
 """Deletes win on the live path when hub_gen - base_gen is at most this value."""
+
+_IDLE_LOG_MS = 100
+"""Idle ticks faster than this are omitted from the daemon log."""
 
 type ChangeKind = Literal["create", "update", "delete"]
 
@@ -68,7 +74,7 @@ class LiveSync:
         self._mailbox: dict[tuple[str, str], PathChange] = {}
         self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
         self._watch_roots = _build_watch_roots(projects)
-        self._last_seen = self._scan_all()
+        self._last_seen = self._scan_all(reason="init")
 
     @property
     def baseline(self) -> BaselineTrees:
@@ -80,24 +86,45 @@ class LiveSync:
         """Return replica/path pairs isolated after a lost update CAS."""
         return tuple((Path(root), rel) for root, rel in sorted(self._oos))
 
-    def tick(self) -> bool:
+    def tick(self, reason: str = "idle") -> bool:
         """Observe current trees into the mailbox, then apply pending changes.
+
+        Args:
+            reason: Why this tick ran (``idle`` or ``before-request``). Idle ticks
+                faster than 100ms with no apply are not logged.
 
         Returns:
             True if any mailbox entry was applied or attempted, or isolation
             state changed (out-of-sync marked or cleared).
         """
+        started = time.perf_counter()
+        stats = ScanStats()
         before_oos = set(self._oos)
-        self.observe()
+        self.observe(stats)
+        applied = False
         if self._mailbox:
             self.apply()
-            return True
-        return before_oos != self._oos
+            applied = True
+        changed = applied or before_oos != self._oos
+        elapsed = duration_ms(started)
+        if reason != "idle" or changed or elapsed >= _IDLE_LOG_MS:
+            worker_print(
+                "live: tick "
+                f"reason={reason} roots={len(self._watch_roots)} "
+                f"paths={stats.paths} files={stats.files} hashed_bytes={stats.hashed_bytes} "
+                f"duration_ms={elapsed} applied={str(changed).lower()}"
+            )
+        return changed
 
-    def observe(self) -> None:
-        """Queue create/update/delete for paths that differ from the last scan."""
+    def observe(self, stats: ScanStats | None = None) -> None:
+        """Queue create/update/delete for paths that differ from the last scan.
+
+        Args:
+            stats: Optional accumulator for this scan's path/file/byte counts.
+        """
+        collected = stats if stats is not None else ScanStats()
         for watch in self._watch_roots:
-            scanned = scan_items(watch.root, list(watch.item_names))
+            scanned = scan_items(watch.root, list(watch.item_names), collected)
             last = self._last_seen.get(str(watch.root), {})
             for rel in set(scanned) | set(last):
                 new = scanned.get(rel) or path_state(False, None)
@@ -141,13 +168,18 @@ class LiveSync:
         self._baseline = baseline
         self._oos = _oos_from_baseline(baseline)
         self._watch_roots = _build_watch_roots(projects)
-        self._last_seen = self._scan_all()
+        self._last_seen = self._scan_all(reason="reload")
         self._mailbox.clear()
 
-    def _scan_all(self) -> BaselineTrees:
+    def _scan_all(self, reason: str) -> BaselineTrees:
+        stats = ScanStats()
         trees: BaselineTrees = {}
-        for watch in self._watch_roots:
-            trees[str(watch.root)] = scan_items(watch.root, list(watch.item_names))
+        with log_duration("live: scan", reason=reason, roots=len(self._watch_roots)) as fields:
+            for watch in self._watch_roots:
+                trees[str(watch.root)] = scan_items(watch.root, list(watch.item_names), stats)
+            fields["paths"] = stats.paths
+            fields["files"] = stats.files
+            fields["hashed_bytes"] = stats.hashed_bytes
         return trees
 
     def _apply_one(self, change: PathChange) -> None:

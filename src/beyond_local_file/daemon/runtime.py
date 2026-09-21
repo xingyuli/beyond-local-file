@@ -21,6 +21,7 @@ from .catchup import run_catch_up
 from .handlers import handle_request
 from .ipc import ProgressCallback, Request, Response, ServeLoop, WorkerState, serve_requests
 from .live import LiveSync
+from .log import bind_worker_stream
 from .process import state_dir, write_ready
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 
@@ -56,13 +57,13 @@ def run_worker(config_path: Path) -> int:
 
     print("daemon worker starting", flush=True)
 
-    def _tick() -> None:
+    def _tick(reason: str = "idle") -> None:
         if not state.ready.is_set():
             return
         live = live_holder.get("live")
         if live is None:
             return
-        if live.tick():
+        if live.tick(reason=reason):
             save_baseline(config_path, live.baseline)
 
     def _handle_request(
@@ -112,8 +113,8 @@ def run_worker(config_path: Path) -> int:
             shutdown=shutdown,
             bound=bound,
             state=state,
-            on_idle=_tick,
-            before_request=_tick,
+            on_idle=lambda: _tick("idle"),
+            before_request=lambda: _tick("before-request"),
         ),
     )
     print("daemon stopping", flush=True)
@@ -177,6 +178,7 @@ def _stamp_worker_streams() -> None:
     """Prefix each new stdout and stderr line with the host local time and offset."""
     sys.stdout = _TimestampedStream(sys.stdout)
     sys.stderr = _TimestampedStream(sys.stderr)
+    bind_worker_stream(sys.stdout)
 
 
 def _line_stamp() -> str:

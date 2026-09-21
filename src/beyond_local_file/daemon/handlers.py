@@ -31,6 +31,7 @@ from beyond_local_file.project_processor import (
 from .catchup import record_baseline
 from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
+from .log import log_duration
 from .process import state_dir
 from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
 
@@ -223,6 +224,7 @@ def _resolve_context(
 
 
 def _persist_committed_state(config_path: Path) -> None:
-    projects = load_set_projects(config_path)
-    save_snapshot(config_path, projects)
-    save_baseline(config_path, record_baseline(projects, load_baseline(config_path)))
+    with log_duration("persist: done"):
+        projects = load_set_projects(config_path)
+        save_snapshot(config_path, projects)
+        save_baseline(config_path, record_baseline(projects, load_baseline(config_path)))

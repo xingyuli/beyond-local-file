@@ -9,6 +9,7 @@ import yaml
 
 from beyond_local_file.model.config import ConfigProject, Mapping
 
+from .log import log_duration
 from .process import state_dir
 
 SNAPSHOT_NAME = "mapping-snapshot.yml"
@@ -123,8 +124,10 @@ def save_snapshot(config_path: Path, projects: dict[str, ConfigProject]) -> None
     """
     path = snapshot_path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        yaml.safe_dump(snapshot_from_projects(projects), handle, default_flow_style=False, sort_keys=True)
+    with log_duration("snapshot: write") as fields:
+        with open(path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(snapshot_from_projects(projects), handle, default_flow_style=False, sort_keys=True)
+        fields["bytes"] = path.stat().st_size
 
 
 def mappings_equal(left: dict[str, ConfigProject], right: dict[str, ConfigProject]) -> bool:
@@ -169,8 +172,10 @@ def save_baseline(config_path: Path, trees: BaselineTrees) -> None:
     """
     path = baseline_path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        yaml.safe_dump({"trees": trees}, handle, default_flow_style=False, sort_keys=True)
+    with log_duration("baseline: write") as fields:
+        with open(path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump({"trees": trees}, handle, default_flow_style=False, sort_keys=True)
+        fields["bytes"] = path.stat().st_size
 
 
 def path_state(present: bool, digest: str | None, gen: int = 0, oos: bool = False) -> PathState:

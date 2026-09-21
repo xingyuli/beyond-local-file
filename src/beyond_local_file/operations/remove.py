@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from beyond_local_file.config import ConfigUpdater
+from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping
 from beyond_local_file.operations.revlink import ChecksumVerifier, RevlinkContext
@@ -167,24 +168,29 @@ class RemoveOperation:
             one when validation or any cleanup phase fails.
         """
         managed_copy = self.context.managed_project_path / self.rel_path
-        if not self._validate_invocation(managed_copy):
-            return 1
-
-        artifacts = self._preflight_targets(managed_copy)
+        with log_duration("remove: validate"):
+            if not self._validate_invocation(managed_copy):
+                return 1
+            artifacts = self._preflight_targets(managed_copy)
         if artifacts is None:
             return 1
 
         if self.dry_run:
             return 0 if self._preview(artifacts, managed_copy) else 1
 
-        if not self._cleanup_targets(artifacts):
+        with log_duration("remove: cleanup-targets"):
+            cleaned = self._cleanup_targets(artifacts)
+        if not cleaned:
             self.formatter.cleanup_retained()
             return 1
 
-        if not self._delete_managed_copy(managed_copy):
+        with log_duration("remove: delete-managed"):
+            deleted = self._delete_managed_copy(managed_copy)
+        if not deleted:
             return 1
 
-        return self._update_config()
+        with log_duration("remove: config"):
+            return self._update_config()
 
     def _validate_invocation(self, managed_copy: Path) -> bool:  # noqa: PLR0911 -- ordered ownership checks stop at the first unsafe condition
         """Prove that the supplied path is the expected invocation projection.

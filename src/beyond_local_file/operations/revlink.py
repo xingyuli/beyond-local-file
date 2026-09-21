@@ -11,6 +11,7 @@ import click
 
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.copy_manager import copy_projection
+from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import (
     REASON_CREATE_OVERWRITE,
@@ -471,25 +472,31 @@ class CreateOperation:
         """
         dest = self.dest_root / self.rel_path
 
-        result = self._validate(dest)
+        with log_duration("create: validate"):
+            result = self._validate(dest)
         if result != 0:
             return result
 
         if self.dry_run:
             self._preview(dest)
         else:
-            result = self._copy(dest)
+            with log_duration("create: copy"):
+                result = self._copy(dest)
             if result != 0:
                 return result
 
-            result = self._verify(dest)
+            with log_duration("create: checksum"):
+                result = self._verify(dest)
             if result != 0:
                 return result
 
             self.formatter.target_left_in_place(self.source)
-            self._git_exclude(self.context.cwd if self.context is not None else None)
-            self._update_config()
-            self._fan_out(dest)
+            with log_duration("create: git-exclude"):
+                self._git_exclude(self.context.cwd if self.context is not None else None)
+            with log_duration("create: config"):
+                self._update_config()
+            with log_duration("create: fan-out"):
+                self._fan_out(dest)
 
         return 0
 
@@ -886,7 +893,8 @@ class RestoreOperation:
         """
         managed = self.dest_root / self.rel_path
 
-        result = self._validate(managed)
+        with log_duration("restore: validate"):
+            result = self._validate(managed)
         if result != 0:
             return result
 
@@ -894,19 +902,24 @@ class RestoreOperation:
             self._preview(managed)
         else:
             if self.source.is_symlink():
-                result = self._replace(managed)
+                with log_duration("restore: replace"):
+                    result = self._replace(managed)
                 if result != 0:
                     return result
 
-                result = self._verify(managed)
+                with log_duration("restore: checksum"):
+                    result = self._verify(managed)
                 if result != 0:
                     return result
             else:
                 self.formatter.leaving_target_file(self.source)
 
-            self._delete_managed(managed)
-            self._git_exclude()
-            self._remove_config()
+            with log_duration("restore: delete-managed"):
+                self._delete_managed(managed)
+            with log_duration("restore: git-exclude"):
+                self._git_exclude()
+            with log_duration("restore: config"):
+                self._remove_config()
 
         return 0
 

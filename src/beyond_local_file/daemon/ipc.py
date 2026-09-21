@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import socket
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock
 from typing import Any, Literal
 
+from .log import duration_ms, worker_print
 from .process import port_path
 
 type Request = dict[str, Any]
@@ -300,11 +302,16 @@ def _run_and_reply(
         except OSError:
             return
 
+    fields = _request_log_fields(request)
+    worker_print(_format_fields("request: start", fields))
+    started = time.perf_counter()
     _run_hook(before_request)
     try:
         response = handler(config_path, request, emit_progress)
     except Exception as error:
         response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
+    done = {**fields, "exit": response.get("exit_code"), "duration_ms": duration_ms(started)}
+    worker_print(_format_fields("request: done", done))
     _reply(conn, response)
 
 
@@ -325,6 +332,24 @@ def _status_without_state() -> Response:
         "phase": "ready",
         "pid": pid,
     }
+
+
+def _request_log_fields(request: Request) -> dict[str, object]:
+    fields: dict[str, object] = {"op": request.get("op") or ""}
+    path = request.get("path")
+    if path:
+        fields["path"] = path
+    cwd = request.get("cwd")
+    if cwd:
+        fields["cwd"] = cwd
+    if request.get("dry_run"):
+        fields["dry_run"] = "true"
+    return fields
+
+
+def _format_fields(label: str, fields: dict[str, object]) -> str:
+    body = " ".join(f"{key}={value}" for key, value in fields.items())
+    return f"{label} {body}" if body else label
 
 
 def _run_hook(hook: Callable[[], None] | None) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from beyond_local_file.copy_manager import CopyManager, copy_projection
@@ -14,6 +15,7 @@ from beyond_local_file.model.processing import ProcessingUnit
 from beyond_local_file.model.translator import translate_config_to_processing
 from beyond_local_file.sync_state import compute_file_hash
 
+from .log import log_duration
 from .store import (
     BaselineTrees,
     PathState,
@@ -23,6 +25,15 @@ from .store import (
 )
 
 type ProgressFn = Callable[[int, int, str], None]
+
+
+@dataclass
+class ScanStats:
+    """Size of one item-tree scan: paths visited, files hashed, bytes read."""
+
+    paths: int = 0
+    files: int = 0
+    hashed_bytes: int = 0
 
 
 def run_catch_up(
@@ -65,11 +76,16 @@ def record_baseline(
         Baseline trees keyed by absolute root path.
     """
     trees: BaselineTrees = {}
-    for unit in translate_config_to_processing(projects):
-        item_names = [item.name for item in unit.items]
-        _merge_tree(trees, unit.managed_project_path, scan_items(unit.managed_project_path, item_names))
-        _merge_tree(trees, unit.target_project_path, scan_items(unit.target_project_path, item_names))
-    _preserve_generations(trees, previous)
+    stats = ScanStats()
+    with log_duration("baseline: record") as fields:
+        for unit in translate_config_to_processing(projects):
+            item_names = [item.name for item in unit.items]
+            _merge_tree(trees, unit.managed_project_path, scan_items(unit.managed_project_path, item_names, stats))
+            _merge_tree(trees, unit.target_project_path, scan_items(unit.target_project_path, item_names, stats))
+        _preserve_generations(trees, previous)
+        fields["paths"] = stats.paths
+        fields["files"] = stats.files
+        fields["hashed_bytes"] = stats.hashed_bytes
     return trees
 
 
@@ -225,19 +241,24 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def scan_items(root: Path, item_names: list[str]) -> dict[str, PathState]:
+def scan_items(
+    root: Path,
+    item_names: list[str],
+    stats: ScanStats | None = None,
+) -> dict[str, PathState]:
     """Scan named items under *root* into a relative-path tree.
 
     Args:
         root: Hub or replica directory.
         item_names: Item names relative to *root*.
+        stats: Optional accumulator for path count, file count, and hashed bytes.
 
     Returns:
         Present paths mapped to hash/presence state.
     """
     scanned: dict[str, PathState] = {}
     for name in item_names:
-        _scan_path(root, root / name, scanned)
+        _scan_path(root, root / name, scanned, stats)
     return scanned
 
 
@@ -256,7 +277,12 @@ def scan_path_state(root: Path, rel: str) -> PathState:
     return scanned.get(rel) or path_state(False, None)
 
 
-def _scan_path(root: Path, path: Path, scanned: dict[str, PathState]) -> None:
+def _scan_path(
+    root: Path,
+    path: Path,
+    scanned: dict[str, PathState],
+    stats: ScanStats | None = None,
+) -> None:
     if not path.exists() and not path.is_symlink():
         return
     rel = path.relative_to(root).as_posix()
@@ -264,14 +290,18 @@ def _scan_path(root: Path, path: Path, scanned: dict[str, PathState]) -> None:
         return
     if path.is_symlink():
         scanned[rel] = path_state(True, "symlink:" + os.fsdecode(os.readlink(path)))
+        _count_path(stats)
         return
     if path.is_file():
+        size = path.stat().st_size
         scanned[rel] = path_state(True, compute_file_hash(path))
+        _count_path(stats, files=1, hashed_bytes=size)
         return
     if path.is_dir():
         scanned[rel] = path_state(True, None)
+        _count_path(stats)
         for child in sorted(path.iterdir()):
-            _scan_path(root, child, scanned)
+            _scan_path(root, child, scanned, stats)
 
 
 def _baseline_paths_for_items(baseline: BaselineTrees, root: Path, item_names: list[str]) -> set[str]:
@@ -299,3 +329,11 @@ def _path_depth(rel: str) -> int:
 def _merge_tree(trees: BaselineTrees, root: Path, scanned: dict[str, PathState]) -> None:
     slot = trees.setdefault(str(root), {})
     slot.update(scanned)
+
+
+def _count_path(stats: ScanStats | None, *, files: int = 0, hashed_bytes: int = 0) -> None:
+    if stats is None:
+        return
+    stats.paths += 1
+    stats.files += files
+    stats.hashed_bytes += hashed_bytes

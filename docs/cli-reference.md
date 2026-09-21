@@ -193,7 +193,17 @@ Each new worker line is prefixed at write time with the daemon host's local time
 2026-09-12T17:42:03+08:00 live: update alpha.txt gen 1
 ```
 
-Old unstamped lines stay unstamped.
+Shell requests and the set-wide work around them are also logged, so a slow `revlink create` can be explained from this file:
+
+```
+2026-09-12T17:42:03+08:00 request: start op=create path=notes.md cwd=/Users/me/project
+2026-09-12T17:42:06+08:00 live: tick reason=before-request roots=3 paths=48231 files=41002 hashed_bytes=184549376 duration_ms=3401 applied=false
+2026-09-12T17:42:06+08:00 create: copy duration_ms=12
+2026-09-12T17:42:07+08:00 baseline: record paths=48233 files=41005 hashed_bytes=184550012 duration_ms=3412
+2026-09-12T17:42:08+08:00 request: done op=create exit=0 duration_ms=5120
+```
+
+Request stdout captured for the CLI is not written here. Old unstamped lines stay unstamped.
 
 ### Syntax
 
