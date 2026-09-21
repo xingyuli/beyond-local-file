@@ -15,7 +15,15 @@ from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import remove_path, run_catch_up
 from .process import state_dir
-from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
+from .store import (
+    BaselineTrees,
+    drop_removed_baseline_projects,
+    load_baseline,
+    load_snapshot,
+    mappings_equal,
+    save_baseline,
+    save_snapshot,
+)
 
 type Subpaths = frozenset[str] | None
 
@@ -172,6 +180,64 @@ def ingest_before_start(config_path: Path) -> int:
     return 0
 
 
+def affected_unit_names(
+    old: dict[str, ConfigProject],
+    new: dict[str, ConfigProject],
+    diff: MappingDiff,
+) -> frozenset[str]:
+    """Return managed-project names whose mappings changed.
+
+    Args:
+        old: Mapping snapshot.
+        new: Config file projects.
+        diff: Classified additions and removals.
+
+    Returns:
+        Worker-unit names that need catch-up, start, or stop.
+    """
+    names: set[str] = set()
+    lookup = {**old, **new}
+    for change in (*diff.removals, *diff.additions):
+        project = lookup.get(change.project)
+        names.add(project.managed_project_name if project is not None else change.project)
+    return frozenset(names)
+
+
+def prepare_reload(config_path: Path, *, confirmed: bool) -> tuple[int, frozenset[str]]:
+    """Validate and persist a reload snapshot without catch-up.
+
+    Args:
+        config_path: Path to the loaded config file.
+        confirmed: True when the shell already confirmed removals.
+
+    Returns:
+        Exit code and worker-unit names whose mappings changed.
+    """
+    file_projects, snapshot_projects = _load_file_and_snapshot(config_path)
+    if snapshot_projects is None:
+        click.echo("Error: mapping snapshot is missing")
+        return 1, frozenset()
+    if echo_item_path_overlaps(file_projects):
+        return 1, frozenset()
+    if mappings_equal(file_projects, snapshot_projects):
+        return 0, frozenset()
+    diff = classify(snapshot_projects, file_projects)
+    missing = missing_hub_item_adds(file_projects, diff)
+    if missing:
+        for path in missing:
+            click.echo(f"Error: hub file does not exist: {path}")
+        return 1, frozenset()
+    if diff.removals and not confirmed:
+        click.echo("Error: mapping removals require interactive confirmation")
+        return 1, frozenset()
+    affected = affected_unit_names(snapshot_projects, file_projects, diff)
+    apply_removals(snapshot_projects, diff.removals)
+    save_snapshot(config_path, file_projects)
+    keep = {project.managed_project_name for project in file_projects.values()}
+    drop_removed_baseline_projects(config_path, keep)
+    return 0, affected
+
+
 def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     """Apply the config file as the new snapshot inside the running daemon.
 
@@ -182,28 +248,14 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     Returns:
         0 after commit and catch-up, 1 when ingest cannot proceed.
     """
-    file_projects, snapshot_projects = _load_file_and_snapshot(config_path)
-    if snapshot_projects is None:
-        click.echo("Error: mapping snapshot is missing")
-        return 1
-    if echo_item_path_overlaps(file_projects):
-        return 1
-    if mappings_equal(file_projects, snapshot_projects):
-        return 0
-    diff = classify(snapshot_projects, file_projects)
-    missing = missing_hub_item_adds(file_projects, diff)
-    if missing:
-        for path in missing:
-            click.echo(f"Error: hub file does not exist: {path}")
-        return 1
-    if diff.removals and not confirmed:
-        click.echo("Error: mapping removals require interactive confirmation")
-        return 1
-    apply_removals(snapshot_projects, diff.removals)
-    save_snapshot(config_path, file_projects)
-    baseline = prune_removed_replicas(load_baseline(config_path), snapshot_projects, diff.removals)
-    trees = run_catch_up(file_projects, state_dir(config_path), baseline)
-    save_baseline(config_path, trees, file_projects)
+    code, affected = prepare_reload(config_path, confirmed=confirmed)
+    if code != 0 or not affected:
+        return code
+    file_projects = load_set_projects(config_path)
+    subset = {key: project for key, project in file_projects.items() if project.managed_project_name in affected}
+    if subset:
+        trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path))
+        save_baseline(config_path, trees, subset)
     return 0
 
 

@@ -332,3 +332,60 @@ def test_link_check_runs_other_units_while_one_unit_is_held(
         if thread is not None and thread.is_alive():
             thread.join(2.0)
         stop_daemon(config_path, env)
+
+
+def test_reload_of_one_project_does_not_catch_up_another_held_unit(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Reload catch-up jobs run only for worker units whose mappings changed."""
+    config_path, _alpha_target, beta_target = _two_project_workspace(tmp_path)
+    beta_hub = tmp_path / "beta"
+    extra_target = tmp_path / "lab-notes-2"
+    extra_target.mkdir()
+    hold = tmp_path / "idle-hold"
+    hold.write_text("1")
+    entered = Path(str(hold) + ".entered")
+    started = tmp_path / "catchup-started"
+    env = {
+        **isolated_home,
+        "BLF_TEST_IDLE_HOLD": str(hold),
+        "BLF_TEST_IDLE_HOLD_PROJECT": "alpha",
+        "BLF_TEST_CATCHUP_STARTED": str(started),
+    }
+    start_daemon(config_path, env)
+    try:
+        deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < deadline and not entered.exists():
+            time.sleep(_POLL_S)
+        assert entered.exists(), "alpha idle observe never entered the test hold"
+        if started.exists():
+            for mark in started.iterdir():
+                mark.unlink()
+        config_path.write_text(f"alpha: {_alpha_target}\nbeta:\n  - {beta_target}\n  - {extra_target}\n")
+        result: dict[str, Result | float] = {}
+
+        def _reload() -> None:
+            started_at = time.perf_counter()
+            result["response"] = invoke_cli(["--config", str(config_path), "daemon", "reload"], env=env)
+            result["elapsed"] = time.perf_counter() - started_at
+
+        thread = threading.Thread(target=_reload)
+        thread.start()
+        thread.join(1.0)
+        hold.unlink(missing_ok=True)
+        thread.join(2.0)
+        assert not thread.is_alive()
+        reloaded = result["response"]
+        assert isinstance(reloaded, Result)
+        assert reloaded.exit_code == 0, reloaded.output
+        elapsed = result["elapsed"]
+        assert isinstance(elapsed, float)
+        assert elapsed < _STATUS_FAST_S, f"beta-only reload blocked for {elapsed:.3f}s on alpha idle observe"
+        assert (started / "beta").is_file()
+        assert not (started / "alpha").exists()
+        assert (extra_target / "shared-b.txt").read_text() == "b"
+        assert (beta_hub / "shared-b.txt").read_text() == "b"
+    finally:
+        hold.unlink(missing_ok=True)
+        stop_daemon(config_path, env)

@@ -8,8 +8,10 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 from types import FrameType
 from typing import TextIO
@@ -21,6 +23,7 @@ from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
 from .handlers import collect_check_results, handle_request, render_check_results
+from .ingest import prepare_reload
 from .ipc import ProgressCallback, Request, Response, ServeLoop, WorkerState, format_status_line, serve_requests
 from .log import bind_worker_stream
 from .process import state_dir, write_ready
@@ -95,12 +98,66 @@ def _handle_live_request(
     on_progress: ProgressCallback | None,
     runtime: _LiveRuntime,
 ) -> Response:
+    if request.get("op") == "reload" and runtime.units:
+        return _reload_changed_units(request_config, request, runtime)
     if request.get("op") == "check" and runtime.units:
         return _fanout_check(request_config, request, on_progress, runtime)
     unit = route_worker_unit(request, runtime.units, request_config)
     if unit is None:
         return handle_request(request_config, request, on_progress=on_progress)
     return unit.submit(lambda: _run_unit_request(request_config, request, on_progress, unit))
+
+
+def _reload_changed_units(request_config: Path, request: Request, runtime: _LiveRuntime) -> Response:
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        code, affected = prepare_reload(request_config, confirmed=bool(request.get("confirmed")))
+    if code != 0 or not affected:
+        return {"exit_code": code, "stdout": buffer.getvalue()}
+    snapshot = load_snapshot(request_config) or {}
+    present = {project.managed_project_name: project for project in snapshot.values()}
+    for name in list(runtime.units):
+        if name not in present:
+            runtime.units[name].stop()
+            del runtime.units[name]
+    waits = []
+    for name in sorted(affected):
+        project = present.get(name)
+        if project is None:
+            continue
+        if name in runtime.units:
+            unit = runtime.units[name]
+            waits.append(unit.submit_async(lambda current=unit: _catch_up_unit(request_config, current)))
+            continue
+        subset = {key: item for key, item in snapshot.items() if item.managed_project_name == name}
+        _catch_up_new_unit(request_config, subset, runtime)
+    for wait in waits:
+        wait()
+    return {"exit_code": 0, "stdout": buffer.getvalue()}
+
+
+def _catch_up_unit(config_path: Path, unit: WorkerUnit) -> None:
+    projects = load_set_projects(config_path)
+    subset = {key: project for key, project in projects.items() if project.managed_project_name == unit.name}
+    if not subset:
+        return
+    trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path))
+    save_baseline(config_path, trees, subset)
+    project = next(iter(subset.values()))
+    unit.live.reload(subset, trees_for_project(project, trees))
+
+
+def _catch_up_new_unit(
+    config_path: Path,
+    subset: dict[str, ConfigProject],
+    runtime: _LiveRuntime,
+) -> None:
+    trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path))
+    save_baseline(config_path, trees, subset)
+    built = build_worker_units(subset, trees, config_path, runtime.shutdown)
+    for unit in built.values():
+        runtime.units[unit.name] = unit
+        unit.start()
 
 
 def _fanout_check(

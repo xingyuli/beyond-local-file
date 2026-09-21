@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,25 @@ def baseline_dir(config_path: Path) -> Path:
         Path to ``baseline/``.
     """
     return state_dir(config_path) / BASELINE_DIR_NAME
+
+
+def drop_removed_baseline_projects(config_path: Path, keep: set[str]) -> None:
+    """Delete item-document trees for managed projects no longer in the set.
+
+    Args:
+        config_path: Path to the loaded mapping file.
+        keep: Managed project names that still have mappings.
+    """
+    root = baseline_dir(config_path)
+    if not root.is_dir():
+        return
+    for child in root.iterdir():
+        if child.name in keep:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink(missing_ok=True)
 
 
 def snapshot_from_projects(projects: dict[str, ConfigProject]) -> SnapshotData:

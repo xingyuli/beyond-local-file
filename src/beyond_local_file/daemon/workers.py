@@ -49,6 +49,10 @@ class WorkerUnit:
         """Start the unit thread."""
         self._thread.start()
 
+    def stop(self) -> None:
+        """Ask the unit thread to exit after its current job."""
+        self._jobs.put(None)
+
     def submit(self, fn: Callable[[], T]) -> T:
         """Run *fn* on this unit's thread and return its result.
 

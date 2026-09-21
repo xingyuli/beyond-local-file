@@ -53,6 +53,7 @@ def run_catch_up(
     Returns:
         Newly recorded per-path baseline trees.
     """
+    _mark_catchup_started(projects)
     if baseline is None:
         print("catch-up: fresh", flush=True)
         _fresh_catch_up(projects, config_dir, on_progress)
@@ -328,6 +329,16 @@ def scan_items(
     for name in item_names:
         _scan_path(root, root / name, scanned, stats)
     return scanned
+
+
+def _mark_catchup_started(projects: dict[str, ConfigProject]) -> None:
+    raw = os.environ.get("BLF_TEST_CATCHUP_STARTED")
+    if not raw:
+        return
+    root = Path(raw)
+    root.mkdir(parents=True, exist_ok=True)
+    for project in projects.values():
+        (root / project.managed_project_name).write_text("1", encoding="utf-8")
 
 
 def scan_path_state(root: Path, rel: str) -> PathState:

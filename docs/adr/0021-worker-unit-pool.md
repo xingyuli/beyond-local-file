@@ -18,6 +18,7 @@ A ConfigProject with several mappings/targets is not several threads. The thread
 - Idle observe is a job on that unit, 15s from the end of that unit's last idle observe, with units staggered.
 - Create, restore, and remove enqueue on the unit that owns the PATH (mapping snapshot / contribution source / `project_name`).
 - `link check` with no project name enqueues on every worker unit and merges the table; with a project name, that one unit. Progress is `Checking i/n … item`, filled as mapping units finish.
+- `daemon reload` catch-up jobs run only for worker units whose mappings changed (start new units, stop removed ones).
 - Mutating shells apply the mailbox (no scan), then the op. They do not start an observe.
 - `status` never joins a worker-unit queue.
 
@@ -25,4 +26,4 @@ A ConfigProject with several mappings/targets is not several threads. The thread
 
 A hash or create on one managed project does not block `status` or a shell for a different managed project. A mutating shell for a busy unit waits on **that** queue only.
 
-Reload of only changed units, per-file mapping/exclude locks, mutating TTY `Waiting`, and renaming `ProcessingUnit` in code follow on the same decision.
+Per-file mapping/exclude locks, mutating TTY `Waiting`, and renaming `ProcessingUnit` in code follow on the same decision.
