@@ -20,10 +20,11 @@ A ConfigProject with several mappings/targets is not several threads. The thread
 - `link check` with no project name enqueues on every worker unit and merges the table; with a project name, that one unit. Progress is `Checking i/n … item`, filled as mapping units finish.
 - `daemon reload` catch-up jobs run only for worker units whose mappings changed (start new units, stop removed ones).
 - Mutating shells apply the mailbox (no scan), then the op. They do not start an observe.
+- Splices of a mapping yaml or `.git/info/exclude` take a process-wide lock per file so two worker units cannot lose each other's writes.
 - `status` never joins a worker-unit queue.
 
 ## Consequences
 
 A hash or create on one managed project does not block `status` or a shell for a different managed project. A mutating shell for a busy unit waits on **that** queue only.
 
-Per-file mapping/exclude locks, mutating TTY `Waiting`, and renaming `ProcessingUnit` in code follow on the same decision.
+Mutating TTY `Waiting` and renaming `ProcessingUnit` in code follow on the same decision.

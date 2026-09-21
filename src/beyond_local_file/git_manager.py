@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from .file_locks import locked_path
+
 
 class GitExcludeManager:
     """Manages the .git/info/exclude file for symlink entries.
@@ -64,6 +66,10 @@ class GitExcludeManager:
         Returns:
             Tuple of (number of newly added entries, set of already existing entries).
         """
+        with locked_path(self.exclude_file):
+            return self._write_entries_unlocked(entries)
+
+    def _write_entries_unlocked(self, entries: set[str]) -> tuple[int, set[str]]:
         self.exclude_file.parent.mkdir(parents=True, exist_ok=True)
 
         existing_entries = self.read_entries()
@@ -89,6 +95,10 @@ class GitExcludeManager:
         Returns:
             Set of entries that were actually removed.
         """
+        with locked_path(self.exclude_file):
+            return self._remove_entries_unlocked(entries)
+
+    def _remove_entries_unlocked(self, entries: set[str]) -> set[str]:
         if not self.exclude_file.exists():
             return set()
 

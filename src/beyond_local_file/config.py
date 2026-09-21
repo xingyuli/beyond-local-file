@@ -1,5 +1,9 @@
 """Configuration management for the link CLI tool."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -8,7 +12,17 @@ import yaml
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from .file_locks import locked_path
 from .model.config import ConfigProject, Mapping
+
+
+def _locked_config(func: Callable[..., object]) -> Callable[..., object]:
+    @wraps(func)
+    def wrapper(self: ConfigUpdater, *args: object, **kwargs: object) -> object:
+        with locked_path(self._config_path):
+            return func(self, *args, **kwargs)
+
+    return wrapper
 
 _KEY_TARGET = "target"
 _KEY_SUBPATH = "subpath"
@@ -328,6 +342,7 @@ class ConfigUpdater:
         # Prevent ruamel.yaml from line-wrapping long path values (default is 80).
         self._yaml.width = 4096
 
+    @_locked_config
     def add_subpath_entry(
         self,
         project_name: str,
@@ -476,6 +491,7 @@ class ConfigUpdater:
         # lc.data[i] is (line, col, ...) — 0-based line in the source file.
         return subpath_list.lc.data[last_idx][0]
 
+    @_locked_config
     def remove_subpath_entry(
         self,
         project_name: str,
@@ -683,6 +699,7 @@ class ConfigUpdater:
 
         return delete_start, delete_end, becomes_empty, key_indent, key_line_0based
 
+    @_locked_config
     def remove_subpath_entries(
         self,
         project_name: str,
