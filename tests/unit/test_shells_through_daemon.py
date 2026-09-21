@@ -45,8 +45,8 @@ def _snapshot_path(config_path: Path) -> Path:
     return _state_dir(config_path) / "mapping-snapshot.yml"
 
 
-def _baseline_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "baseline.yml"
+def _baseline_dir(config_path: Path) -> Path:
+    return _state_dir(config_path) / "baseline"
 
 
 def _read_pid(config_path: Path) -> int | None:
@@ -340,7 +340,8 @@ def test_create_restore_remove_change_state_through_the_daemon(
     assert config_path.read_text().count("- item.txt") == config_path.read_text().count("target:")
     snapshot = _snapshot_path(config_path).read_text()
     assert "item.txt" in snapshot
-    assert _baseline_path(config_path).is_file()
+    assert _baseline_dir(config_path).is_dir()
+    assert any(_baseline_dir(config_path).rglob("*"))
 
     restored = _invoke(["--config", str(config_path), "revlink", "restore", "item.txt"], env=daemon_env)
 

@@ -203,7 +203,7 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     save_snapshot(config_path, file_projects)
     baseline = prune_removed_replicas(load_baseline(config_path), snapshot_projects, diff.removals)
     trees = run_catch_up(file_projects, state_dir(config_path), baseline)
-    save_baseline(config_path, trees)
+    save_baseline(config_path, trees, file_projects)
     return 0
 
 
@@ -295,7 +295,7 @@ def _persist_pruned_baseline(
 ) -> None:
     pruned = prune_removed_replicas(load_baseline(config_path), old, removals)
     if pruned is not None:
-        save_baseline(config_path, pruned)
+        save_baseline(config_path, pruned, old)
 
 
 def _load_file_and_snapshot(

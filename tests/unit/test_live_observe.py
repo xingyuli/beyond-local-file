@@ -97,7 +97,8 @@ def test_running_daemon_fans_out_target_edit_without_writing_source(
 ) -> None:
     """While the daemon is running, a target edit reaches the hub and the other replica."""
     config_path, managed, target_a, target_b = daemon_workspace
-    with daemon_running(config_path, isolated_home):
+    env = {**isolated_home, "BLF_IDLE_OBSERVE_S": "0.2"}
+    with daemon_running(config_path, env):
         source = target_a / "shared.txt"
         _wait_until(lambda: source.is_file() and source.read_text() == "v0")
         source.write_text("from-a")

@@ -201,12 +201,12 @@ def test_create_writes_request_steps_and_set_wide_work_to_daemon_log(
         for step in ("validate", "copy", "checksum", "git-exclude", "config", "fan-out"):
             step_line = next(line for line in messages if line.startswith(f"create: {step} "))
             assert _DURATION.search(step_line)
-        assert any(line.startswith("live: tick reason=before-request ") for line in messages)
+        assert not any(line.startswith("live: tick reason=before-request ") for line in messages)
         assert any(line.startswith("baseline: record ") and "paths=" in line for line in messages)
         assert any(line.startswith("baseline: write ") and "bytes=" in line for line in messages)
         assert any(line.startswith("snapshot: write ") and "bytes=" in line for line in messages)
         assert any(line.startswith("persist: done ") for line in messages)
-        assert any(line.startswith("live: scan reason=reload ") for line in messages)
+        assert not any(line.startswith("live: scan reason=reload ") for line in messages)
     finally:
         stop_daemon(config_path, isolated_home)
 
@@ -216,7 +216,7 @@ def test_failed_create_still_logs_request_start_and_done(
     isolated_home: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing PATH still records request start, the pre-request tick, and exit=1."""
+    """A missing PATH still records request start and exit=1."""
     managed = tmp_path / "managed"
     target = tmp_path / "target"
     managed.mkdir()
@@ -239,7 +239,7 @@ def test_failed_create_still_logs_request_start_and_done(
         assert "op=create" in start_line
         assert "path=missing.txt" in start_line
         assert "exit=1" in done_line
-        assert any(line.startswith("live: tick reason=before-request ") for line in messages)
+        assert not any(line.startswith("live: tick reason=before-request ") for line in messages)
         assert not any(line.startswith("persist: done ") for line in messages)
     finally:
         stop_daemon(config_path, isolated_home)

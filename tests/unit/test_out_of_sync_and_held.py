@@ -316,7 +316,8 @@ def test_reload_warns_and_acks_without_blocking(
 ) -> None:
     """reload prints isolation WARNINGs, requires ack, and does not stop the daemon."""
     config_path, managed, target_a, target_b = daemon_workspace
-    start_daemon(config_path, isolated_home)
+    env = {**isolated_home, "BLF_IDLE_OBSERVE_S": "0.2"}
+    start_daemon(config_path, env)
     _wait_until(lambda: (target_a / "shared.txt").is_file() and (target_a / "shared.txt").read_text() == "v0")
     (target_a / "shared.txt").write_text("from-a")
     (target_b / "shared.txt").write_text("from-b")

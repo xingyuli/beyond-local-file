@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
@@ -26,10 +27,23 @@ from .process import state_dir, write_ready
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 
 _TEST_HOLD_ENV = "BLF_TEST_CATCHUP_HOLD"
+_TEST_IDLE_HOLD_ENV = "BLF_TEST_IDLE_HOLD"
 _HOLD_POLL_S = 0.05
 _HOLD_TIMEOUT_S = 60.0
+IDLE_OBSERVE_S = 15.0
 
 type ProgressFn = Callable[[int, int, str], None]
+
+
+@dataclass
+class _LiveRuntime:
+    config_path: Path
+    shutdown: threading.Event
+    bound: threading.Event
+    state: WorkerState
+    live_holder: dict[str, LiveSync]
+    live_lock: threading.Lock
+    failed: threading.Event
 
 
 def run_worker(config_path: Path) -> int:
@@ -42,83 +56,103 @@ def run_worker(config_path: Path) -> int:
         Process exit code.
     """
     _stamp_worker_streams()
-    shutdown = threading.Event()
-    bound = threading.Event()
-    state = WorkerState()
-    live_holder: dict[str, LiveSync] = {}
-    failed = threading.Event()
+    runtime = _LiveRuntime(
+        config_path=config_path,
+        shutdown=threading.Event(),
+        bound=threading.Event(),
+        state=WorkerState(),
+        live_holder={},
+        live_lock=threading.Lock(),
+        failed=threading.Event(),
+    )
 
     def _handle(signum: int, frame: FrameType | None) -> None:
         del signum, frame
-        shutdown.set()
+        runtime.shutdown.set()
 
     signal.signal(signal.SIGTERM, _handle)
     signal.signal(signal.SIGINT, _handle)
 
     print("daemon worker starting", flush=True)
 
-    def _tick(reason: str = "idle") -> None:
-        if not state.ready.is_set():
-            return
-        live = live_holder.get("live")
-        if live is None:
-            return
-        if live.tick(reason=reason):
-            save_baseline(config_path, live.baseline)
-
-    def _handle_request(
+    def _on_request(
         request_config: Path,
         request: Request,
         on_progress: ProgressCallback | None = None,
     ) -> Response:
-        response = handle_request(request_config, request, on_progress=on_progress)
-        live = live_holder.get("live")
-        mutating = request.get("op") in {"create", "restore", "remove", "reload"} and not request.get("dry_run")
-        if live is not None and mutating and response.get("exit_code") == 0:
-            snapshot = load_snapshot(request_config)
-            baseline = load_baseline(request_config)
-            if snapshot is not None and baseline is not None:
-                live.reload(snapshot, baseline)
-        return response
+        return _handle_live_request(request_config, request, on_progress, runtime)
 
-    def _catch_up() -> None:
-        if not bound.wait(timeout=10.0):
-            failed.set()
-            shutdown.set()
-            return
-        try:
-            caught = _catch_up_and_persist(config_path, on_progress=state.set_progress)
-        except Exception as error:
-            print(f"catch-up: failed: {error}", flush=True)
-            failed.set()
-            shutdown.set()
-            return
-        if caught is None:
-            failed.set()
-            shutdown.set()
-            return
-        if shutdown.is_set():
-            return
-        projects, trees = caught
-        live_holder["live"] = LiveSync(projects, trees)
-        write_ready(config_path)
-        print("daemon ready", flush=True)
-        state.set_ready()
-
-    threading.Thread(target=_catch_up, name="blf-catch-up", daemon=True).start()
+    threading.Thread(target=_catch_up_worker, args=(runtime,), name="blf-catch-up", daemon=True).start()
+    threading.Thread(target=_run_idle_loop, args=(runtime,), name="blf-idle", daemon=True).start()
     serve_requests(
         config_path,
-        _handle_request,
-        ServeLoop(
-            shutdown=shutdown,
-            bound=bound,
-            state=state,
-            on_idle=lambda: _tick("idle"),
-            before_request=lambda: _tick("before-request"),
-        ),
+        _on_request,
+        ServeLoop(shutdown=runtime.shutdown, bound=runtime.bound, state=runtime.state),
     )
     print("daemon stopping", flush=True)
-    return 1 if failed.is_set() else 0
+    return 1 if runtime.failed.is_set() else 0
+
+
+def _tick_live(reason: str, runtime: _LiveRuntime) -> None:
+    if not runtime.state.ready.is_set():
+        return
+    live = runtime.live_holder.get("live")
+    if live is None:
+        return
+    with runtime.live_lock:
+        if reason == "idle":
+            _await_idle_hold()
+        if live.tick(reason=reason):
+            save_baseline(runtime.config_path, live.baseline, live.projects)
+
+
+def _handle_live_request(
+    request_config: Path,
+    request: Request,
+    on_progress: ProgressCallback | None,
+    runtime: _LiveRuntime,
+) -> Response:
+    live = runtime.live_holder.get("live")
+    op = request.get("op")
+    if live is not None and op in {"create", "restore", "remove", "reload"}:
+        with runtime.live_lock:
+            applied = live.apply()
+            if applied:
+                save_baseline(request_config, live.baseline, live.projects, changed_rels=applied)
+    response = handle_request(request_config, request, on_progress=on_progress)
+    mutating = op in {"create", "restore", "remove", "reload"} and not request.get("dry_run")
+    if live is not None and mutating and response.get("exit_code") == 0:
+        snapshot = load_snapshot(request_config)
+        baseline = load_baseline(request_config)
+        if snapshot is not None and baseline is not None:
+            with runtime.live_lock:
+                live.reload(snapshot, baseline)
+    return response
+
+
+def _catch_up_worker(runtime: _LiveRuntime) -> None:
+    if not runtime.bound.wait(timeout=10.0):
+        runtime.failed.set()
+        runtime.shutdown.set()
+        return
+    try:
+        caught = _catch_up_and_persist(runtime.config_path, on_progress=runtime.state.set_progress)
+    except Exception as error:
+        print(f"catch-up: failed: {error}", flush=True)
+        runtime.failed.set()
+        runtime.shutdown.set()
+        return
+    if caught is None:
+        runtime.failed.set()
+        runtime.shutdown.set()
+        return
+    if runtime.shutdown.is_set():
+        return
+    projects, trees = caught
+    runtime.live_holder["live"] = LiveSync(projects, trees)
+    write_ready(runtime.config_path)
+    print("daemon ready", flush=True)
+    runtime.state.set_ready()
 
 
 def _catch_up_and_persist(
@@ -158,8 +192,8 @@ def _catch_up_and_persist(
         load_baseline(config_path),
         on_progress=on_progress,
     )
-    save_baseline(config_path, trees)
     save_snapshot(config_path, projects)
+    save_baseline(config_path, trees, projects)
     _await_test_hold()
     return projects, trees
 
@@ -169,6 +203,36 @@ def _await_test_hold() -> None:
     if not raw:
         return
     path = Path(raw)
+    deadline = time.monotonic() + _HOLD_TIMEOUT_S
+    while path.exists() and time.monotonic() < deadline:
+        time.sleep(_HOLD_POLL_S)
+
+
+def _run_idle_loop(runtime: _LiveRuntime) -> None:
+    if not runtime.state.ready.wait(timeout=_HOLD_TIMEOUT_S):
+        return
+    while not runtime.shutdown.is_set():
+        _tick_live("idle", runtime)
+        if runtime.shutdown.wait(timeout=_idle_observe_s()):
+            return
+
+
+def _idle_observe_s() -> float:
+    raw = os.environ.get("BLF_IDLE_OBSERVE_S")
+    if not raw:
+        return IDLE_OBSERVE_S
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return IDLE_OBSERVE_S
+
+
+def _await_idle_hold() -> None:
+    raw = os.environ.get(_TEST_IDLE_HOLD_ENV)
+    if not raw:
+        return
+    path = Path(raw)
+    Path(str(path) + ".entered").write_text("1", encoding="utf-8")
     deadline = time.monotonic() + _HOLD_TIMEOUT_S
     while path.exists() and time.monotonic() < deadline:
         time.sleep(_HOLD_POLL_S)

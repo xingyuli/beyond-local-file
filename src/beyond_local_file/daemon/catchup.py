@@ -89,6 +89,74 @@ def record_baseline(
     return trees
 
 
+def record_item_baseline(
+    projects: dict[str, ConfigProject],
+    previous: BaselineTrees | None,
+    item_name: str,
+) -> BaselineTrees:
+    """Rescan one item on each hub and target that declares it.
+
+    Args:
+        projects: Committed mappings whose trees should be updated.
+        previous: Baseline whose other paths and generations should be kept.
+        item_name: Declared item name relative to the managed project.
+
+    Returns:
+        Baseline trees with *item_name* replaced from disk.
+    """
+    trees: BaselineTrees = {root: dict(paths) for root, paths in (previous or {}).items()}
+    stats = ScanStats()
+    with log_duration("baseline: record") as fields:
+        seen_hubs: set[str] = set()
+        seen_targets: set[str] = set()
+        for unit in translate_config_to_processing(projects):
+            if not any(item.name == item_name for item in unit.items):
+                continue
+            hub_key = str(unit.managed_project_path)
+            if hub_key not in seen_hubs:
+                _replace_item_tree(
+                    trees,
+                    unit.managed_project_path,
+                    item_name,
+                    scan_items(unit.managed_project_path, [item_name], stats),
+                )
+                seen_hubs.add(hub_key)
+            target_key = str(unit.target_project_path)
+            if target_key not in seen_targets:
+                _replace_item_tree(
+                    trees,
+                    unit.target_project_path,
+                    item_name,
+                    scan_items(unit.target_project_path, [item_name], stats),
+                )
+                seen_targets.add(target_key)
+        if not seen_hubs:
+            for slot in trees.values():
+                _drop_item_paths(slot, item_name)
+        _preserve_generations(trees, previous)
+        fields["paths"] = stats.paths
+        fields["files"] = stats.files
+        fields["hashed_bytes"] = stats.hashed_bytes
+    return trees
+
+
+def _replace_item_tree(
+    trees: BaselineTrees,
+    root: Path,
+    item_name: str,
+    scanned: dict[str, PathState],
+) -> None:
+    slot = trees.setdefault(str(root), {})
+    for rel in [path for path in slot if path == item_name or path.startswith(f"{item_name}/")]:
+        del slot[rel]
+    slot.update(scanned)
+
+
+def _drop_item_paths(slot: dict[str, PathState], item_name: str) -> None:
+    for rel in [path for path in slot if path == item_name or path.startswith(f"{item_name}/")]:
+        del slot[rel]
+
+
 def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) -> None:
     previous = previous or {}
     for root, paths in trees.items():

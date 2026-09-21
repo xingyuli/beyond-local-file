@@ -45,7 +45,7 @@ _Avoid_: global config, .blfrc
 _Avoid_: hub-local .blf, state beside config.yml
 
 **Set run directory**:
-``~/.blf/run/global/`` for the global set; ``~/.blf/run/file-<sha256 of the resolved mapping yaml>/`` for a singleton set. Pid, port, log, mapping snapshot, and baseline live here.
+``~/.blf/run/global/`` for the global set; ``~/.blf/run/file-<sha256 of the resolved mapping yaml>/`` for a singleton set. Pid, port, log, mapping snapshot, and item-document baseline live here.
 _Avoid_: .blf next to config.yml
 
 **Daemon**:
@@ -65,7 +65,7 @@ The daemon's last committed mappings for its configuration set, persisted in the
 _Avoid_: Cache, checkpoint, in-memory config
 
 **Baseline**:
-The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. No baseline means that managed project has never completed a catch-up.
+The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. Persisted as item documents under ``baseline/<managed-project>/`` in the set run directory: ``files`` holds FILE items (hub and each target in the same document); a DIRECTORY item is nested ``files`` plus one document per child subtree. A mutating shell rewrites only documents covering paths it changed. No baseline means that managed project has never completed a catch-up. A leftover ``baseline.yml`` is read until item documents exist.
 _Avoid_: Checkpoint, watermark, sync-state
 
 **Fresh catch-up**:
@@ -152,4 +152,6 @@ A yaml file already loaded by a running set is served by that process (``-c`` is
 
 ``link check`` hashes managed vs target now. Progress is one rewritten TTY status line (unit ``i/n``, current item name, no per-file paths). The table is printed once at the end. Non-TTY: no status line, final table only.
 
-The set's ``daemon.log`` records each served shell request (op, PATH, cwd, start, end, exit), mutating-op steps with durations, and set-wide work (live tick / item scan, baseline record, snapshot and baseline write) with duration and size context. Request stdout captured for the CLI is not a substitute. See 0015 and 0020.
+The set's ``daemon.log`` records each served shell request (op, PATH, cwd, start, end, exit), mutating-op steps with durations, and observe/persist work (live tick / item scan, baseline record, snapshot and item-document write) with duration and size context. Request stdout captured for the CLI is not a substitute. See 0015 and 0020.
+
+The accept thread binds the port and answers ``status``. It does not hash. Idle observe runs on a background thread, 15 s from the end of the last idle observe. A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. After persist, live observation continues from the new baseline without a reload scan.

@@ -158,7 +158,9 @@ def test_global_config_is_the_pointer_list(
     assert (run_dir / "daemon.ready").is_file()
     assert (run_dir / "daemon.log").is_file()
     assert (run_dir / "mapping-snapshot.yml").is_file()
-    assert (run_dir / "baseline.yml").is_file()
+    assert (run_dir / "baseline").is_dir()
+    assert any((run_dir / "baseline").rglob("*"))
+    assert not (run_dir / "baseline.yml").exists()
     assert (alpha_target / "from-alpha.txt").read_text() == "q"
     assert (viclau_target / "from-viclau.txt").read_text() == "v"
 

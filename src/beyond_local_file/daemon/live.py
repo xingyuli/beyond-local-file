@@ -70,6 +70,7 @@ class LiveSync:
             projects: Committed mappings to watch.
             baseline: Last applied hashes, presence, and generations.
         """
+        self._projects = projects
         self._baseline = baseline
         self._mailbox: dict[tuple[str, str], PathChange] = {}
         self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
@@ -82,6 +83,11 @@ class LiveSync:
         return self._baseline
 
     @property
+    def projects(self) -> dict[str, ConfigProject]:
+        """Return the committed mappings this observer is watching."""
+        return self._projects
+
+    @property
     def out_of_sync(self) -> tuple[tuple[Path, str], ...]:
         """Return replica/path pairs isolated after a lost update CAS."""
         return tuple((Path(root), rel) for root, rel in sorted(self._oos))
@@ -90,8 +96,8 @@ class LiveSync:
         """Observe current trees into the mailbox, then apply pending changes.
 
         Args:
-            reason: Why this tick ran (``idle`` or ``before-request``). Idle ticks
-                faster than 100ms with no apply are not logged.
+            reason: Why this tick ran (``idle`` or another caller-supplied label).
+                Idle ticks faster than 100ms with no apply are not logged.
 
         Returns:
             True if any mailbox entry was applied or attempted, or isolation
@@ -151,12 +157,20 @@ class LiveSync:
                 )
             self._last_seen[str(watch.root)] = scanned
 
-    def apply(self) -> None:
-        """Apply pending mailbox entries one at a time, first-apply-wins per path."""
+    def apply(self) -> tuple[str, ...]:
+        """Apply pending mailbox entries one at a time, first-apply-wins per path.
+
+        Returns:
+            Relative paths that were applied, in apply order (duplicates kept
+            when several replicas queued the same path).
+        """
+        applied: list[str] = []
         while self._mailbox:
             key = min(self._mailbox, key=lambda item: _apply_sort_key(self._mailbox[item]))
             change = self._mailbox.pop(key)
             self._apply_one(change)
+            applied.append(change.rel)
+        return tuple(applied)
 
     def reload(self, projects: dict[str, ConfigProject], baseline: BaselineTrees) -> None:
         """Replace mappings and treat current disks as already seen.
@@ -165,10 +179,11 @@ class LiveSync:
             projects: Newly committed mappings.
             baseline: Baseline recorded after the mapping mutation.
         """
+        self._projects = projects
         self._baseline = baseline
         self._oos = _oos_from_baseline(baseline)
         self._watch_roots = _build_watch_roots(projects)
-        self._last_seen = self._scan_all(reason="reload")
+        self._last_seen = _last_seen_from_baseline(baseline)
         self._mailbox.clear()
 
     def _scan_all(self, reason: str) -> BaselineTrees:
@@ -380,6 +395,17 @@ def _delete_allowed(change: PathChange, hub: PathState, hub_gen: int) -> bool:
     if state_equal(hub, path_state(change.base_present, change.base_hash)):
         return True
     return hub_gen - change.base_gen <= DELETE_WINDOW
+
+
+def _last_seen_from_baseline(baseline: BaselineTrees) -> BaselineTrees:
+    seen: BaselineTrees = {}
+    for root, paths in baseline.items():
+        slot: dict[str, PathState] = {}
+        for rel, state in paths.items():
+            if state.get("present"):
+                slot[rel] = path_state(True, state.get("hash"))
+        seen[root] = slot
+    return seen
 
 
 def _oos_from_baseline(baseline: BaselineTrees) -> set[tuple[str, str]]:

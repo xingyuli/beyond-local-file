@@ -7,7 +7,7 @@ Layout:
 ```
 ~/.blf/
   config
-  run/global/{pid,port,ready,log,mapping-snapshot.yml,baseline.yml}
+  run/global/{pid,port,ready,log,mapping-snapshot.yml,baseline/<managed-project>/...}
   run/file-<sha256 of resolved mapping yaml>/{...}
   held/<sha256 of managed project path>/
 ```

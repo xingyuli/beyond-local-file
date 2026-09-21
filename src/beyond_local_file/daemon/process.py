@@ -68,7 +68,7 @@ def state_dir(config_path: Path) -> Path:
         config_path: Set identity path (global config or a mapping yaml).
 
     Returns:
-        Directory that holds pid, log, port, snapshot, and baseline files.
+        Directory that holds pid, log, port, snapshot, and item-document baseline.
     """
     return runtime_home() / "run" / set_id_for(config_path)
 

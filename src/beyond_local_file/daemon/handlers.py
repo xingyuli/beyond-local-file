@@ -28,7 +28,7 @@ from beyond_local_file.project_processor import (
     resolve_revlink_context,
 )
 
-from .catchup import record_baseline
+from .catchup import record_baseline, record_item_baseline
 from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
 from .log import log_duration
@@ -70,7 +70,11 @@ def handle_request(
         exit_code = handler(config_path, request)
         if exit_code == 0 and op in {"create", "restore", "remove"} and not request.get("dry_run"):
             try:
-                _persist_committed_state(config_path)
+                changed_rel = request.get("path")
+                _persist_committed_state(
+                    config_path,
+                    changed_rel=str(changed_rel) if changed_rel else None,
+                )
             except Exception as error:
                 click.echo(f"Warning: could not persist mapping snapshot: {error}")
     return {"exit_code": exit_code, "stdout": buffer.getvalue()}
@@ -223,8 +227,14 @@ def _resolve_context(
     return result
 
 
-def _persist_committed_state(config_path: Path) -> None:
+def _persist_committed_state(config_path: Path, changed_rel: str | None = None) -> None:
     with log_duration("persist: done"):
         projects = load_set_projects(config_path)
         save_snapshot(config_path, projects)
-        save_baseline(config_path, record_baseline(projects, load_baseline(config_path)))
+        previous = load_baseline(config_path)
+        if changed_rel:
+            trees = record_item_baseline(projects, previous, changed_rel)
+            save_baseline(config_path, trees, projects, changed_rels=[changed_rel])
+            return
+        trees = record_baseline(projects, previous)
+        save_baseline(config_path, trees, projects)

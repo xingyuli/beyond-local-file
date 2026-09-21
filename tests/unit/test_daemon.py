@@ -91,8 +91,8 @@ def _snapshot_path(config_path: Path) -> Path:
     return _state_dir(config_path) / "mapping-snapshot.yml"
 
 
-def _baseline_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "baseline.yml"
+def _baseline_dir(config_path: Path) -> Path:
+    return _state_dir(config_path) / "baseline"
 
 
 def _wait_until(predicate, *, timeout: float = _READY_WAIT_S) -> None:
@@ -363,7 +363,8 @@ def test_fresh_catch_up_copies_hub_trees_and_records_baseline(
     assert (target / "nested" / "keep.txt").read_text() == "keep"
     assert (target / "nested" / "change.txt").read_text() == "original"
     assert (managed / "shared.txt").read_text() == "hub-0"
-    assert _baseline_path(config_path).is_file()
+    assert _baseline_dir(config_path).is_dir()
+    assert any(_baseline_dir(config_path).rglob("*"))
 
 
 def test_fresh_catch_up_preserves_nested_symlinks_in_directory_item(
@@ -616,7 +617,9 @@ def test_daemon_start_writes_state_under_runtime_home_file_hash(
     assert (run_dir / "daemon.ready").is_file()
     assert (run_dir / "daemon.log").is_file()
     assert (run_dir / "mapping-snapshot.yml").is_file()
-    assert (run_dir / "baseline.yml").is_file()
+    assert (run_dir / "baseline").is_dir()
+    assert any((run_dir / "baseline").rglob("*"))
+    assert not (run_dir / "baseline.yml").exists()
     assert not hub_local.exists()
     assert not (Path(daemon_env["BLF_HOME"]) / ".blf" / "run" / "global").exists()
 
