@@ -25,6 +25,4 @@ A ConfigProject with several mappings/targets is not several threads. The thread
 
 ## Consequences
 
-A hash or create on one managed project does not block `status` or a shell for a different managed project. A mutating shell for a busy unit waits on **that** queue only.
-
-Renaming `ProcessingUnit` in code follows on the same decision.
+A hash or create on one managed project does not block `status` or a shell for a different managed project. A mutating shell for a busy unit waits on **that** queue only. The expanded managed×target row is a `MappingUnit` in code, not a thread.

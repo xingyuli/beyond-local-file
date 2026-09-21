@@ -11,7 +11,7 @@ import yaml
 
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.model.translator import translate_config_to_processing
+from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 from .log import log_duration
 from .process import state_dir
@@ -398,7 +398,7 @@ def _item_documents(
     trees: BaselineTrees,
 ) -> list[tuple[str, BaselineTrees]]:
     items_by_project: dict[str, dict[str, ManagedProjectItem]] = {}
-    for unit in translate_config_to_processing(projects):
+    for unit in translate_config_to_mapping_units(projects):
         slot = items_by_project.setdefault(unit.managed_project_name, {})
         for item in unit.items:
             slot[item.name] = item

@@ -12,7 +12,7 @@ import click
 
 from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.translator import translate_config_to_processing
+from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 
 @dataclass(frozen=True)
@@ -145,7 +145,7 @@ def find_item_path_overlaps(projects: dict[str, ConfigProject]) -> list[ItemOver
         One overlap per colliding pair, sorted by target then item names.
     """
     grouped: dict[Path, list[tuple[str, str]]] = {}
-    for unit in translate_config_to_processing(projects):
+    for unit in translate_config_to_mapping_units(projects):
         target = unit.target_project_path.resolve()
         slot = grouped.setdefault(target, [])
         for item in unit.items:

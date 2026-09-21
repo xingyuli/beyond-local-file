@@ -11,8 +11,8 @@ from pathlib import Path
 from beyond_local_file.copy_manager import CopyManager, copy_projection
 from beyond_local_file.held import HELD_DIR
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.processing import ProcessingUnit
-from beyond_local_file.model.translator import translate_config_to_processing
+from beyond_local_file.model.processing import MappingUnit
+from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.sync_state import compute_file_hash
 
 from .log import log_duration
@@ -79,7 +79,7 @@ def record_baseline(
     trees: BaselineTrees = {}
     stats = ScanStats()
     with log_duration("baseline: record") as fields:
-        for unit in translate_config_to_processing(projects):
+        for unit in translate_config_to_mapping_units(projects):
             item_names = [item.name for item in unit.items]
             _merge_tree(trees, unit.managed_project_path, scan_items(unit.managed_project_path, item_names, stats))
             _merge_tree(trees, unit.target_project_path, scan_items(unit.target_project_path, item_names, stats))
@@ -110,7 +110,7 @@ def record_item_baseline(
     with log_duration("baseline: record") as fields:
         seen_hubs: set[str] = set()
         seen_targets: set[str] = set()
-        for unit in translate_config_to_processing(projects):
+        for unit in translate_config_to_mapping_units(projects):
             if not any(item.name == item_name for item in unit.items):
                 continue
             hub_key = str(unit.managed_project_path)
@@ -190,7 +190,7 @@ def _fresh_catch_up(
     config_dir: Path,
     on_progress: ProgressFn | None,
 ) -> None:
-    units = translate_config_to_processing(projects)
+    units = translate_config_to_mapping_units(projects)
     total = len(units)
     for index, unit in enumerate(units, start=1):
         _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=on_progress)
@@ -202,7 +202,7 @@ def _update_catch_up(
     baseline: BaselineTrees,
     on_progress: ProgressFn | None,
 ) -> None:
-    units = translate_config_to_processing(projects)
+    units = translate_config_to_mapping_units(projects)
     total = len(units)
     for index, unit in enumerate(units, start=1):
         if str(unit.target_project_path) not in baseline:
@@ -214,7 +214,7 @@ def _update_catch_up(
 
 
 def _fresh_catch_up_unit(
-    unit: ProcessingUnit,
+    unit: MappingUnit,
     config_dir: Path,
     *,
     index: int = 1,
@@ -238,7 +238,7 @@ def _fresh_catch_up_unit(
 
 
 def _emit_unit_items(
-    unit: ProcessingUnit,
+    unit: MappingUnit,
     index: int,
     total: int,
     on_progress: ProgressFn | None,
@@ -249,7 +249,7 @@ def _emit_unit_items(
         on_progress(index, total, item.name)
 
 
-def _apply_update_unit(unit: ProcessingUnit, baseline: BaselineTrees) -> None:
+def _apply_update_unit(unit: MappingUnit, baseline: BaselineTrees) -> None:
     hub = unit.managed_project_path
     replica = unit.target_project_path
     item_names = [item.name for item in unit.items]

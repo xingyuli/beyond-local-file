@@ -9,7 +9,7 @@ from typing import Literal
 
 from beyond_local_file.held import REASON_DELETE_GAP, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.translator import translate_config_to_processing
+from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 from .catchup import (
     ScanStats,
@@ -344,7 +344,7 @@ def _merge_watch(
     Args:
         current: Existing watch, or None.
         root: Directory being watched.
-        names: Item names from one processing unit.
+        names: Item names from one mapping unit.
         is_hub: True when *root* is a managed project.
         item_hubs: Item name to hub directory.
 
@@ -362,7 +362,7 @@ def _merge_watch(
 def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
     hubs: dict[str, _WatchRoot] = {}
     replicas: dict[str, _WatchRoot] = {}
-    for unit in translate_config_to_processing(projects):
+    for unit in translate_config_to_mapping_units(projects):
         names = tuple(item.name for item in unit.items)
         item_hubs = dict.fromkeys(names, unit.managed_project_path)
         hub_key = str(unit.managed_project_path)

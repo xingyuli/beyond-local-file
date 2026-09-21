@@ -10,6 +10,6 @@ accepted
 
 ## Considered Options
 
-- One hub per replica watch (first processing unit). Rejected: a change to another contributor's item is applied to the wrong hub; fan-out matches item names globally.
+- One hub per replica watch (first mapping unit). Rejected: a change to another contributor's item is applied to the wrong hub; fan-out matches item names globally.
 - Persist owner on each baseline path. Rejected: no scenario depends on a persisted index; reload already rebuilds from mappings.
 - Derive owner at observe/reload from committed mappings; scope fan-out to that hub. Accepted.

@@ -133,7 +133,7 @@ The process of determining which items a managed project contributes to a given 
 _Avoid_: File scanning, directory walk, item loading
 
 **Mapping expansion**:
-The pure structural transformation that converts a config with M mappings and N total targets into a flat list of execution units. Independent of the filesystem — concerns only the shape of the config.
+The pure structural transformation that converts a config with M mappings and N total targets into a flat list of mapping units. Independent of the filesystem — concerns only the shape of the config.
 _Avoid_: Translation, flattening, config parsing
 
 **Revlink**:

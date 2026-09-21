@@ -1,21 +1,18 @@
-"""Model package for configuration and processing data structures.
-
-This package separates configuration models (reflecting YAML structure)
-from processing models (reflecting execution structure).
+"""Model package for configuration and mapping-unit data structures.
 
 Config models represent user intent as expressed in YAML.
-Processing models represent execution units after translation.
+Mapping units are the expanded managed project x one target after translation.
 """
 
 from .config import Config, ConfigProject, Mapping
-from .processing import ManagedProjectItem, ProcessingUnit
-from .translator import translate_config_to_processing
+from .processing import ManagedProjectItem, MappingUnit
+from .translator import translate_config_to_mapping_units
 
 __all__ = [
     "Config",
     "ConfigProject",
     "ManagedProjectItem",
     "Mapping",
-    "ProcessingUnit",
-    "translate_config_to_processing",
+    "MappingUnit",
+    "translate_config_to_mapping_units",
 ]

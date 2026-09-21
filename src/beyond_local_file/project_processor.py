@@ -23,7 +23,7 @@ from .constants import DEFAULT_CONFIG_FILE
 from .contribution import contribution_owner, projects_targeting
 from .daemon.process import mapping_files_for, running_owner_of
 from .model.config import ConfigProject
-from .model.translator import translate_config_to_processing
+from .model.translator import translate_config_to_mapping_units
 from .operations import CmdOperation
 from .operations.revlink import RevlinkContext
 
@@ -169,12 +169,12 @@ def _disambiguate_revlink_project(
 class ProjectProcessor:
     """Orchestrates processing of all projects for a given CLI operation.
 
-    Iterates over all processing units derived from the config and delegates
+    Iterates over all mapping units derived from the config and delegates
     execution to the provided :class:`~beyond_local_file.operations.CmdOperation`.
     """
 
     @staticmethod
-    def process_all_units(
+    def process_all_mapping_units(
         config_projects: dict[str, ConfigProject],
         operation: CmdOperation,
         skip_invalid: bool = True,
@@ -183,15 +183,15 @@ class ProjectProcessor:
 
         Args:
             config_projects: Dictionary of ConfigProject instances.
-            operation: The operation to execute for each processing unit.
+            operation: The operation to execute for each mapping unit.
             skip_invalid: Whether to skip invalid projects or stop processing.
 
         Returns:
             True if all operations completed, False if aborted.
         """
-        processing_units = translate_config_to_processing(config_projects)
+        mapping_units = translate_config_to_mapping_units(config_projects)
 
-        for unit in processing_units:
+        for unit in mapping_units:
             if not unit.managed_project_path.exists():
                 click.echo(f"Project directory does not exist: {unit.managed_project_path}")
                 if not skip_invalid:

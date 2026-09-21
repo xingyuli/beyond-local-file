@@ -9,14 +9,14 @@ The translator is a pure mapping-expansion and display-name function once the
 3. ``TestItemsLoading``             — integration-style tests that exercise the
                                      full pipeline (loader + translator together).
 4. ``TestMultipleProjects``         — multi-project scenarios.
-5. ``TestProcessingUnitAttributes`` — attribute-level correctness.
+5. ``TestMappingUnitAttributes`` — attribute-level correctness.
 """
 
 from pathlib import Path
 
 import pytest
 
-from beyond_local_file.model import ConfigProject, Mapping, translate_config_to_processing
+from beyond_local_file.model import ConfigProject, Mapping, translate_config_to_mapping_units
 from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem
 from beyond_local_file.model.translator import _load_items
 
@@ -67,7 +67,7 @@ class TestDisplayNameGeneration:
             tmp_path,
             mappings=[Mapping(targets=[Path("/target1")], subpaths=None, copy_paths=None)],
         )
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 1
         assert units[0].display_name == "my-project"
@@ -84,7 +84,7 @@ class TestDisplayNameGeneration:
                 Mapping(targets=[Path("/t3")], subpaths=None, copy_paths=None),
             ],
         )
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 3  # noqa: PLR2004
         assert units[0].display_name == "my-project#1"
@@ -103,7 +103,7 @@ class TestDisplayNameGeneration:
                 )
             ],
         )
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 3  # noqa: PLR2004
         assert units[0].display_name == "my-project#1-1"
@@ -120,7 +120,7 @@ class TestDisplayNameGeneration:
                 Mapping(targets=[Path("/t4")], subpaths=None, copy_paths=None),
             ],
         )
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 4  # noqa: PLR2004
         assert units[0].display_name == "my-project#1"
@@ -132,7 +132,7 @@ class TestDisplayNameGeneration:
         """Zero-padding applied when mapping index >= 10."""
         mappings = [Mapping(targets=[Path(f"/t{i}")], subpaths=None, copy_paths=None) for i in range(1, 12)]
         projects = _make_project(tmp_path, mappings=mappings)
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 11  # noqa: PLR2004
         assert units[0].display_name == "my-project#01"
@@ -147,7 +147,7 @@ class TestDisplayNameGeneration:
             tmp_path,
             mappings=[Mapping(targets=targets, subpaths=None, copy_paths=None)],
         )
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 11  # noqa: PLR2004
         assert units[0].display_name == "my-project#1-01"
@@ -166,7 +166,7 @@ class TestDisplayNameGeneration:
             for i in range(1, 12)
         ]
         projects = _make_project(tmp_path, mappings=mappings)
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 121  # noqa: PLR2004
         assert units[0].display_name == "my-project#01-01"
@@ -180,7 +180,7 @@ class TestDisplayNameGeneration:
             tmp_path,
             mappings=[Mapping(targets=[Path("/t1")], subpaths=None, copy_paths=None)],
         )
-        units = translate_config_to_processing(
+        units = translate_config_to_mapping_units(
             projects,
             item_loader=lambda path, sp, cp: [],
         )
@@ -293,7 +293,7 @@ class TestItemsLoading:
                 mappings=[Mapping(targets=[Path("/t1")], subpaths=None, copy_paths=None)],
             )
         }
-        units = translate_config_to_processing(projects)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 1
         assert len(units[0].items) == 3  # noqa: PLR2004
@@ -315,7 +315,7 @@ class TestItemsLoading:
                 ],
             )
         }
-        units = translate_config_to_processing(projects)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 1
         assert {i.name for i in units[0].items} == {"file1.txt", ".kiro/hooks"}
@@ -335,14 +335,14 @@ class TestItemsLoading:
                 ],
             )
         }
-        units = translate_config_to_processing(projects)
+        units = translate_config_to_mapping_units(projects)
 
         by_name = {i.name: i for i in units[0].items}
         assert by_name["file1.txt"].strategy == LinkStrategy.COPY
         assert by_name["file2.txt"].strategy == LinkStrategy.COPY
 
     def test_directory_item_is_projected_as_copy(self, project_dir: Path) -> None:
-        """A directory subpath becomes a copy item in the processing unit."""
+        """A directory subpath becomes a copy item in the mapping unit."""
         projects = {
             "my-project": ConfigProject(
                 managed_project_name="my-project",
@@ -356,7 +356,7 @@ class TestItemsLoading:
                 ],
             )
         }
-        units = translate_config_to_processing(projects)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 1
         assert units[0].items[0].name == ".kiro/hooks"
@@ -378,7 +378,7 @@ class TestItemsLoading:
                 ],
             )
         }
-        units = translate_config_to_processing(projects)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 1
         assert len(units[0].items) == 1
@@ -391,7 +391,7 @@ class TestItemsLoading:
 
 
 class TestMultipleProjects:
-    """Multiple projects each produce their own processing units."""
+    """Multiple projects each produce their own mapping units."""
 
     def test_multiple_projects(self, tmp_path: Path) -> None:
         project_a = tmp_path / "project-a"
@@ -416,7 +416,7 @@ class TestMultipleProjects:
             ),
         }
 
-        units = translate_config_to_processing(config_projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(config_projects, item_loader=_fake_loader)
 
         assert len(units) == 3  # noqa: PLR2004
 
@@ -431,12 +431,12 @@ class TestMultipleProjects:
 
 
 # ---------------------------------------------------------------------------
-# 5. ProcessingUnit attribute correctness
+# 5. MappingUnit attribute correctness
 # ---------------------------------------------------------------------------
 
 
-class TestProcessingUnitAttributes:
-    """Verify all ProcessingUnit fields are set correctly."""
+class TestMappingUnitAttributes:
+    """Verify all MappingUnit fields are set correctly."""
 
     def test_processing_unit_attributes(self, tmp_path: Path) -> None:
         base = tmp_path / "my-project"
@@ -453,7 +453,7 @@ class TestProcessingUnitAttributes:
                 ],
             )
         }
-        units = translate_config_to_processing(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
 
         assert len(units) == 2  # noqa: PLR2004
 

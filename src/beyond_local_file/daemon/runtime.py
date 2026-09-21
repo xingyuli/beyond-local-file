@@ -18,7 +18,7 @@ from typing import TextIO
 
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.translator import translate_config_to_processing
+from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
@@ -176,7 +176,7 @@ def _fanout_check(
         selected = [unit]
     else:
         selected = [runtime.units[key] for key in sorted(runtime.units)]
-    total = sum(len(translate_config_to_processing(unit.live.projects)) for unit in selected)
+    total = sum(len(translate_config_to_mapping_units(unit.live.projects)) for unit in selected)
     completed = 0
     lock = threading.Lock()
 

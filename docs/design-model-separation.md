@@ -26,7 +26,7 @@ The system separates configuration models (reflecting YAML structure) from proce
 ```
 YAML Config → ConfigProject (with Mappings)
            → Translation Layer
-           → ProcessingUnit (M×N expansion)
+           → MappingUnit (M×N expansion)
            → Execution
 ```
 
@@ -51,7 +51,7 @@ my-project:
 - Process my-project → /target2 (sync .kiro/hooks only)
 - Process my-project → /target3 (sync .kiro/hooks only)
 
-The configuration defines 2 mappings with 3 total targets, but execution requires 3 separate processing units.
+The configuration defines 2 mappings with 3 total targets, but execution requires 3 separate mapping units.
 
 ---
 
@@ -74,25 +74,25 @@ The configuration defines 2 mappings with 3 total targets, but execution require
 │  ]                                                           │
 └─────────────────────────────────────────────────────────────┘
                             │
-                            │ translate_config_to_processing()
+                            │ translate_config_to_mapping_units()
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Processing Layer                          │
 │  (Reflects execution structure - M×N expansion)             │
 │                                                              │
-│  ProcessingUnit #1                                          │
+│  MappingUnit #1                                          │
 │  ├── display_name: "my-project#1"                          │
 │  ├── managed_project_path: /path/to/my-project             │
 │  ├── target_project_path: /target1                         │
 │  └── items: None (sync everything)                          │
 │                                                              │
-│  ProcessingUnit #2                                          │
+│  MappingUnit #2                                          │
 │  ├── display_name: "my-project#2-1"                        │
 │  ├── managed_project_path: /path/to/my-project             │
 │  ├── target_project_path: /target2                         │
 │  └── items: [ProjectItem(".kiro/hooks", ...)]              │
 │                                                              │
-│  ProcessingUnit #3                                          │
+│  MappingUnit #3                                          │
 │  ├── display_name: "my-project#2-2"                        │
 │  ├── managed_project_path: /path/to/my-project             │
 │  ├── target_project_path: /target3                         │
@@ -175,16 +175,16 @@ class Config:
 
 Located in `src/beyond_local_file/model/processing.py`
 
-### ProcessingUnit
+### MappingUnit
 
 Represents one (project, mapping, target) combination for execution.
 
 ```python
 @dataclass
-class ProcessingUnit:
+class MappingUnit:
     """One project-to-target mapping for execution.
     
-    A ConfigProject with M mappings and N total targets becomes M*N ProcessingUnits.
+    A ConfigProject with M mappings and N total targets becomes M*N MappingUnits.
     
     Attributes:
         managed_project_name: Original project name from configuration.
@@ -235,25 +235,25 @@ class ProjectItem:
 
 Located in `src/beyond_local_file/model/translator.py`
 
-### translate_config_to_processing()
+### translate_config_to_mapping_units()
 
-Converts ConfigProject instances to ProcessingUnit instances.
+Converts ConfigProject instances to MappingUnit instances.
 
 ```python
-def translate_config_to_processing(
+def translate_config_to_mapping_units(
     config_projects: dict[str, ConfigProject],
-) -> list[ProcessingUnit]:
-    """Translate config model to processing units.
+) -> list[MappingUnit]:
+    """Translate config model to mapping units.
     
     For each ConfigProject:
       - Iterate through mappings (mapping_index = 0, 1, 2, ...)
       - For each mapping, iterate through targets (target_index = 0, 1, 2, ...)
-      - Create one ProcessingUnit per (mapping, target) combination
+      - Create one MappingUnit per (mapping, target) combination
       - Compute display_name based on total mappings and targets
       - Load items based on mapping's subpaths
     
     Returns:
-        List of ProcessingUnit instances ready for execution.
+        List of MappingUnit instances ready for execution.
     """
 ```
 
@@ -270,7 +270,7 @@ needs_mapping_padding = num_mappings >= 10
 needs_target_padding = any(len(mapping.targets) >= 10 for mapping in mappings)
 ```
 
-**Step 3: Create Processing Units**
+**Step 3: Create Mapping Units**
 ```python
 for mapping_idx, mapping in enumerate(config_project.mappings):
     for target_idx, target_path in enumerate(mapping.targets):
@@ -285,7 +285,7 @@ for mapping_idx, mapping in enumerate(config_project.mappings):
         )
         
         # Create unit
-        unit = ProcessingUnit(
+        unit = MappingUnit(
             managed_project_name=config_project.managed_project_name,
             managed_project_path=config_project.managed_project_path,
             target_project_path=target_path,
@@ -300,7 +300,7 @@ for mapping_idx, mapping in enumerate(config_project.mappings):
 
 ## Display Name Logic
 
-Display names use suffixes to distinguish processing units.
+Display names use suffixes to distinguish mapping units.
 
 ### Rules
 
@@ -436,9 +436,9 @@ ConfigProject(
 )
 ```
 
-**ProcessingUnit**:
+**MappingUnit**:
 ```python
-ProcessingUnit(
+MappingUnit(
     managed_project_name="my-project",
     managed_project_path=Path("/path/to/my-project"),
     target_project_path=Path("/target"),
@@ -471,10 +471,10 @@ ConfigProject(
 )
 ```
 
-**ProcessingUnits**:
+**MappingUnits**:
 ```python
 [
-    ProcessingUnit(
+    MappingUnit(
         managed_project_name="my-project",
         managed_project_path=Path("/path/to/my-project"),
         target_project_path=Path("/target1"),
@@ -483,7 +483,7 @@ ConfigProject(
         mapping_index=0,
         target_index=0,
     ),
-    ProcessingUnit(
+    MappingUnit(
         managed_project_name="my-project",
         managed_project_path=Path("/path/to/my-project"),
         target_project_path=Path("/target2"),
@@ -519,10 +519,10 @@ ConfigProject(
 )
 ```
 
-**ProcessingUnits**:
+**MappingUnits**:
 ```python
 [
-    ProcessingUnit(
+    MappingUnit(
         managed_project_name="my-project",
         managed_project_path=Path("/path/to/my-project"),
         target_project_path=Path("/target1"),
@@ -531,7 +531,7 @@ ConfigProject(
         mapping_index=0,
         target_index=0,
     ),
-    ProcessingUnit(
+    MappingUnit(
         managed_project_name="my-project",
         managed_project_path=Path("/path/to/my-project"),
         target_project_path=Path("/target2"),
@@ -572,12 +572,12 @@ def process_all(self, operation: CmdOperation, skip_invalid: bool = True) -> boo
 **New Method**:
 ```python
 @staticmethod
-def process_all_units(
+def process_all_mapping_units(
     config_projects: dict[str, ConfigProject],
     operation: CmdOperation,
     skip_invalid: bool = True,
 ) -> bool:
-    """Uses ProcessingUnit (split at translation time)."""
+    """Uses MappingUnit (split at translation time)."""
 ```
 
 ### CLI Integration
@@ -590,8 +590,8 @@ config → get_projects() → dict[str, ProjectConfiguration] → process_all()
 **New Flow**:
 ```python
 config → get_config_projects() → dict[str, ConfigProject]
-       → translate_config_to_processing() → list[ProcessingUnit]
-       → process_all_units()
+       → translate_config_to_mapping_units() → list[MappingUnit]
+       → process_all_mapping_units()
 ```
 
 ---
@@ -607,7 +607,7 @@ The two-model architecture provides:
 5. **Easier Testing**: Test each layer independently
 6. **Future Flexibility**: Easy to extend without breaking existing code
 
-The translation layer properly converts user intent (configuration) into execution plan (processing units), with smart display name generation for clear output.
+The translation layer properly converts user intent (configuration) into execution plan (mapping units), with smart display name generation for clear output.
 
 ---
 

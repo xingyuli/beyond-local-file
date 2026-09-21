@@ -27,8 +27,8 @@ def format_status_line(verb: str, index: int, total: int, item: str) -> str:
 
     Args:
         verb: Leading verb, such as ``Catching up`` or ``Checking``.
-        index: 1-based processing-unit index.
-        total: Number of processing units.
+        index: 1-based mapping-unit index.
+        total: Number of mapping units.
         item: Current item name (not a per-file path).
 
     Returns:
@@ -65,8 +65,8 @@ class WorkerState:
         """Record the current catch-up unit and item name.
 
         Args:
-            index: 1-based processing-unit index.
-            total: Number of processing units.
+            index: 1-based mapping-unit index.
+            total: Number of mapping units.
             item: Current item name (not a per-file path).
         """
         with self._lock:

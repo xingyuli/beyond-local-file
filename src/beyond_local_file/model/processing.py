@@ -1,7 +1,6 @@
-"""Processing models that reflect execution structure.
+"""Mapping-unit models after config translation.
 
-These models represent execution units after translating configuration.
-Each ProcessingUnit represents one specific (project, mapping, target) combination.
+Each MappingUnit is one managed project x one target with that mapping's items.
 """
 
 from dataclasses import dataclass
@@ -40,16 +39,16 @@ class ManagedProjectItem:
 
 
 @dataclass
-class ProcessingUnit:
+class MappingUnit:
     """One project-to-target mapping for execution.
 
-    A ConfigProject with M mappings and N total targets becomes M*N ProcessingUnits.
-    Each ProcessingUnit represents one specific (project, mapping, target) combination.
+    A ConfigProject with M mappings and N total targets becomes M*N MappingUnits.
+    Each MappingUnit represents one specific (project, mapping, target) combination.
 
     Attributes:
         managed_project_name: Original project name from configuration.
         managed_project_path: Absolute path to the managed project directory.
-        target_project_path: Single target path for this processing unit.
+        target_project_path: Single target path for this mapping unit.
         items: Non-empty list of items to sync. Empty managed projects are
                filtered out during translation.
         display_name: Computed display name with suffix for output.

@@ -17,7 +17,7 @@ from ..link_strategy_protocol import (
     GitExcludeCheckResult,
     LinkCheckResult,
 )
-from ..model.processing import LinkStrategy, ProcessingUnit
+from ..model.processing import LinkStrategy, MappingUnit
 from ..options import OutputFormat
 from ..symlink_manager import SymlinkManager
 from .base import CmdOperation
@@ -30,11 +30,11 @@ type ItemProgress = Callable[[int, int, str], None]
 
 
 @dataclass
-class ProcessingUnitResults:
-    """Raw results collected from a single ProcessingUnit during a check.
+class MappingUnitResults:
+    """Raw results collected from a single MappingUnit during a check.
 
     Attributes:
-        unit: The processing unit that was checked.
+        unit: The mapping unit that was checked.
         symlink_link_result: LinkCheckResult from SymlinkManager (None if no symlink items).
         symlink_git_result: GitExcludeCheckResult from SymlinkManager (None if not a git repo
             or no symlink items).
@@ -43,7 +43,7 @@ class ProcessingUnitResults:
             no copy items).
     """
 
-    unit: ProcessingUnit
+    unit: MappingUnit
     symlink_link_result: LinkCheckResult | None = None
     symlink_git_result: GitExcludeCheckResult | None = None
     copy_link_result: LinkCheckResult | None = None
@@ -179,17 +179,17 @@ class LinkCheckFormatter:
 
 
 class CheckTableRenderer:
-    """Transforms raw :class:`ProcessingUnitResults` into :class:`CheckRow` objects.
+    """Transforms raw :class:`MappingUnitResults` into :class:`CheckRow` objects.
 
     Handles merging of git exclude results from both strategies so the table
     formatter receives a single, unified result per row.
     """
 
-    def __init__(self, results: list[ProcessingUnitResults]) -> None:
+    def __init__(self, results: list[MappingUnitResults]) -> None:
         """Initialize the renderer.
 
         Args:
-            results: List of raw results from all ProcessingUnits.
+            results: List of raw results from all MappingUnits.
         """
         self.results = results
 
@@ -421,14 +421,14 @@ class CheckOperation(CmdOperation):
         self.on_progress: ItemProgress | None = None
         self.unit_count = 0
         self._unit_index = 0
-        self._results: list[ProcessingUnitResults] = []
+        self._results: list[MappingUnitResults] = []
 
     @property
-    def results(self) -> list[ProcessingUnitResults]:
+    def results(self) -> list[MappingUnitResults]:
         """Return collected per-mapping-unit check results."""
         return list(self._results)
 
-    def extend_results(self, results: list[ProcessingUnitResults]) -> None:
+    def extend_results(self, results: list[MappingUnitResults]) -> None:
         """Append *results* from another check run for a later table render.
 
         Args:
@@ -441,15 +441,15 @@ class CheckOperation(CmdOperation):
         """Whether to print per-target progress lines during processing."""
         return self.output_format == OutputFormat.VERBOSE
 
-    def execute_unit(self, unit: ProcessingUnit) -> bool:
-        """Execute the check operation for a single processing unit.
+    def execute_unit(self, unit: MappingUnit) -> bool:
+        """Execute the check operation for a single mapping unit.
 
         Partitions items by strategy, delegates to the appropriate managers,
         then either prints verbose output immediately or accumulates results
         for deferred table rendering.
 
         Args:
-            unit: The processing unit to check.
+            unit: The mapping unit to check.
 
         Returns:
             Always True to continue processing.
@@ -477,7 +477,7 @@ class CheckOperation(CmdOperation):
 
     def _execute_verbose(
         self,
-        unit: ProcessingUnit,
+        unit: MappingUnit,
         symlink_mgr: SymlinkManager | None,
         copy_mgr: CopyManager | None,
         all_valid_entries: set[str],
@@ -485,7 +485,7 @@ class CheckOperation(CmdOperation):
         """Run check and print verbose output immediately.
 
         Args:
-            unit: The processing unit being checked.
+            unit: The mapping unit being checked.
             symlink_mgr: SymlinkManager for symlink items, or None.
             copy_mgr: CopyManager for copy items, or None.
             all_valid_entries: All managed item names across both strategies.
@@ -512,7 +512,7 @@ class CheckOperation(CmdOperation):
 
     def _execute_table(
         self,
-        unit: ProcessingUnit,
+        unit: MappingUnit,
         symlink_mgr: SymlinkManager | None,
         copy_mgr: CopyManager | None,
         all_valid_entries: set[str],
@@ -520,7 +520,7 @@ class CheckOperation(CmdOperation):
         """Run check and accumulate results for deferred table rendering.
 
         Args:
-            unit: The processing unit being checked.
+            unit: The mapping unit being checked.
             symlink_mgr: SymlinkManager for symlink items, or None.
             copy_mgr: CopyManager for copy items, or None.
             all_valid_entries: All managed item names across both strategies.
@@ -544,7 +544,7 @@ class CheckOperation(CmdOperation):
             copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
 
         self._results.append(
-            ProcessingUnitResults(
+            MappingUnitResults(
                 unit=unit,
                 symlink_link_result=symlink_link_result,
                 symlink_git_result=symlink_git_result,

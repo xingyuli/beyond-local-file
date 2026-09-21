@@ -11,8 +11,8 @@ from pathlib import Path
 import click
 
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.translator import translate_config_to_processing
-from beyond_local_file.operations.link_check import CheckOperation, ProcessingUnitResults
+from beyond_local_file.model.translator import translate_config_to_mapping_units
+from beyond_local_file.operations.link_check import CheckOperation, MappingUnitResults
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
 from beyond_local_file.operations.revlink import (
     CreateFormatter,
@@ -103,7 +103,7 @@ def _handle_check(
             return 1
     extra_exclude = bool(request.get("extra_exclude"))
     output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
-    units = translate_config_to_processing(projects)
+    units = translate_config_to_mapping_units(projects)
 
     def emit_item(index: int, total: int, item: str) -> None:
         if on_progress is None:
@@ -114,7 +114,7 @@ def _handle_check(
     operation.baseline = load_baseline(config_path)
     operation.on_progress = emit_item
     operation.unit_count = len(units)
-    ProjectProcessor.process_all_units(projects, operation)
+    ProjectProcessor.process_all_mapping_units(projects, operation)
     operation.render()
     return 0
 
@@ -125,7 +125,7 @@ def collect_check_results(
     request: Request,
     on_item: Callable[[int, int, str], None] | None,
     unit_count: int,
-) -> tuple[list[ProcessingUnitResults], str]:
+) -> tuple[list[MappingUnitResults], str]:
     """Check *projects* and return mapping-unit rows plus captured stdout.
 
     Args:
@@ -147,11 +147,11 @@ def collect_check_results(
         operation.baseline = load_baseline(config_path)
         operation.on_progress = on_item
         operation.unit_count = unit_count
-        ProjectProcessor.process_all_units(projects, operation)
+        ProjectProcessor.process_all_mapping_units(projects, operation)
     return operation.results, buffer.getvalue()
 
 
-def render_check_results(results: list[ProcessingUnitResults], request: Request) -> str:
+def render_check_results(results: list[MappingUnitResults], request: Request) -> str:
     """Render merged check rows as the final table.
 
     Args:

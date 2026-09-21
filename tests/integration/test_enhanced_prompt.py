@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
+from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, MappingUnit
 from beyond_local_file.operations import CheckOperation, SyncOperation
 from beyond_local_file.options import ConflictResolution
 from beyond_local_file.symlink_manager import SymlinkManager
@@ -110,7 +110,7 @@ def test_sync_with_mixed_strategies(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
-    # Create processing unit with mixed strategies
+    # Create mapping unit with mixed strategies
     items = [
         ManagedProjectItem(
             name="symlink1.txt",
@@ -133,7 +133,7 @@ def test_sync_with_mixed_strategies(tmp_path: Path) -> None:
             strategy=LinkStrategy.COPY,
         ),
     ]
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="mixed-project",
         managed_project_path=project_dir,
         target_project_path=target_dir,
@@ -194,7 +194,7 @@ def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
-    # Create processing unit with mixed strategies
+    # Create mapping unit with mixed strategies
     items = [
         ManagedProjectItem(
             name="symlink_file.txt",
@@ -207,7 +207,7 @@ def test_check_git_exclude_with_mixed_strategies(tmp_path: Path) -> None:
             strategy=LinkStrategy.COPY,
         ),
     ]
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="mixed-project",
         managed_project_path=project_dir,
         target_project_path=target_dir,

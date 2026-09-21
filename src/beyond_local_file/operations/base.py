@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..model.processing import ProcessingUnit
+from ..model.processing import MappingUnit
 
 
 class CmdOperation(ABC):
-    """Base class for CLI operations executed per processing unit.
+    """Base class for CLI operations executed per mapping unit.
 
     Subclasses implement :meth:`execute_unit` to perform the actual work, and may
     override :attr:`verbose_progress` to suppress the per-target progress line
@@ -28,11 +28,11 @@ class CmdOperation(ABC):
         return True
 
     @abstractmethod
-    def execute_unit(self, unit: ProcessingUnit) -> bool:
-        """Execute the operation for a single processing unit.
+    def execute_unit(self, unit: MappingUnit) -> bool:
+        """Execute the operation for a single mapping unit.
 
         Args:
-            unit: The processing unit to execute.
+            unit: The mapping unit to execute.
 
         Returns:
             True to continue processing, False to abort.

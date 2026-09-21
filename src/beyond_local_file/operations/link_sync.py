@@ -13,7 +13,7 @@ from ..link_strategy_protocol import (
     GitExcludeAddResult,
     LinkCreateResult,
 )
-from ..model.processing import LinkStrategy, ProcessingUnit
+from ..model.processing import LinkStrategy, MappingUnit
 from ..options import ConflictResolution, CopyConflictResolution
 from ..symlink_manager import SymlinkManager
 from .base import CmdOperation
@@ -142,14 +142,14 @@ class SyncOperation(CmdOperation):
         self.ask_callback = ask_callback
         self.conflict_callback = conflict_callback
 
-    def execute_unit(self, unit: ProcessingUnit) -> bool:
-        """Execute the sync operation for a single processing unit.
+    def execute_unit(self, unit: MappingUnit) -> bool:
+        """Execute the sync operation for a single mapping unit.
 
         Partitions items by strategy, delegates to the appropriate manager,
         then prints results via :class:`LinkSyncFormatter`.
 
         Args:
-            unit: The processing unit to sync.
+            unit: The mapping unit to sync.
 
         Returns:
             True to continue, False if the operation was aborted.

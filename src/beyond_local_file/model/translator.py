@@ -1,9 +1,6 @@
-"""Translation layer between configuration and processing models.
+"""Translate configuration models into mapping units.
 
-This module translates configuration models (reflecting YAML structure)
-into processing units (reflecting execution structure).
-
-The public entry point is :func:`translate_config_to_processing`.  Filesystem
+The public entry point is :func:`translate_config_to_mapping_units`. Filesystem
 I/O is isolated behind the ``item_loader`` seam so the translation logic (M x N
 expansion, display-name generation) can be exercised in tests without touching
 the disk.
@@ -18,7 +15,7 @@ import click
 from beyond_local_file.held import is_held_item_name
 
 from .config import ConfigProject
-from .processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
+from .processing import LinkStrategy, ManagedProjectItem, MappingUnit
 
 # Padding threshold for display names
 _PADDING_THRESHOLD = 10
@@ -32,7 +29,7 @@ def _load_items(
     """Load project items based on subpaths configuration.
 
     This is the default filesystem adapter used by
-    :func:`translate_config_to_processing`.  Pass a custom callable via the
+    :func:`translate_config_to_mapping_units`.  Pass a custom callable via the
     ``item_loader`` parameter to substitute a different implementation (e.g.
     an in-memory stub in tests).
 
@@ -99,22 +96,22 @@ class _DisplayNameContext:
     needs_target_padding: bool
 
 
-def translate_config_to_processing(
+def translate_config_to_mapping_units(
     config_projects: dict[str, ConfigProject],
     *,
     item_loader: ItemLoader = _load_items,
-) -> list[ProcessingUnit]:
-    """Translate config model to processing units.
+) -> list[MappingUnit]:
+    """Translate config model to mapping units.
 
     For each ConfigProject:
       - Iterate through its mappings (mapping_index = 0, 1, 2, ...)
       - For each mapping, iterate through its targets (target_index = 0, 1, 2, ...)
-      - Create one ProcessingUnit per (mapping, target) combination
+      - Create one MappingUnit per (mapping, target) combination
       - Compute display_name based on total mappings and targets per mapping
       - Load items via ``item_loader`` based on mapping's subpaths
 
     Display name logic:
-      - If total processing units == 1: use project name as-is
+      - If total mapping units == 1: use project name as-is
       - If multiple mappings, single target each: "project#{mapping_index+1}"
       - If single mapping, multiple targets: "project#{mapping_index+1}-{target_index+1}"
       - If multiple mappings with multiple targets: "project#{mapping_index+1}-{target_index+1}"
@@ -133,17 +130,17 @@ def translate_config_to_processing(
             Defaults to :func:`_load_items` (real filesystem walk).
 
     Returns:
-        List of ProcessingUnit instances ready for execution.
+        List of MappingUnit instances ready for execution.
 
     Example:
         ConfigProject with 2 mappings:
-          - Mapping 1: 1 target  → ProcessingUnit(display_name="project#1")
-          - Mapping 2: 2 targets → ProcessingUnit(display_name="project#2-1"),
-                                    ProcessingUnit(display_name="project#2-2")
+          - Mapping 1: 1 target  → MappingUnit(display_name="project#1")
+          - Mapping 2: 2 targets → MappingUnit(display_name="project#2-1"),
+                                    MappingUnit(display_name="project#2-2")
 
-        Total: 3 ProcessingUnits
+        Total: 3 MappingUnits
     """
-    processing_units: list[ProcessingUnit] = []
+    mapping_units: list[MappingUnit] = []
 
     for config_project in config_projects.values():
         # First pass: count total units and determine if padding is needed
@@ -154,7 +151,7 @@ def translate_config_to_processing(
         needs_mapping_padding = num_mappings >= _PADDING_THRESHOLD
         needs_target_padding = any(len(mapping.targets) >= _PADDING_THRESHOLD for mapping in config_project.mappings)
 
-        # Second pass: create processing units
+        # Second pass: create mapping units
         for mapping_idx, mapping in enumerate(config_project.mappings):
             for target_idx, target_path in enumerate(mapping.targets):
                 # Compute display name
@@ -184,8 +181,8 @@ def translate_config_to_processing(
                     )
                     continue
 
-                processing_units.append(
-                    ProcessingUnit(
+                mapping_units.append(
+                    MappingUnit(
                         managed_project_name=config_project.managed_project_name,
                         managed_project_path=config_project.managed_project_path,
                         target_project_path=target_path,
@@ -196,11 +193,11 @@ def translate_config_to_processing(
                     )
                 )
 
-    return processing_units
+    return mapping_units
 
 
 def _compute_display_name(ctx: _DisplayNameContext) -> str:
-    """Compute display name for a processing unit.
+    """Compute display name for a mapping unit.
 
     Args:
         ctx: Display name context with all required parameters.

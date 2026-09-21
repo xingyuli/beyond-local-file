@@ -39,7 +39,7 @@ As of 0.5.0, copy is the only projection. Symlink is not a user-facing link stra
 - Operations: partition and coordinate
 - Managers: execute specific strategy
 - Config: parse YAML
-- Translator: convert config to processing units
+- Translator: convert config to mapping units
 
 **Open/Closed Principle (OCP)**
 - Open for extension: add new strategies by creating new managers
@@ -75,7 +75,7 @@ As of 0.5.0, copy is the only projection. Symlink is not a user-facing link stra
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Translation Layer                         │
-│  ConfigProject → ProcessingUnit (M×N expansion)             │
+│  ConfigProject → MappingUnit (M×N expansion)             │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
@@ -104,7 +104,7 @@ As of 0.5.0, copy is the only projection. Symlink is not a user-facing link stra
 - Return ConfigProject instances
 
 **Translation Layer** (`model/translator.py`)
-- Convert ConfigProject to ProcessingUnit
+- Convert ConfigProject to MappingUnit
 - Expand M mappings × N targets
 - Generate display names with suffixes
 

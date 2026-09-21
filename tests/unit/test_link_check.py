@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from beyond_local_file.daemon.catchup import scan_items
-from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
+from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, MappingUnit
 from beyond_local_file.operations.link_check import CheckOperation
 from beyond_local_file.options import OutputFormat
 
@@ -58,15 +58,15 @@ def temp_config_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit:
-    """Create a sample processing unit with copy items.
+def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> MappingUnit:
+    """Create a sample mapping unit with copy items.
 
     Args:
         temp_project_dir: Temporary project directory fixture.
         temp_target_dir: Temporary target directory fixture.
 
     Returns:
-        ProcessingUnit instance with test items.
+        MappingUnit instance with test items.
     """
     items = [
         ManagedProjectItem(
@@ -80,7 +80,7 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit
             strategy=LinkStrategy.COPY,
         ),
     ]
-    return ProcessingUnit(
+    return MappingUnit(
         managed_project_name="test-project",
         managed_project_path=temp_project_dir,
         target_project_path=temp_target_dir,
@@ -92,7 +92,7 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit
 
 
 def test_link_check_reports_copy_projections_not_symlink_health(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -111,7 +111,7 @@ def test_link_check_reports_copy_projections_not_symlink_health(
 
 
 def test_link_check_table_reports_copy_not_symlink(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -129,7 +129,7 @@ def test_link_check_table_reports_copy_not_symlink(
 
 
 def test_link_check_treats_symlink_projection_as_not_a_copy(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -149,7 +149,7 @@ def test_link_check_treats_symlink_projection_as_not_a_copy(
 
 
 def test_live_match_is_in_sync_without_sync_state(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -168,7 +168,7 @@ def test_live_match_is_in_sync_without_sync_state(
 
 
 def test_live_mismatch_without_baseline_is_mismatch(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -189,7 +189,7 @@ def test_live_mismatch_without_baseline_is_mismatch(
 
 
 def test_live_mismatch_uses_baseline_labels_not_sync_state(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -223,7 +223,7 @@ def test_live_mismatch_uses_baseline_labels_not_sync_state(
 
 
 def test_live_mismatch_both_changed_from_baseline(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -251,7 +251,7 @@ def test_live_mismatch_both_changed_from_baseline(
 
 
 def test_live_match_ignores_stale_baseline_and_sync_state(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -279,7 +279,7 @@ def test_live_match_ignores_stale_baseline_and_sync_state(
 
 
 def test_check_table_has_no_progress_fraction(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -334,7 +334,7 @@ def test_check_operation_mixed_strategies_no_false_extra(
             strategy=LinkStrategy.COPY,
         ),
     ]
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="mixed-project",
         managed_project_path=project_dir,
         target_project_path=target_dir,

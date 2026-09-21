@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, ProcessingUnit
+from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, MappingUnit
 from beyond_local_file.operations.link_sync import SyncOperation
 
 
@@ -56,15 +56,15 @@ def temp_config_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit:
-    """Create a sample processing unit with copy items.
+def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> MappingUnit:
+    """Create a sample mapping unit with copy items.
 
     Args:
         temp_project_dir: Temporary project directory fixture.
         temp_target_dir: Temporary target directory fixture.
 
     Returns:
-        ProcessingUnit instance with test items.
+        MappingUnit instance with test items.
     """
     items = [
         ManagedProjectItem(
@@ -78,7 +78,7 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit
             strategy=LinkStrategy.COPY,
         ),
     ]
-    return ProcessingUnit(
+    return MappingUnit(
         managed_project_name="test-project",
         managed_project_path=temp_project_dir,
         target_project_path=temp_target_dir,
@@ -90,7 +90,7 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> ProcessingUnit
 
 
 def test_link_sync_projects_file_item_as_regular_file_copy(
-    sample_unit: ProcessingUnit,
+    sample_unit: MappingUnit,
     temp_config_dir: Path,
 ) -> None:
     """A file item is projected as a regular file copy, not a symlink."""
@@ -137,7 +137,7 @@ def test_sync_operation_adds_git_excludes(
             strategy=LinkStrategy.COPY,
         ),
     ]
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="test-project",
         managed_project_path=temp_project_dir,
         target_project_path=target_dir,
@@ -171,7 +171,7 @@ def test_link_sync_projects_directory_item_as_real_directory_tree(
     target = tmp_path / "target"
     target.mkdir()
 
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="managed",
         managed_project_path=managed,
         target_project_path=target,
@@ -214,7 +214,7 @@ def test_link_sync_converts_correct_blf_symlink_projection_to_copy(
     projection = target / "file1.txt"
     projection.symlink_to(item)
 
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="managed",
         managed_project_path=managed,
         target_project_path=target,
@@ -254,7 +254,7 @@ def test_link_sync_converts_correct_directory_symlink_projection_to_copy(
     projection = target / ".kiro" / "hooks"
     projection.symlink_to(hooks)
 
-    unit = ProcessingUnit(
+    unit = MappingUnit(
         managed_project_name="managed",
         managed_project_path=managed,
         target_project_path=target,
