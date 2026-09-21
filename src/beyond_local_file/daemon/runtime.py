@@ -16,11 +16,12 @@ from typing import TextIO
 
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.model.translator import translate_config_to_processing
 from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
-from .handlers import handle_request
-from .ipc import ProgressCallback, Request, Response, ServeLoop, WorkerState, serve_requests
+from .handlers import collect_check_results, handle_request, render_check_results
+from .ipc import ProgressCallback, Request, Response, ServeLoop, WorkerState, format_status_line, serve_requests
 from .log import bind_worker_stream
 from .process import state_dir, write_ready
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
@@ -94,10 +95,57 @@ def _handle_live_request(
     on_progress: ProgressCallback | None,
     runtime: _LiveRuntime,
 ) -> Response:
+    if request.get("op") == "check" and runtime.units:
+        return _fanout_check(request_config, request, on_progress, runtime)
     unit = route_worker_unit(request, runtime.units, request_config)
     if unit is None:
         return handle_request(request_config, request, on_progress=on_progress)
     return unit.submit(lambda: _run_unit_request(request_config, request, on_progress, unit))
+
+
+def _fanout_check(
+    request_config: Path,
+    request: Request,
+    on_progress: ProgressCallback | None,
+    runtime: _LiveRuntime,
+) -> Response:
+    name = request.get("project_name")
+    if name:
+        unit = runtime.units.get(str(name))
+        if unit is None:
+            return handle_request(request_config, request, on_progress=on_progress)
+        selected = [unit]
+    else:
+        selected = [runtime.units[key] for key in sorted(runtime.units)]
+    total = sum(len(translate_config_to_processing(unit.live.projects)) for unit in selected)
+    completed = 0
+    lock = threading.Lock()
+
+    def on_item(_index: int, _total: int, item: str) -> None:
+        nonlocal completed
+        with lock:
+            completed += 1
+            index = completed
+        if on_progress is not None:
+            on_progress(format_status_line("Checking", index, total, item))
+
+    waits = [
+        unit.submit_async(
+            lambda current=unit: collect_check_results(
+                request_config, current.live.projects, request, on_item, total
+            )
+        )
+        for unit in selected
+    ]
+    rows = []
+    verbose = []
+    for wait in waits:
+        part_rows, part_stdout = wait()
+        rows.extend(part_rows)
+        if part_stdout:
+            verbose.append(part_stdout)
+    table = render_check_results(rows, request)
+    return {"exit_code": 0, "stdout": "".join(verbose) + table}
 
 
 def _run_unit_request(

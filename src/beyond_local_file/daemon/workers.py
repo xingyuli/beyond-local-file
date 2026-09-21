@@ -61,6 +61,17 @@ class WorkerUnit:
         Raises:
             Exception: Propagates whatever *fn* raises.
         """
+        return self.submit_async(fn)()
+
+    def submit_async(self, fn: Callable[[], T]) -> Callable[[], T]:
+        """Queue *fn* on this unit and return a waiter for its result.
+
+        Args:
+            fn: Work that must not run concurrently with this unit's observe.
+
+        Returns:
+            A callable that blocks until *fn* finishes and returns its value.
+        """
         done = threading.Event()
         slot: dict[str, object] = {}
 
@@ -73,11 +84,15 @@ class WorkerUnit:
                 done.set()
 
         self._jobs.put(job)
-        done.wait()
-        error = slot.get("error")
-        if isinstance(error, Exception):
-            raise error
-        return slot["value"]  # type: ignore[return-value]
+
+        def wait() -> T:
+            done.wait()
+            error = slot.get("error")
+            if isinstance(error, Exception):
+                raise error
+            return slot["value"]  # type: ignore[return-value]
+
+        return wait
 
     def _run(self) -> None:
         next_idle = time.monotonic() + self.offset

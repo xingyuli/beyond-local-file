@@ -158,7 +158,7 @@ One daemon process loads one configuration set. Process state lives in the runti
 
 A yaml file already loaded by a running set is served by that process (``-c`` is not a second watcher). Starting a set that shares a mapping file with another running set is an error.
 
-``link check`` hashes managed vs target now. Progress is one rewritten TTY status line (unit ``i/n``, current item name, no per-file paths). The table is printed once at the end. Non-TTY: no status line, final table only.
+``link check`` hashes managed vs target now. A check with no project name is a job on every worker unit; the table is the merge. With a project name, that one unit. Progress is one rewritten TTY status line (mapping unit ``i/n``, current item name, no per-file paths), filled as worker units finish mapping units. The table is printed once at the end. Non-TTY: no status line, final table only.
 
 The set's ``daemon.log`` records each served shell request (op, PATH, cwd, start, end, exit), mutating-op steps with durations, and observe/persist work (live tick / item scan, baseline record, snapshot and item-document write) with duration and size context. Request stdout captured for the CLI is not a substitute. See 0015, 0020, and 0021.
 

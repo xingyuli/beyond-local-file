@@ -178,3 +178,157 @@ def test_create_waits_for_idle_observe_on_the_same_worker_unit(
     finally:
         hold.unlink(missing_ok=True)
         stop_daemon(config_path, env)
+
+
+def _two_project_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    alpha_hub = tmp_path / "alpha"
+    beta_hub = tmp_path / "beta"
+    alpha_target = tmp_path / "lab-app"
+    beta_target = tmp_path / "lab-notes"
+    for hub, target, name in (
+        (alpha_hub, alpha_target, "a"),
+        (beta_hub, beta_target, "b"),
+    ):
+        hub.mkdir()
+        target.mkdir()
+        (hub / f"shared-{name}.txt").write_text(name)
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {alpha_target}\nbeta: {beta_target}\n")
+    return config_path, alpha_target, beta_target
+
+
+def test_link_check_waits_for_idle_observe_on_each_worker_unit(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A set-wide link check enqueues on every worker unit and merges the table."""
+    config_path, _alpha_target, _beta_target = _two_project_workspace(tmp_path)
+    hold = tmp_path / "idle-hold"
+    hold.write_text("1")
+    entered = Path(str(hold) + ".entered")
+    env = {
+        **isolated_home,
+        "BLF_TEST_IDLE_HOLD": str(hold),
+        "BLF_TEST_IDLE_HOLD_PROJECT": "alpha",
+    }
+    start_daemon(config_path, env)
+    try:
+        deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < deadline and not entered.exists():
+            time.sleep(_POLL_S)
+        assert entered.exists(), "alpha idle observe never entered the test hold"
+        result: dict[str, Result | float] = {}
+
+        def _check() -> None:
+            started = time.perf_counter()
+            result["response"] = invoke_cli(["--config", str(config_path), "link", "check"], env=env)
+            result["elapsed"] = time.perf_counter() - started
+
+        thread = threading.Thread(target=_check)
+        thread.start()
+        thread.join(1.0)
+        hold.unlink(missing_ok=True)
+        thread.join(2.0)
+        assert not thread.is_alive()
+        checked = result["response"]
+        assert isinstance(checked, Result)
+        assert checked.exit_code == 0, checked.output
+        elapsed = result["elapsed"]
+        assert isinstance(elapsed, float)
+        assert elapsed >= _SAME_UNIT_WAIT_S, f"set-wide check returned in {elapsed:.3f}s without waiting for alpha"
+        assert "alpha" in checked.output
+        assert "beta" in checked.output
+    finally:
+        hold.unlink(missing_ok=True)
+        stop_daemon(config_path, env)
+
+
+def test_link_check_of_one_project_is_not_blocked_by_another_unit_idle(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """link check PROJECT enqueues only that worker unit."""
+    config_path, _alpha_target, _beta_target = _two_project_workspace(tmp_path)
+    hold = tmp_path / "idle-hold"
+    hold.write_text("1")
+    entered = Path(str(hold) + ".entered")
+    env = {
+        **isolated_home,
+        "BLF_TEST_IDLE_HOLD": str(hold),
+        "BLF_TEST_IDLE_HOLD_PROJECT": "alpha",
+    }
+    start_daemon(config_path, env)
+    try:
+        deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < deadline and not entered.exists():
+            time.sleep(_POLL_S)
+        assert entered.exists(), "alpha idle observe never entered the test hold"
+        result: dict[str, Result | float] = {}
+
+        def _check() -> None:
+            started = time.perf_counter()
+            result["response"] = invoke_cli(
+                ["--config", str(config_path), "link", "check", "beta"],
+                env=env,
+            )
+            result["elapsed"] = time.perf_counter() - started
+
+        thread = threading.Thread(target=_check)
+        thread.start()
+        thread.join(1.0)
+        hold.unlink(missing_ok=True)
+        thread.join(2.0)
+        assert not thread.is_alive()
+        checked = result["response"]
+        assert isinstance(checked, Result)
+        assert checked.exit_code == 0, checked.output
+        elapsed = result["elapsed"]
+        assert isinstance(elapsed, float)
+        assert elapsed < _STATUS_FAST_S, f"beta check blocked for {elapsed:.3f}s on alpha idle observe"
+        assert "beta" in checked.output
+        assert "alpha" not in checked.output
+    finally:
+        hold.unlink(missing_ok=True)
+        stop_daemon(config_path, env)
+
+
+def test_link_check_runs_other_units_while_one_unit_is_held(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Set-wide check jobs start on idle units without waiting for a held peer."""
+    config_path, _alpha_target, _beta_target = _two_project_workspace(tmp_path)
+    hold = tmp_path / "idle-hold"
+    hold.write_text("1")
+    entered = Path(str(hold) + ".entered")
+    started = tmp_path / "check-started"
+    env = {
+        **isolated_home,
+        "BLF_TEST_IDLE_HOLD": str(hold),
+        "BLF_TEST_IDLE_HOLD_PROJECT": "alpha",
+        "BLF_TEST_CHECK_STARTED": str(started),
+    }
+    start_daemon(config_path, env)
+    thread: threading.Thread | None = None
+    try:
+        deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < deadline and not entered.exists():
+            time.sleep(_POLL_S)
+        assert entered.exists(), "alpha idle observe never entered the test hold"
+        thread = threading.Thread(
+            target=lambda: invoke_cli(["--config", str(config_path), "link", "check"], env=env)
+        )
+        thread.start()
+        mark = started / "beta"
+        mark_deadline = time.monotonic() + _HOLD_WAIT_S
+        while time.monotonic() < mark_deadline and not mark.exists():
+            time.sleep(_POLL_S)
+        assert mark.exists(), "beta check did not start while alpha idle observe was held"
+        hold.unlink(missing_ok=True)
+        thread.join(2.0)
+        assert not thread.is_alive()
+    finally:
+        hold.unlink(missing_ok=True)
+        if thread is not None and thread.is_alive():
+            thread.join(2.0)
+        stop_daemon(config_path, env)

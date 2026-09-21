@@ -10,8 +10,9 @@ from pathlib import Path
 
 import click
 
+from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_processing
-from beyond_local_file.operations.link_check import CheckOperation
+from beyond_local_file.operations.link_check import CheckOperation, ProcessingUnitResults
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
 from beyond_local_file.operations.revlink import (
     CreateFormatter,
@@ -114,6 +115,70 @@ def _handle_check(
     ProjectProcessor.process_all_units(projects, operation)
     operation.render()
     return 0
+
+
+def collect_check_results(
+    config_path: Path,
+    projects: dict[str, ConfigProject],
+    request: Request,
+    on_item: Callable[[int, int, str], None] | None,
+    unit_count: int,
+) -> tuple[list[ProcessingUnitResults], str]:
+    """Check *projects* and return mapping-unit rows plus captured stdout.
+
+    Args:
+        config_path: Set identity path.
+        projects: Managed projects this worker unit should check.
+        request: Original check request (format and extra-exclude flags).
+        on_item: Optional ``(index, total, item)`` progress callback.
+        unit_count: Mapping-unit total for progress (set-wide when fan-out).
+
+    Returns:
+        Collected rows and any verbose stdout printed during the check.
+    """
+    extra_exclude = bool(request.get("extra_exclude"))
+    output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
+    _mark_check_started(projects)
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        operation = CheckOperation(state_dir(config_path), extra_exclude, output_format)
+        operation.baseline = load_baseline(config_path)
+        operation.on_progress = on_item
+        operation.unit_count = unit_count
+        ProjectProcessor.process_all_units(projects, operation)
+    return operation.results, buffer.getvalue()
+
+
+def render_check_results(results: list[ProcessingUnitResults], request: Request) -> str:
+    """Render merged check rows as the final table.
+
+    Args:
+        results: Rows from every worker unit.
+        request: Original check request (format and extra-exclude flags).
+
+    Returns:
+        Table stdout, or empty when the format is verbose (already printed).
+    """
+    extra_exclude = bool(request.get("extra_exclude"))
+    output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
+    if output_format == OutputFormat.VERBOSE or not results:
+        return ""
+    operation = CheckOperation(Path("."), extra_exclude, output_format)
+    operation.extend_results(results)
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        operation.render()
+    return buffer.getvalue()
+
+
+def _mark_check_started(projects: dict[str, ConfigProject]) -> None:
+    raw = os.environ.get("BLF_TEST_CHECK_STARTED")
+    if not raw:
+        return
+    root = Path(raw)
+    root.mkdir(parents=True, exist_ok=True)
+    for project in projects.values():
+        (root / project.managed_project_name).write_text("1", encoding="utf-8")
 
 
 def _handle_create(config_path: Path, request: Request) -> int:

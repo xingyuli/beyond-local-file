@@ -424,6 +424,19 @@ class CheckOperation(CmdOperation):
         self._results: list[ProcessingUnitResults] = []
 
     @property
+    def results(self) -> list[ProcessingUnitResults]:
+        """Return collected per-mapping-unit check results."""
+        return list(self._results)
+
+    def extend_results(self, results: list[ProcessingUnitResults]) -> None:
+        """Append *results* from another check run for a later table render.
+
+        Args:
+            results: Rows collected on a worker unit.
+        """
+        self._results.extend(results)
+
+    @property
     def verbose_progress(self) -> bool:
         """Whether to print per-target progress lines during processing."""
         return self.output_format == OutputFormat.VERBOSE
