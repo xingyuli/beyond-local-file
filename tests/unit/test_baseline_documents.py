@@ -175,6 +175,106 @@ def test_save_with_projects_replaces_legacy_yaml_with_item_documents(tmp_path: P
     assert load_baseline(config_path) == trees
 
 
+def test_save_nested_declared_item_under_directory_item_roundtrips(tmp_path: Path) -> None:
+    """A nested item on a second mapping does not collide with the parent directory item."""
+    managed = tmp_path / "alpha"
+    workspace = tmp_path / "workspace"
+    blog = tmp_path / "blog"
+    for root in (managed, workspace):
+        releases = root / "local-file" / "tasks" / "releases"
+        releases.mkdir(parents=True)
+        (releases / "note.md").write_text("n")
+        (root / "local-file" / "README.md").write_text("r")
+    blog_releases = blog / "local-file" / "tasks" / "releases"
+    blog_releases.mkdir(parents=True)
+    (blog_releases / "note.md").write_text("n")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("alpha: {}\n")
+    projects = {
+        "alpha": ConfigProject(
+            managed_project_name="alpha",
+            managed_project_path=managed,
+            mappings=[
+                Mapping(targets=[workspace], subpaths=None),
+                Mapping(targets=[blog], subpaths=["local-file/tasks/releases"]),
+            ],
+        )
+    }
+    trees = record_baseline(projects)
+
+    save_baseline(config_path, trees, projects)
+
+    loaded = load_baseline(config_path)
+    assert loaded == trees
+    assert not (state_dir(config_path) / "baseline.yml").exists()
+
+
+def test_load_prefers_leftover_yaml_over_partial_item_documents(tmp_path: Path) -> None:
+    """Leftover baseline.yml is the baseline until a successful document write unlinks it."""
+    managed = tmp_path / "alpha"
+    target = tmp_path / "lab-app"
+    managed.mkdir()
+    target.mkdir()
+    (managed / "shared.txt").write_text("hello")
+    (target / "shared.txt").write_text("hello")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {target}\n")
+    projects = {
+        "alpha": ConfigProject(
+            managed_project_name="alpha",
+            managed_project_path=managed,
+            mappings=[Mapping(targets=[target], subpaths=None)],
+        )
+    }
+    trees = record_baseline(projects)
+    save_baseline(config_path, trees)
+    partial = state_dir(config_path) / "baseline" / "alpha" / "files"
+    partial.parent.mkdir(parents=True)
+    partial.write_text(
+        "trees:\n  /tmp/partial:\n    shared.txt: {present: true, hash: aa, gen: 0}\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_baseline(config_path)
+
+    assert loaded == trees
+    assert "/tmp/partial" not in loaded
+
+
+def test_load_reuses_in_memory_trees_after_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a document write, load does not re-parse yaml or item documents."""
+    managed = tmp_path / "alpha"
+    target = tmp_path / "lab-app"
+    managed.mkdir()
+    target.mkdir()
+    (managed / "shared.txt").write_text("hello")
+    (target / "shared.txt").write_text("hello")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {target}\n")
+    projects = {
+        "alpha": ConfigProject(
+            managed_project_name="alpha",
+            managed_project_path=managed,
+            mappings=[Mapping(targets=[target], subpaths=None)],
+        )
+    }
+    trees = record_baseline(projects)
+    save_baseline(config_path, trees, projects)
+
+    def fail_yaml(path: Path) -> None:
+        raise AssertionError(f"re-read yaml {path}")
+
+    def fail_documents(root: Path) -> None:
+        raise AssertionError(f"re-read documents {root}")
+
+    monkeypatch.setattr("beyond_local_file.daemon.store._load_baseline_yaml", fail_yaml)
+    monkeypatch.setattr("beyond_local_file.daemon.store._load_baseline_documents", fail_documents)
+
+    loaded = load_baseline(config_path)
+
+    assert loaded == trees
+
+
 def test_save_writes_nested_directory_item_under_its_item_path(tmp_path: Path) -> None:
     """A nested DIRECTORY item such as .kiro/hooks uses that path under the project."""
     managed = tmp_path / "alpha"

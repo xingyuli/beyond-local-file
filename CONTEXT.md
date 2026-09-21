@@ -73,7 +73,7 @@ The daemon's last committed mappings for its configuration set, persisted in the
 _Avoid_: Cache, checkpoint, in-memory config
 
 **Baseline**:
-The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. Persisted as item documents under ``baseline/<managed-project>/`` in the set run directory: ``files`` holds FILE items (hub and each target in the same document); a DIRECTORY item is nested ``files`` plus one document per child subtree. A mutating shell rewrites only documents covering paths it changed. No baseline means that managed project has never completed a catch-up. A leftover ``baseline.yml`` is read until item documents exist.
+The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. Persisted as item documents under ``baseline/<managed-project>/`` in the set run directory: ``files`` holds FILE items (hub and each target in the same document); a DIRECTORY item is nested ``files`` plus one document per child subtree (as a file; ``<child>/files`` when a nested declared item needs that path as a directory). A mutating shell rewrites only documents covering paths it changed. No baseline means that managed project has never completed a catch-up. A leftover ``baseline.yml`` is read until a successful document write unlinks it (a partial ``baseline/`` tree does not shadow yaml). After a write, the worker reuses the in-memory trees and does not re-parse documents on the next persist.
 _Avoid_: Checkpoint, watermark, sync-state
 
 **Fresh catch-up**:
