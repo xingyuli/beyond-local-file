@@ -297,6 +297,9 @@ def test_tty_check_rewrites_status_line_then_table(
             assert "proj-0" in text
             assert "Copy" in text
             assert "k/n" not in text.replace("\r", "\n")
+            assert "\x1b[?1049h" not in text
+            assert "q: close" not in text
+            assert "Ctrl+C: stop" not in text
         finally:
             if slave != -1:
                 os.close(slave)

@@ -52,7 +52,7 @@ blf daemon SUBCOMMAND
 - `start` — Start the daemon; stays in the foreground until phase `ready`
 - `stop` — Stop the running daemon
 - `status` — Show pid and phase, plus out-of-sync paths and held copies
-- `logs` — Follow the set's `daemon.log`
+- `logs` — Retired. Use `blf logs`
 - `reload` — Apply external mapping edits from the set's mapping files
 
 ---
@@ -183,35 +183,48 @@ Held at /Users/username/.blf/held/<sha256>/...
 
 ---
 
-## `daemon logs` — Follow the Log
+## `blf logs` — Follow the Logs
 
-Print the daemon log and follow new lines until interrupted. Ctrl-C stops following, not the daemon. The command prints `daemon.log` in the set run directory (`~/.blf/run/global/daemon.log` or `~/.blf/run/file-<sha256>/daemon.log`) as stored.
+Follow the set's logs until interrupted. Ctrl-C stops following, not the daemon.
 
-Each new worker line is prefixed at write time with the daemon host's local timezone and offset:
+The set run directory holds three files (`~/.blf/run/global/logs/` or `~/.blf/run/file-<sha256>/logs/`):
+
+- `idle.log` — idle ticks, and when a tick applies, the apply, held-copy, and baseline persist lines that follow. A tick under 100ms that finds nothing is omitted. Every line names its worker unit.
+- `requests.log` — each shell request and every step of the work that request caused, including a reload's catch-up. Every line names its worker unit.
+- `daemon.log` — process start, the catch-up that belongs to start, ready, stop, and a failure that is neither an idle tick nor a shell request.
+
+`blf logs` merges the three files by their write-time stamp. Each printed line is prefixed with `[daemon]`, `[idle]`, or `[requests]`. On a terminal each name has a stable color. A pipe keeps the prefix and drops the color.
+
+`blf logs requests`, `blf logs idle`, and `blf logs daemon` follow that one file and print the stored lines with no prefix.
+
+Each new line is stamped at write time with the daemon host's local timezone, offset, and milliseconds:
 
 ```
-2026-09-12T17:42:03+08:00 live: update alpha.txt gen 1
+2026-09-21T18:55:09.184+08:00 daemon ready
 ```
 
-Shell requests and the set-wide work around them are also logged, so a slow `revlink create` can be explained from this file:
+A merged follow of a shell request:
 
 ```
-2026-09-12T17:42:03+08:00 request: start op=create path=notes.md cwd=/Users/me/project
-2026-09-12T17:42:06+08:00 live: tick reason=before-request roots=3 paths=48231 files=41002 hashed_bytes=184549376 duration_ms=3401 applied=false
-2026-09-12T17:42:06+08:00 create: copy duration_ms=12
-2026-09-12T17:42:07+08:00 baseline: record paths=48233 files=41005 hashed_bytes=184550012 duration_ms=3412
-2026-09-12T17:42:08+08:00 request: done op=create exit=0 duration_ms=5120
+[requests] 2026-09-21T18:55:09.184+08:00 request: start op=create path=notes.md cwd=/Users/me/project unit=notes queue_ms=2 op_ms=0 persist_ms=0
+[requests] 2026-09-21T18:55:09.190+08:00 create: copy duration_ms=1 unit=notes
+[requests] 2026-09-21T18:55:09.210+08:00 request: done op=create path=notes.md cwd=/Users/me/project unit=notes queue_ms=2 op_ms=11 persist_ms=14 exit=0
 ```
 
-Request stdout captured for the CLI is not written here. Old unstamped lines stay unstamped.
+`request: start` and `request: done` carry `queue_ms`, `op_ms`, and `persist_ms` (`persist_ms` is absent on a dry-run). For one worker unit, those three times are the wall. A check or reload on several worker units lists each unit's duration. Request stdout captured for the CLI is not written here.
+
+`blf daemon logs` is retired. It prints a line naming `blf logs` and does not follow a file.
 
 ### Syntax
 
 ```bash
-blf daemon logs
+blf logs
+blf logs requests
+blf logs idle
+blf logs daemon
 ```
 
-If the log file is missing:
+If the requested log is missing:
 
 ```
 Daemon log not found
@@ -282,6 +295,18 @@ Requires a running daemon. Run it inside the target.
 5. Removes the item from participating selective `subpath` lists in the configuration. See the [Configuration Reference](configuration-reference.md) for mapping syntax.
 
 If any projection fails preflight validation, the command leaves all managed items and projections unchanged. If cleanup fails after preflight, it reports the recovery state and retains later destructive phases when possible.
+
+#### Terminal
+
+On a terminal, `remove` opens a shell screen and leaves it up until you close it, including a fast removal. The header names `remove` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Removed …`, `Deleted managed copy: …`, and the rest, or the error text).
+
+The input line is hidden except while the stop question is open. It sits directly above the hint.
+
+- While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
+- Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
+- After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+
+Closing the screen restores the terminal and prints that same transcript. Without a terminal, `remove` prints the transcript and exits with the command's exit code. It does not draw a screen or wait for a key.
 
 #### Examples
 
@@ -508,6 +533,18 @@ blf revlink create [OPTIONS] PATH
 8. If the matched mapping uses selective projection (`subpath` list), appends the item name to that list in the mapping file so that the daemon and `link check` will manage it going forward. Mappings that project everything (no `subpath`) are unaffected.
 9. Fans the hub copy out to other in-sync replicas of that managed project. If a replica already had different bytes, those bytes are stored under `~/.blf/held/<sha256 of the managed project path>/` (`create-overwrite`) and the hub overwrites the live path.
 
+#### Terminal
+
+On a terminal, `revlink create` opens a shell screen after the hub is chosen and leaves it up until you close it, including a fast create. Choosing a managed project stays a plain prompt before the request; it is not asked on the screen. The header names `revlink create` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Computing checksum of …`, `Copying …`, and the rest, or the error text).
+
+The input line is hidden except while the stop question is open. It sits directly above the hint.
+
+- While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
+- Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
+- After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+
+Closing the screen restores the terminal and prints that same transcript. Without a terminal, `revlink create` prints the transcript and exits with the command's exit code. It does not draw a screen or wait for a key.
+
 ### Examples
 
 ```bash
@@ -611,6 +648,18 @@ blf revlink restore [OPTIONS] PATH
 5. Deletes the managed copy (non-fatal if this fails — a warning is printed and the restore is still considered successful).
 6. Removes the item name from `.git/info/exclude` if the current directory is a Git repository.
 7. If the matched mapping uses selective projection (`subpath` list), removes the item name from that list in the mapping file.
+
+#### Terminal
+
+On a terminal, `revlink restore` opens a shell screen and leaves it up until you close it, including a fast restore. The header names `revlink restore` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Leaving target file in place: …`, `Managed copy deleted: …`, and the rest, or the error text).
+
+The input line is hidden except while the stop question is open. It sits directly above the hint.
+
+- While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
+- Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
+- After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+
+Closing the screen restores the terminal and prints that same transcript. Without a terminal, `revlink restore` prints the transcript and exits with the command's exit code. It does not draw a screen or wait for a key.
 
 ### Examples
 
@@ -821,7 +870,7 @@ blf link check --extra-exclude
 blf daemon status
 
 # Follow daemon output
-blf daemon logs
+blf logs
 ```
 
 ---

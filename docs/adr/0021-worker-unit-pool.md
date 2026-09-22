@@ -6,6 +6,8 @@ The daemon process is two programs. The accept thread binds the port and answers
 
 accepted
 
+The TTY status-line sentences in the decision below are superseded by 0023. Worker-unit scheduling stands.
+
 ## Context
 
 A single serve loop used to accept, idle-observe, pre-request tick, and handle shells. A ~3s hash of every root in the configuration set held `accept`, so `status` and unrelated shells stalled. See 0020 and the redesign ticket.
