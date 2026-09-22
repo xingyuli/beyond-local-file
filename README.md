@@ -152,7 +152,7 @@ cd ~/my-dev-files
 blf daemon start
 ```
 
-`daemon start` stays in the foreground until phase `ready`. On a TTY it rewrites one status line (`Catching up i/n … item`).
+`daemon start` stays in the foreground until phase `ready`. On a terminal it opens a shell screen through catch-up and leaves it up when the daemon is ready.
 
 3. Check status:
 
@@ -239,7 +239,7 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 | `blf daemon start` | Start the background runtime that copies, observes, and applies mappings |
 | `blf daemon stop` | Stop the running daemon |
 | `blf daemon status` | Show whether the daemon is running, plus out-of-sync paths and held copies |
-| `blf daemon logs` | Follow the daemon log (Ctrl-C stops following, not the daemon) |
+| `blf logs` | Follow idle, request, and daemon logs (Ctrl-C stops following, not the daemon) |
 | `blf daemon reload` | Apply external mapping edits from the set's mapping files |
 | `blf link check [PROJECT]` | Check copy projections and Git excludes |
 | `blf revlink create PATH` | Adopt an existing file or directory as a copy projection |
