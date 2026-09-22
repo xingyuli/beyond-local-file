@@ -253,11 +253,11 @@ def test_verbose_cli_stays_line_oriented(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_tty_check_rewrites_status_line_then_table(
+def test_tty_check_opens_shell_screen_then_prints_table(
     check_workspace: tuple[Path, Path, Path],
     isolated_home: dict[str, str],
 ) -> None:
-    """TTY check rewrites one Checking i/n line, then prints today's table."""
+    """TTY check opens the shell screen and, after close, prints the table."""
     config_path, managed, _target = check_workspace
     with daemon_running(config_path, isolated_home):
         master, slave = pty.openpty()
@@ -282,24 +282,20 @@ def test_tty_check_rewrites_status_line_then_table(
             os.close(slave)
             slave = -1
             chunks: list[bytes] = []
-            text = _read_pty(master, chunks, until="Checking", proc=proc)
-            assert "Checking" in text, text
-            assert "\r" in text
-            match = _CHECK_LINE.search(text.replace("\r", "\n"))
-            assert match, text
-            assert int(match.group(1)) >= 1
-            assert int(match.group(2)) >= 1
-            assert match.group(3) in {"shared.txt", "nested"}
-            assert "keep.txt" not in match.group(0)
-            assert str(managed) not in match.group(0)
+            text = _read_pty(master, chunks, until="q: close", proc=proc)
+            assert "\x1b[?1049h" in text, text
+            assert "link check  all projects" in text
+            assert "proj-0" in text
+            assert "shared.txt" in text or "nested" in text
+            assert "keep.txt" not in text
+            assert str(managed) not in text
+            assert proc.poll() is None
+            os.write(master, b"q")
             text = _read_pty(master, chunks, until=None, proc=proc)
             assert proc.wait(timeout=_READY_WAIT_S) == 0
             assert "proj-0" in text
             assert "Copy" in text
             assert "k/n" not in text.replace("\r", "\n")
-            assert "\x1b[?1049h" not in text
-            assert "q: close" not in text
-            assert "Ctrl+C: stop" not in text
         finally:
             if slave != -1:
                 os.close(slave)
@@ -320,7 +316,11 @@ def test_daemon_ipc_streams_check_progress_on_existing_connection(
         response = send_when_up(config_path, {"op": "check"}, on_progress=progress.append)
         assert int(response.get("exit_code", 1)) == 0
         assert progress
-        assert all(_CHECK_LINE.fullmatch(line) for line in progress)
+        checking = [line for line in progress if _CHECK_LINE.fullmatch(line)]
+        assert checking
+        assert any(line.startswith("Waiting · proj-0") for line in progress)
+        assert any(line.startswith("Checking ") and line.endswith(" · proj-0") for line in progress)
+        assert "Done · proj-0" in progress
         stdout = str(response.get("stdout") or "")
         assert "proj-0" in stdout
         assert "Checking " not in stdout

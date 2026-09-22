@@ -1,4 +1,4 @@
-"""Full-screen shell for a create, restore, or remove request."""
+"""Full-screen shell for a daemon request."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import select
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 
 import click
 
@@ -44,20 +45,31 @@ _COMMANDS = {
     "create": "revlink create",
     "restore": "revlink restore",
     "remove": "remove",
+    "check": "link check",
+    "reload": "daemon reload",
+    "wait": "daemon start",
 }
+_SINGLE_ROW_OPS = frozenset({"create", "restore", "remove"})
+_READY_MESSAGE = "Daemon started (pid {pid})"
 
 
 def run_shell_screen(request: Request, session: RequestSession) -> int:
     """Draw the shell screen until the user closes it, then print the transcript.
 
     Args:
-        request: Daemon request. The header uses its operation and path.
+        request: Daemon request. The header uses its operation and target.
         session: Open request channel streaming progress and the final response.
 
     Returns:
         The command's exit code.
     """
-    screen = _ShellScreen(_header(request))
+    op = str(request.get("op") or "")
+    screen = _ShellScreen(
+        _header(request),
+        single=op in _SINGLE_ROW_OPS,
+        fallback=_fallback_project(request),
+        op=op,
+    )
     with _Terminal() as terminal:
         screen.run(terminal, session)
     _print_transcript(screen.stdout)
@@ -67,8 +79,29 @@ def run_shell_screen(request: Request, session: RequestSession) -> int:
 def _header(request: Request) -> str:
     op = str(request.get("op") or "")
     command = _COMMANDS.get(op, op)
+    if op in _SINGLE_ROW_OPS:
+        return f"{command}  {request.get('path') or ''}"
+    if op == "check":
+        name = request.get("project_name") or ""
+        target = str(name) if name else "all projects"
+        return f"{command}  {target}"
+    if op == "wait":
+        return f"{command}  all projects"
+    if op == "reload":
+        target = str(request.get("screen_target") or "all projects")
+        return f"{command}  {target}"
     path = str(request.get("path") or "")
-    return f"{command}  {path}"
+    return f"{command}  {path}" if path else command
+
+
+def _fallback_project(request: Request) -> str:
+    op = str(request.get("op") or "")
+    if op == "check":
+        return str(request.get("project_name") or "")
+    if op == "reload":
+        target = str(request.get("screen_target") or "")
+        return "" if not target or target == "all projects" else target
+    return ""
 
 
 def _print_transcript(stdout: str) -> None:
@@ -83,24 +116,49 @@ def _parse_progress(line: str) -> tuple[str, str, str] | None:
     else:
         step, project = line, ""
     project = project.strip()
+    step = step.strip()
+    named = step.startswith(("Done", "Failed", "Checking", "Catching up"))
+    if named and not project:
+        return None
     if step.startswith("Waiting"):
         return "waiting", step, project
-    if step.startswith(("Creating", "Restoring", "Removing", "Writing baseline")):
+    if step.startswith("Done"):
+        return "done", step, project
+    if step.startswith("Failed"):
+        return "failed", step, project
+    if step.startswith(("Creating", "Restoring", "Removing", "Writing baseline", "Checking", "Catching up")):
         return "working", step, project
     return None
 
 
-class _ShellScreen:
-    """One request's header, worker-unit row, output, and hint."""
+@dataclass
+class _UnitRow:
+    """One worker unit on the shell screen."""
 
-    def __init__(self, header: str) -> None:
+    project: str = ""
+    state: str = "waiting"
+    step: str = ""
+    started: float = field(default_factory=time.monotonic)
+    frozen: float | None = None
+
+    def text(self) -> str:
+        """Return the painted row: project, state, step, and elapsed time."""
+        end = self.frozen if self.frozen is not None else time.monotonic()
+        elapsed = max(0.0, end - self.started)
+        project = self.project or "-"
+        step = self.step or "-"
+        return f"{project}  {self.state}  {step}  {elapsed:.1f}s"
+
+
+class _ShellScreen:
+    """One request's header, worker-unit rows, output, and hint."""
+
+    def __init__(self, header: str, *, single: bool, fallback: str, op: str) -> None:
         self._lock = threading.Lock()
         self._header = header
-        self._project = ""
-        self._state = "waiting"
-        self._step = ""
-        self._started = time.monotonic()
-        self._frozen: float | None = None
+        self._fallback = fallback
+        self._op = op
+        self._rows: list[_UnitRow] = [_UnitRow()] if single else []
         self._notes: list[str] = []
         self._output: list[str] = []
         self._question = False
@@ -141,7 +199,7 @@ class _ShellScreen:
         reader.join(timeout=1)
 
     def apply_progress(self, line: str) -> None:
-        """Update the worker-unit row from one daemon progress line."""
+        """Update one worker-unit row from a daemon progress line."""
         parsed = _parse_progress(line)
         if parsed is None:
             return
@@ -149,29 +207,43 @@ class _ShellScreen:
         with self._lock:
             if self._phase == "finished":
                 return
-            self._state = state
-            self._step = step
-            if project:
-                self._project = project
+            row = self._row_for(project)
+            if row.state in {"done", "failed"}:
+                return
+            if state in {"done", "failed"}:
+                row.state = state
+                row.frozen = time.monotonic()
+                return
+            row.state = state
+            row.step = step
 
     def finish(self, response: Request) -> None:
         """Show the plain result and switch the hint to close."""
         with self._lock:
             if self._phase == "finished":
                 return
-            text = str(response.get("stdout") or "")
-            self._stdout = text
             try:
                 code = int(response.get("exit_code", 1))
             except (TypeError, ValueError):
                 code = 1
+            text = str(response.get("stdout") or "")
+            if self._op == "wait" and code == 0:
+                text = f"{_READY_MESSAGE.format(pid=response.get('pid'))}\n"
+            self._stdout = text
             self._exit_code = code
             self._output = [*self._notes, *text.splitlines()]
-            self._state = "done" if code == 0 else "failed"
+            if not self._rows:
+                self._rows.append(_UnitRow(project=self._fallback))
+            now = time.monotonic()
+            final = "done" if code == 0 else "failed"
+            for row in self._rows:
+                if row.state not in {"done", "failed"}:
+                    row.state = final
+                if row.frozen is None:
+                    row.frozen = now
             self._phase = "finished"
             self._question = False
             self._buffer = ""
-            self._frozen = time.monotonic()
 
     def fail(self, text: str) -> None:
         """Finish the screen with *text* and a failed row."""
@@ -270,32 +342,43 @@ class _ShellScreen:
         if send:
             session.cancel()
 
+    def _row_for(self, project: str) -> _UnitRow:
+        if project:
+            for row in self._rows:
+                if row.project == project:
+                    return row
+            for row in self._rows:
+                if not row.project:
+                    row.project = project
+                    return row
+            row = _UnitRow(project=project)
+            self._rows.append(row)
+            return row
+        if self._rows:
+            return self._rows[0]
+        row = _UnitRow()
+        self._rows.append(row)
+        return row
+
     def _paint(self) -> str:
         columns, rows = _terminal_size()
         with self._lock:
             header = self._header
-            row = self._row_text()
+            unit_lines = [row.text() for row in self._rows]
             hint = self._hint_text()
             output = list(self._output if self._phase == "finished" else self._notes)
             question = self._question and self._phase == "running"
             typed = self._buffer
-        reserved = 4 if question else 3
+        reserved = len(unit_lines) + 2 + (1 if question else 0)
         body_height = max(0, rows - reserved)
         visible = output[-body_height:] if body_height else []
         if len(visible) < body_height:
             visible.extend([""] * (body_height - len(visible)))
-        lines = [header, row, *visible]
+        lines = [header, *unit_lines, *visible]
         if question:
             lines.append(f"> {typed}")
         lines.append(hint)
         return _render(columns, lines)
-
-    def _row_text(self) -> str:
-        end = self._frozen if self._frozen is not None else time.monotonic()
-        elapsed = max(0.0, end - self._started)
-        project = self._project or "-"
-        step = self._step or "-"
-        return f"{project}  {self._state}  {step}  {elapsed:.1f}s"
 
     def _hint_text(self) -> str:
         if self._phase == "finished":

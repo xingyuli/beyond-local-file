@@ -63,6 +63,7 @@ class WorkerState:
         self._index = 0
         self._total = 0
         self._item = ""
+        self._lines: list[str] = []
 
     @property
     def phase(self) -> DaemonPhase:
@@ -82,6 +83,23 @@ class WorkerState:
             self._index = index
             self._total = total
             self._item = item
+
+    def emit(self, line: str) -> None:
+        """Queue one shell-screen progress line for waiters."""
+        with self._lock:
+            self._lines.append(line)
+
+    def lines_after(self, cursor: int) -> tuple[list[str], int]:
+        """Return progress lines queued after *cursor*, and the new cursor.
+
+        Args:
+            cursor: Number of lines the caller has already sent.
+
+        Returns:
+            The new lines and the length of the queue.
+        """
+        with self._lock:
+            return list(self._lines[cursor:]), len(self._lines)
 
     def set_ready(self) -> None:
         """Mark the daemon as ready for live observation and mutating ops."""
@@ -320,6 +338,8 @@ def _accept_one(
         if state is not None and not state.ready.is_set():
             _queue_waiter(pending, conn, request, state)
             return
+        if state is not None:
+            _write_backlog(conn, state)
         _reply(conn, {"exit_code": 0, "stdout": "", "phase": "ready", "pid": os.getpid()})
         return
     if state is not None and not state.ready.is_set():
@@ -362,13 +382,23 @@ def _flush_progress(pending: list[_Pending], state: WorkerState) -> None:
     pending[:] = still
 
 
+def _write_backlog(conn: socket.socket, state: WorkerState) -> None:
+    lines, _cursor = state.lines_after(0)
+    try:
+        for line in lines:
+            _write_json(conn, {"progress": line})
+    except OSError:
+        return
+
+
 def _write_progress(item: _Pending, state: WorkerState) -> bool:
-    line = state.progress_line()
-    if not line or line == item.last_progress:
+    lines, cursor = state.lines_after(item.cursor)
+    if not lines:
         return True
     try:
-        _write_json(item.conn, {"progress": line})
-        item.last_progress = line
+        for line in lines:
+            _write_json(item.conn, {"progress": line})
+        item.cursor = cursor
         return True
     except OSError:
         item.conn.close()
@@ -416,15 +446,18 @@ def _run_and_reply(
     handler: RequestHandler,
     before_request: Callable[[], None] | None,
 ) -> None:
+    progress_lock = threading.Lock()
+
     def emit_progress(line: str) -> None:
-        try:
-            _write_json(conn, {"progress": line})
-        except OSError:
-            return
+        with progress_lock:
+            try:
+                _write_json(conn, {"progress": line})
+            except OSError:
+                return
 
     # The accept thread stays inside the handler, so a stop is read here.
     stop_watch = threading.Event()
-    watched = request.get("op") in {"create", "restore", "remove"}
+    watched = request.get("op") in {"create", "restore", "remove", "check"}
     if watched:
         cancel = threading.Event()
         request = {**request, "_cancel": cancel}
@@ -596,4 +629,4 @@ def _read_json(conn: socket.socket, buffer: bytearray | None = None) -> Request 
 class _Pending:
     conn: socket.socket
     request: Request
-    last_progress: str | None = None
+    cursor: int = 0

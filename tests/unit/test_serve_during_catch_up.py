@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import pty
-import re
 import select
 import signal
 import subprocess
@@ -22,7 +21,6 @@ from beyond_local_file.daemon.process import state_dir
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
 _HOLD_ENV = "BLF_TEST_CATCHUP_HOLD"
-_CATCH_UP_LINE = re.compile(r"Catching up (\d+)/(\d+) … (\S+)")
 _DAEMON_DOWN = "daemon is not running"
 
 
@@ -256,12 +254,12 @@ def test_non_tty_start_has_no_status_line(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_tty_start_rewrites_one_status_line(
+def test_tty_start_opens_shell_screen_until_close(
     catchup_workspace: tuple[Path, Path, Path],
     daemon_env: dict[str, str],
     tmp_path: Path,
 ) -> None:
-    """TTY start rewrites one Catching up i/n line with the current item name."""
+    """TTY start shows one catch-up row and stays up until the screen is closed."""
     config_path, managed, _target = catchup_workspace
     hold = tmp_path / "catchup.hold"
     hold.write_text("hold\n", encoding="utf-8")
@@ -287,17 +285,19 @@ def test_tty_start_rewrites_one_status_line(
         os.close(slave)
         slave = -1
         chunks: list[bytes] = []
-        text = _read_pty(master, chunks, until="Catching up", proc=proc)
-        assert "Catching up" in text, text
-        assert "\r" in text
-        match = _CATCH_UP_LINE.search(text.replace("\r", "\n"))
-        assert match, text
-        assert int(match.group(1)) >= 1
-        assert int(match.group(2)) >= 1
-        assert match.group(3) in {"shared.txt", "nested"}
-        assert "keep.txt" not in match.group(0)
-        assert str(managed) not in match.group(0)
+        text = _read_pty(master, chunks, until="proj-0", proc=proc)
+        assert "\x1b[?1049h" in text, text
+        assert "daemon start  all projects" in text
+        assert "Catching up" in text
+        assert "shared.txt" in text or "nested" in text
+        assert "keep.txt" not in text
+        assert str(managed) not in text
+        assert proc.poll() is None
         hold.unlink()
+        text = _read_pty(master, chunks, until="Daemon started", proc=proc)
+        assert "q: close" in text
+        assert proc.poll() is None
+        os.write(master, b"q")
         text = _read_pty(master, chunks, until=None, proc=proc)
         assert proc.wait(timeout=_READY_WAIT_S) == 0
         assert "Daemon started" in text
@@ -310,6 +310,7 @@ def test_tty_start_rewrites_one_status_line(
         if proc is not None and proc.poll() is None:
             proc.kill()
             proc.wait(timeout=5)
+        _stop_daemon(config_path, daemon_env)
 
 
 def test_link_check_waits_through_catch_up_instead_of_daemon_down(

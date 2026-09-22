@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 from types import FrameType
@@ -51,6 +51,14 @@ _HOLD_POLL_S = 0.05
 _HOLD_TIMEOUT_S = 60.0
 
 type ProgressFn = Callable[[int, int, str], None]
+
+
+@dataclass
+class _ReloadProgress:
+    """Per-unit timings and shell-screen lines for one reload."""
+
+    durations: dict[str, int]
+    on_line: ProgressCallback | None
 
 
 @dataclass
@@ -115,7 +123,7 @@ def _handle_live_request(
     runtime: _LiveRuntime,
 ) -> Response:
     if request.get("op") == "reload" and runtime.units:
-        return _reload_changed_units(request_config, request, runtime)
+        return _reload_changed_units(request_config, request, runtime, on_progress)
     if request.get("op") == "check" and runtime.units:
         return _fanout_check(request_config, request, on_progress, runtime)
     unit = route_worker_unit(request, runtime.units, request_config)
@@ -128,7 +136,12 @@ def _handle_live_request(
     return unit.submit(lambda: _run_unit_request(request_config, request, scoped, unit, state))
 
 
-def _reload_changed_units(request_config: Path, request: Request, runtime: _LiveRuntime) -> Response:
+def _reload_changed_units(
+    request_config: Path,
+    request: Request,
+    runtime: _LiveRuntime,
+    on_progress: ProgressCallback | None,
+) -> Response:
     state = _claim_request_state()
     enqueued = state.enqueued if state is not None else time.perf_counter()
     dry_run = bool(request.get("dry_run"))
@@ -151,7 +164,13 @@ def _reload_changed_units(request_config: Path, request: Request, runtime: _Live
             if code != 0 or not affected:
                 response = {"exit_code": code, "stdout": buffer.getvalue()}
             else:
-                response = _reload_units(request_config, runtime, names, durations, buffer.getvalue())
+                response = _reload_units(
+                    request_config,
+                    runtime,
+                    names,
+                    buffer.getvalue(),
+                    _ReloadProgress(durations, on_progress),
+                )
             op_ms, persist_ms = _op_and_persist(duration_ms(started), 0, dry_run=dry_run)
         except Exception as error:
             response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
@@ -172,15 +191,21 @@ def _reload_units(
     request_config: Path,
     runtime: _LiveRuntime,
     names: list[str],
-    durations: dict[str, int],
     stdout: str,
+    progress: _ReloadProgress,
 ) -> Response:
+    on_line = progress.on_line
+    if on_line is not None:
+        for name in names:
+            on_line(f"Waiting · {name}")
     snapshot = load_snapshot(request_config) or {}
     present = {project.managed_project_name: project for project in snapshot.values()}
     for name in list(runtime.units):
         if name not in present:
             runtime.units[name].stop()
             del runtime.units[name]
+            if on_line is not None and name in names:
+                on_line(f"Done · {name}")
     waits = []
     for name in names:
         project = present.get(name)
@@ -188,44 +213,46 @@ def _reload_units(
             continue
         if name in runtime.units:
             unit = runtime.units[name]
-            waits.append(unit.submit_async(lambda current=unit: _timed_catch_up(request_config, current, durations)))
+            waits.append(unit.submit_async(lambda current=unit: _timed_catch_up(request_config, current, progress)))
             continue
         subset = {key: item for key, item in snapshot.items() if item.managed_project_name == name}
-        _timed_new_unit(request_config, subset, runtime, durations)
+        _timed_new_unit(request_config, subset, runtime, progress)
     for wait in waits:
         wait()
     return {"exit_code": 0, "stdout": stdout}
 
 
-def _timed_catch_up(config_path: Path, unit: WorkerUnit, durations: dict[str, int]) -> None:
+def _timed_catch_up(config_path: Path, unit: WorkerUnit, progress: _ReloadProgress) -> None:
     started = time.perf_counter()
     try:
-        _catch_up_unit(config_path, unit)
+        _catch_up_unit(config_path, unit, progress.on_line)
     finally:
-        durations[unit.name] = duration_ms(started)
+        progress.durations[unit.name] = duration_ms(started)
 
 
 def _timed_new_unit(
     config_path: Path,
     subset: dict[str, ConfigProject],
     runtime: _LiveRuntime,
-    durations: dict[str, int],
+    progress: _ReloadProgress,
 ) -> None:
     name = next(iter(subset.values())).managed_project_name if subset else ""
     started = time.perf_counter()
     try:
-        _catch_up_new_unit(config_path, subset, runtime)
+        _catch_up_new_unit(config_path, subset, runtime, progress.on_line)
     finally:
         if name:
-            durations[name] = duration_ms(started)
+            progress.durations[name] = duration_ms(started)
 
 
-def _catch_up_unit(config_path: Path, unit: WorkerUnit) -> None:
+def _catch_up_unit(config_path: Path, unit: WorkerUnit, on_line: ProgressCallback | None) -> None:
     projects = load_set_projects(config_path)
     subset = {key: project for key, project in projects.items() if project.managed_project_name == unit.name}
     if not subset:
+        if on_line is not None:
+            on_line(f"Done · {unit.name}")
         return
-    trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path))
+    trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path), on_line=on_line)
     save_baseline(config_path, trees, subset)
     project = next(iter(subset.values()))
     unit.live.reload(subset, trees_for_project(project, trees))
@@ -235,10 +262,11 @@ def _catch_up_new_unit(
     config_path: Path,
     subset: dict[str, ConfigProject],
     runtime: _LiveRuntime,
+    on_line: ProgressCallback | None,
 ) -> None:
     name = next(iter(subset.values())).managed_project_name if subset else None
     with log_scope("requests", name):
-        trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path))
+        trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path), on_line=on_line)
         save_baseline(config_path, trees, subset)
         built = build_worker_units(subset, trees, config_path, runtime.shutdown)
         for unit in built.values():
@@ -265,47 +293,26 @@ def _fanout_check(
     names = [item.name for item in selected]
     dry_run = bool(request.get("dry_run"))
     persist_at_start = None if dry_run else 0
-    total = sum(len(translate_config_to_mapping_units(item.live.projects)) for item in selected)
-    completed = 0
-    lock = threading.Lock()
-
-    def on_item(_index: int, _total: int, item: str) -> None:
-        nonlocal completed
-        with lock:
-            completed += 1
-            index = completed
-        if on_progress is not None:
-            on_progress(format_status_line("Checking", index, total, item))
-
-    durations: dict[str, int] = {}
+    fanout = _CheckFanout(
+        request_config=request_config,
+        request=request,
+        on_progress=on_progress,
+        total=sum(len(translate_config_to_mapping_units(item.live.projects)) for item in selected),
+    )
+    if on_progress is not None:
+        for unit in selected:
+            on_progress(f"Waiting · {unit.name}")
     response: Response = {"exit_code": 1, "stdout": ""}
     with log_scope("requests"):
         queue_ms = duration_ms(enqueued)
         log_request_boundary("request: start", request, names, RequestTimes(queue_ms, 0, persist_at_start))
         started = time.perf_counter()
-
-        def timed_check(unit: WorkerUnit) -> tuple[list[MappingUnitResults], str]:
-            job_started = time.perf_counter()
-            try:
-                return collect_check_results(request_config, unit.live.projects, request, on_item, total)
-            finally:
-                durations[unit.name] = duration_ms(job_started)
-
         try:
-            waits = [item.submit_async(lambda current=item: timed_check(current)) for item in selected]
-            rows: list[MappingUnitResults] = []
-            verbose: list[str] = []
-            for wait in waits:
-                part_rows, part_stdout = wait()
-                rows.extend(part_rows)
-                if part_stdout:
-                    verbose.append(part_stdout)
-            table = render_check_results(rows, request)
-            response = {"exit_code": 0, "stdout": "".join(verbose) + table}
+            response = _merge_unit_checks(selected, fanout)
         except Exception as error:
             response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
         op_ms, persist_ms = _op_and_persist(duration_ms(started), 0, dry_run=dry_run)
-        listed = [f"{unit_name}:{durations.get(unit_name, 0)}" for unit_name in names]
+        listed = [f"{unit_name}:{fanout.durations.get(unit_name, 0)}" for unit_name in names]
         log_request_boundary(
             "request: done",
             request,
@@ -313,6 +320,73 @@ def _fanout_check(
             RequestTimes(queue_ms, op_ms, persist_ms, response.get("exit_code")),
         )
     return response
+
+
+@dataclass
+class _CheckFanout:
+    """Shared progress and cancel state for one multi-unit check."""
+
+    request_config: Path
+    request: Request
+    on_progress: ProgressCallback | None
+    total: int
+    completed: int = 0
+    skipped: list[str] = field(default_factory=list)
+    durations: dict[str, int] = field(default_factory=dict)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+def _merge_unit_checks(selected: list[WorkerUnit], fanout: _CheckFanout) -> Response:
+    waits = [item.submit_async(lambda current=item: _timed_unit_check(current, fanout)) for item in selected]
+    rows: list[MappingUnitResults] = []
+    verbose: list[str] = []
+    for wait in waits:
+        part_rows, part_stdout = wait()
+        rows.extend(part_rows)
+        if part_stdout:
+            verbose.append(part_stdout)
+    if fanout.skipped and _is_cancelled(fanout.request):
+        return {"exit_code": 1, "stdout": "Stopped\n"}
+    table = render_check_results(rows, fanout.request)
+    return {"exit_code": 0, "stdout": "".join(verbose) + table}
+
+
+def _timed_unit_check(unit: WorkerUnit, fanout: _CheckFanout) -> tuple[list[MappingUnitResults], str]:
+    job_started = time.perf_counter()
+    try:
+        if _is_cancelled(fanout.request):
+            with fanout.lock:
+                fanout.skipped.append(unit.name)
+            return [], ""
+        try:
+            result = collect_check_results(
+                fanout.request_config,
+                unit.live.projects,
+                fanout.request,
+                _check_item_progress(unit.name, fanout),
+                fanout.total,
+            )
+        except Exception:
+            if fanout.on_progress is not None:
+                fanout.on_progress(f"Failed · {unit.name}")
+            raise
+        if fanout.on_progress is not None:
+            fanout.on_progress(f"Done · {unit.name}")
+        return result
+    finally:
+        fanout.durations[unit.name] = duration_ms(job_started)
+
+
+def _check_item_progress(unit_name: str, fanout: _CheckFanout) -> Callable[[int, int, str], None]:
+    def on_item(_index: int, _total: int, item: str) -> None:
+        with fanout.lock:
+            fanout.completed += 1
+            index = fanout.completed
+        if fanout.on_progress is not None:
+            fanout.on_progress(format_status_line("Checking", index, fanout.total, item))
+            fanout.on_progress(f"Checking {item} · {unit_name}")
+
+    return on_item
 
 
 def _run_direct_request(
@@ -456,7 +530,7 @@ def _catch_up_worker(runtime: _LiveRuntime) -> None:
         runtime.shutdown.set()
         return
     try:
-        caught = _catch_up_and_persist(runtime.config_path, on_progress=runtime.state.set_progress)
+        caught = _catch_up_and_persist(runtime.config_path, on_line=runtime.state.emit)
     except Exception as error:
         print(f"catch-up: failed: {error}", flush=True)
         runtime.failed.set()
@@ -480,12 +554,14 @@ def _catch_up_worker(runtime: _LiveRuntime) -> None:
 def _catch_up_and_persist(
     config_path: Path,
     on_progress: ProgressFn | None = None,
+    on_line: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, ConfigProject], BaselineTrees] | None:
     """Catch up committed mappings, or abort when items overlap on a target.
 
     Args:
         config_path: Path to the loaded config file.
         on_progress: Optional catch-up unit/item callback for IPC status lines.
+        on_line: Optional shell-screen progress line.
 
     Returns:
         Projects and baseline trees, or None when start must not continue.
@@ -513,6 +589,7 @@ def _catch_up_and_persist(
         state_dir(config_path),
         load_baseline(config_path),
         on_progress=on_progress,
+        on_line=on_line,
     )
     save_snapshot(config_path, projects)
     save_baseline(config_path, trees, projects)

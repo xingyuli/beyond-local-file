@@ -8,7 +8,12 @@ import click
 
 from beyond_local_file.blfrc import is_global_config_path
 from beyond_local_file.daemon.client import DAEMON_DOWN_HINT, call_daemon
-from beyond_local_file.daemon.ingest import ingest_before_start, prepare_ingest, stdin_is_tty
+from beyond_local_file.daemon.ingest import (
+    affected_unit_names,
+    ingest_before_start,
+    prepare_ingest,
+    stdin_is_tty,
+)
 from beyond_local_file.daemon.process import (
     follow_logs,
     is_running,
@@ -71,19 +76,21 @@ def reload_daemon(config: str | None) -> int:
     if not is_running(result.config_file):
         click.echo(DAEMON_DOWN_HINT)
         return 1
-    code, _file_projects, snapshot_projects, diff = prepare_ingest(result.config_file)
+    code, file_projects, snapshot_projects, diff = prepare_ingest(result.config_file)
     if code != 0:
         return code
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
         return 1
     _warn_and_ack_isolation(result.config_file)
-    if diff is None:
+    if diff is None or file_projects is None or snapshot_projects is None:
         click.echo("Mappings already match the snapshot")
         return 0
+    names = sorted(affected_unit_names(snapshot_projects, file_projects, diff))
+    target = names[0] if len(names) == 1 else "all projects"
     return call_daemon(
         result.config_file,
-        {"op": "reload", "confirmed": bool(diff.removals)},
+        {"op": "reload", "confirmed": bool(diff.removals), "screen_target": target},
     )
 
 

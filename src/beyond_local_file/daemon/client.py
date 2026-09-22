@@ -45,12 +45,17 @@ def stdin_is_tty() -> bool:
         return False
 
 
+def shell_wants_screen() -> bool:
+    """Return whether this shell should draw the shell screen."""
+    return stdin_is_tty() and stdout_is_tty()
+
+
 def call_daemon(config_path: Path, request: dict[str, Any]) -> int:
     """Send *request* to the daemon and print its captured stdout.
 
-    Create, restore, and remove on a terminal open the shell screen and leave
-    it up until the user closes it. Other shells keep one TTY status line.
-    A shell with no terminal prints the result and does not wait.
+    Create, restore, remove, check, and reload on a terminal open the shell
+    screen and leave it up until the user closes it. A shell with no terminal
+    prints the result and does not wait.
 
     Args:
         config_path: Path to the loaded config file.
@@ -62,13 +67,13 @@ def call_daemon(config_path: Path, request: dict[str, Any]) -> int:
     if not is_running(config_path):
         click.echo(DAEMON_DOWN_HINT)
         return 1
-    if _wants_shell_screen(request) and stdin_is_tty() and stdout_is_tty():
+    if _wants_shell_screen(request) and shell_wants_screen():
         return _call_on_shell_screen(config_path, request)
     return _call_with_status_line(config_path, request)
 
 
 def _wants_shell_screen(request: dict[str, Any]) -> bool:
-    return request.get("op") in {"create", "restore", "remove"}
+    return request.get("op") in {"create", "restore", "remove", "check", "reload"}
 
 
 def _call_on_shell_screen(config_path: Path, request: dict[str, Any]) -> int:
@@ -84,7 +89,7 @@ def _call_on_shell_screen(config_path: Path, request: dict[str, Any]) -> int:
 
 
 def _call_with_status_line(config_path: Path, request: dict[str, Any]) -> int:
-    status_line = _StatusLine()
+    status_line = _StatusLine(enabled=request.get("op") not in {"check", "reload"})
     try:
         response = send_when_up(config_path, request, on_progress=status_line.update)
     except OSError:
@@ -106,7 +111,11 @@ def _print_response(response: Response) -> int:
 
 
 def wait_until_ready(config_path: Path) -> int:
-    """Block until the daemon reports phase ready, rendering catch-up progress.
+    """Block until the daemon reports phase ready.
+
+    On a terminal this draws the shell screen through catch-up and leaves it
+    up once the daemon is ready. Closing prints ``Daemon started (pid …)``.
+    A shell with no terminal waits without a status line.
 
     Args:
         config_path: Path to the loaded config file.
@@ -114,17 +123,27 @@ def wait_until_ready(config_path: Path) -> int:
     Returns:
         0 when the daemon is ready, 1 if the connection fails.
     """
-    status_line = _StatusLine()
+    if shell_wants_screen():
+        return _wait_on_shell_screen(config_path)
     try:
-        response = send_when_up(config_path, {"op": "wait"}, on_progress=status_line.update)
+        response = send_when_up(config_path, {"op": "wait"})
     except OSError:
         return 1
-    finally:
-        status_line.clear()
     try:
         return int(response.get("exit_code", 1))
     except (TypeError, ValueError):
         return 1
+
+
+def _wait_on_shell_screen(config_path: Path) -> int:
+    try:
+        session = _retry_while_down(config_path, lambda: open_request_session(config_path, {"op": "wait"}))
+    except OSError:
+        return 1
+    try:
+        return run_shell_screen({"op": "wait"}, session)
+    finally:
+        session.close()
 
 
 def send_when_up(
@@ -198,9 +217,9 @@ def _is_connect_error(error: OSError) -> bool:
 class _StatusLine:
     """Rewrites one status line on a TTY stderr."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, enabled: bool = True) -> None:
         self._width = 0
-        self._tty = stderr_is_tty()
+        self._tty = enabled and stderr_is_tty()
 
     def update(self, line: str) -> None:
         if not self._tty:

@@ -25,6 +25,7 @@ from .store import (
 )
 
 type ProgressFn = Callable[[int, int, str], None]
+type LineFn = Callable[[str], None]
 
 
 @dataclass
@@ -41,6 +42,7 @@ def run_catch_up(
     config_dir: Path,
     baseline: BaselineTrees | None,
     on_progress: ProgressFn | None = None,
+    on_line: LineFn | None = None,
 ) -> BaselineTrees:
     """Apply fresh or update catch-up and return the new baseline trees.
 
@@ -49,17 +51,20 @@ def run_catch_up(
         config_dir: Set run directory passed through to CopyManager.
         baseline: Previous baseline, or None for a first catch-up.
         on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
+        on_line: Optional shell-screen line, one per worker-unit transition.
 
     Returns:
         Newly recorded per-path baseline trees.
     """
     _mark_catchup_started(projects)
+    units = translate_config_to_mapping_units(projects)
+    _announce_waiting(units, on_line)
     if baseline is None:
         print("catch-up: fresh", flush=True)
-        _fresh_catch_up(projects, config_dir, on_progress)
+        _fresh_catch_up(config_dir, on_progress, on_line, units)
     else:
         print("catch-up: update", flush=True)
-        _update_catch_up(projects, config_dir, baseline, on_progress)
+        _update_catch_up(config_dir, baseline, on_progress, on_line, units)
     return record_baseline(projects, previous=baseline)
 
 
@@ -185,32 +190,79 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
             slot[rel] = path_state(False, None, gen, oos=oos)
 
 
+def _announce_waiting(units: list[MappingUnit], on_line: LineFn | None) -> None:
+    if on_line is None:
+        return
+    seen: list[str] = []
+    for unit in units:
+        name = unit.managed_project_name
+        if name in seen:
+            continue
+        seen.append(name)
+        on_line(f"Waiting · {name}")
+
+
+def _mark_unit_done(units: list[MappingUnit], index: int, on_line: LineFn | None) -> None:
+    if on_line is None or not units:
+        return
+    project = units[index - 1].managed_project_name
+    if index == len(units) or units[index].managed_project_name != project:
+        on_line(f"Done · {project}")
+
+
+def _note_item(on_line: LineFn | None, unit: MappingUnit, item_name: str) -> None:
+    if on_line is not None:
+        on_line(f"Catching up {item_name} · {unit.managed_project_name}")
+
+
+def _item_progress(
+    unit: MappingUnit,
+    on_progress: ProgressFn | None,
+    on_line: LineFn | None,
+) -> ProgressFn:
+    def emit(index: int, total: int, item: str) -> None:
+        if on_progress is not None:
+            on_progress(index, total, item)
+        _note_item(on_line, unit, item)
+
+    return emit
+
+
 def _fresh_catch_up(
-    projects: dict[str, ConfigProject],
     config_dir: Path,
     on_progress: ProgressFn | None,
+    on_line: LineFn | None,
+    units: list[MappingUnit],
 ) -> None:
-    units = translate_config_to_mapping_units(projects)
     total = len(units)
     for index, unit in enumerate(units, start=1):
-        _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=on_progress)
+        _fresh_catch_up_unit(
+            unit,
+            config_dir,
+            index=index,
+            total=total,
+            on_progress=_item_progress(unit, on_progress, on_line),
+        )
+        _mark_unit_done(units, index, on_line)
 
 
 def _update_catch_up(
-    projects: dict[str, ConfigProject],
     config_dir: Path,
     baseline: BaselineTrees,
     on_progress: ProgressFn | None,
+    on_line: LineFn | None,
+    units: list[MappingUnit],
 ) -> None:
-    units = translate_config_to_mapping_units(projects)
     total = len(units)
     for index, unit in enumerate(units, start=1):
+        emit = _item_progress(unit, on_progress, on_line)
         if str(unit.target_project_path) not in baseline:
             print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
-            _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=on_progress)
+            _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=emit)
         else:
-            _emit_unit_items(unit, index, total, on_progress)
+            _emit_unit_items(unit, index, total, emit)
             _apply_update_unit(unit, baseline)
+        _mark_unit_done(units, index, on_line)
 
 
 def _fresh_catch_up_unit(

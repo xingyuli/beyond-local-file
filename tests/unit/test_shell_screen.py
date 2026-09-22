@@ -422,3 +422,294 @@ def _failed_stopped(_text: str, frame: str) -> bool:
     placed = _placed(frame)
     row = placed.get(2, "")
     return " failed " in f" {row} " and "Stopped" in frame and _hint(frame) == _HINT_DONE
+
+
+def _two_projects(tmp_path: Path) -> tuple[Path, Path, Path]:
+    alpha = tmp_path / "alpha"
+    beta = tmp_path / "beta"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for path in (alpha, beta, target_a, target_b):
+        path.mkdir()
+    (alpha / "a.txt").write_text("aaa")
+    (beta / "b.txt").write_text("bbb")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {target_a}\nbeta: {target_b}\n")
+    return config_path, target_a, target_b
+
+
+def _normalize(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _run_plain(
+    args: list[str],
+    env: dict[str, str],
+    *,
+    cwd: Path | None = None,
+) -> tuple[int, str, str]:
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "beyond_local_file", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        cwd=str(cwd) if cwd is not None else None,
+        env=_full_env(env),
+        text=True,
+    )
+    stdout, stderr = proc.communicate(timeout=_WAIT_S)
+    return proc.returncode or 0, stdout, stderr
+
+
+def _unit_rows(frame: str, count: int) -> list[str]:
+    placed = _placed(frame)
+    return [placed.get(index, "") for index in range(2, 2 + count)]
+
+
+def _rows_show(names: list[str], *, header: str, hint: str = _HINT_DONE) -> FrameCheck:
+    def predicate(_text: str, frame: str) -> bool:
+        if _placed(frame).get(1, "") != header or _hint(frame) != hint:
+            return False
+        rows = _unit_rows(frame, len(names))
+        return all(
+            name in row and re.search(r" (waiting|working|done|failed) ", f" {row} ") and re.search(r"\d+\.\ds", row)
+            for name, row in zip(names, rows, strict=True)
+        )
+
+    return predicate
+
+
+def _no_screen(text: str) -> bool:
+    return _ALT_ON not in text and _HINT_DONE not in text and _HINT_RUNNING not in text
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_link_check_shows_one_row_per_worker_unit_then_prints_the_table(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A TTY check keeps one row per worker unit, then prints the same table as a pipe."""
+    config_path, _target_a, _target_b = _two_projects(tmp_path)
+    with daemon_running(config_path, isolated_home):
+        code, plain, plain_err = _run_plain(["--config", str(config_path), "link", "check"], isolated_home)
+        assert code == 0, plain + plain_err
+        assert _no_screen(plain + plain_err)
+        with _pty_cli(
+            ["--config", str(config_path), "link", "check"],
+            isolated_home,
+            tmp_path,
+        ) as (proc, master, chunks):
+            text = _wait(master, chunks, proc, _rows_show(["alpha", "beta"], header="link check  all projects"))
+            assert proc.poll() is None
+            assert _ALT_ON in text
+            assert "Ctrl+C: stop" in text or _HINT_DONE in text
+            frame = _last_frame(text)
+            assert "a.txt" in frame or "b.txt" in frame
+            joined = "\n".join(_unit_rows(frame, 2))
+            assert "alpha" in joined and "beta" in joined
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert _normalize(_after_exit(text)) == _normalize(plain)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_link_check_of_one_project_shows_that_row(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A named check uses one row and the header names that project."""
+    config_path, _target_a, _target_b = _two_projects(tmp_path)
+    with daemon_running(config_path, isolated_home):
+        code, plain, plain_err = _run_plain(
+            ["--config", str(config_path), "link", "check", "alpha"],
+            isolated_home,
+        )
+        assert code == 0, plain + plain_err
+        with _pty_cli(
+            ["--config", str(config_path), "link", "check", "alpha"],
+            isolated_home,
+            tmp_path,
+        ) as (proc, master, chunks):
+            text = _wait(master, chunks, proc, _rows_show(["alpha"], header="link check  alpha"))
+            frame = _last_frame(text)
+            assert not re.search(r"beta  (waiting|working|done|failed)", frame)
+            assert proc.poll() is None
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert _normalize(_after_exit(text)) == _normalize(plain)
+        assert "beta" not in plain
+
+
+def _wait_exit(master: int, chunks: list[bytes], proc: subprocess.Popen[bytes]) -> tuple[int, str]:
+    deadline = time.monotonic() + _WAIT_S
+    while time.monotonic() < deadline:
+        _drain(master, chunks)
+        code = proc.poll()
+        if code is not None:
+            time.sleep(0.1)
+            return code, _drain(master, chunks)
+        time.sleep(0.05)
+    raise AssertionError(_drain(master, chunks)[-2000:])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_daemon_start_shows_one_row_per_worker_unit(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A TTY start shows one catch-up row per project and stays up at ready."""
+    config_path, _target_a, _target_b = _two_projects(tmp_path)
+    hold = tmp_path / "catchup.hold"
+    hold.write_text("1", encoding="utf-8")
+    env = {**isolated_home, "BLF_TEST_CATCHUP_HOLD": str(hold)}
+    try:
+        with _pty_cli(["--config", str(config_path), "daemon", "start"], env, tmp_path) as (proc, master, chunks):
+            text = _wait(
+                master,
+                chunks,
+                proc,
+                _rows_show(["alpha", "beta"], header="daemon start  all projects", hint=_HINT_RUNNING),
+            )
+            assert proc.poll() is None
+            assert _ALT_ON in text
+            assert "a.txt" in text or "b.txt" in text
+            hold.unlink()
+            _wait(
+                master,
+                chunks,
+                proc,
+                lambda _text, frame: "Daemon started (pid " in frame and _hint(frame) == _HINT_DONE,
+            )
+            assert proc.poll() is None
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert "Daemon started (pid " in _after_exit(text)
+    finally:
+        hold.unlink(missing_ok=True)
+        stop_daemon(config_path, isolated_home)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_reload_shows_one_row_per_affected_unit(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A reload that reaches the daemon shows the affected unit, then its result."""
+    plain_root = tmp_path / "plain"
+    tty_root = tmp_path / "tty"
+    plain_root.mkdir()
+    tty_root.mkdir()
+    plain_config, plain_target, plain_other = _two_projects(plain_root)
+    tty_config, tty_target, tty_other = _two_projects(tty_root)
+    plain_extra = plain_root / "target-a2"
+    tty_extra = tty_root / "target-a2"
+    plain_extra.mkdir()
+    tty_extra.mkdir()
+    try:
+        start_daemon(plain_config, isolated_home)
+        plain_config.write_text(f"alpha:\n  - {plain_target}\n  - {plain_extra}\nbeta: {plain_other}\n")
+        code, plain, plain_err = _run_plain(["--config", str(plain_config), "daemon", "reload"], isolated_home)
+        assert code == 0, plain + plain_err
+        assert _no_screen(plain + plain_err)
+        assert (plain_extra / "a.txt").is_file()
+
+        start_daemon(tty_config, isolated_home)
+        tty_config.write_text(f"alpha:\n  - {tty_target}\n  - {tty_extra}\nbeta: {tty_other}\n")
+        with _pty_cli(["--config", str(tty_config), "daemon", "reload"], isolated_home, tty_root) as (
+            proc,
+            master,
+            chunks,
+        ):
+            text = _wait(master, chunks, proc, _rows_show(["alpha"], header="daemon reload  alpha"))
+            frame = _last_frame(text)
+            assert not re.search(r"beta  (waiting|working|done|failed)", frame)
+            assert proc.poll() is None
+            assert _ALT_ON in text
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert _normalize(_after_exit(text)) == _normalize(plain)
+        assert (tty_extra / "a.txt").is_file()
+    finally:
+        stop_daemon(plain_config, isolated_home)
+        stop_daemon(tty_config, isolated_home)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_reload_that_does_not_send_a_request_stays_plain(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Match, daemon down, and a declined removal print a sentence and do not open a screen."""
+    config_path, target_a, _target_b = _two_projects(tmp_path)
+    with _pty_cli(["--config", str(config_path), "daemon", "reload"], isolated_home, tmp_path) as (
+        proc,
+        master,
+        chunks,
+    ):
+        code, text = _wait_exit(master, chunks, proc)
+    assert code == 1
+    assert "daemon is not running" in text
+    assert _no_screen(text)
+
+    with daemon_running(config_path, isolated_home):
+        with _pty_cli(["--config", str(config_path), "daemon", "reload"], isolated_home, tmp_path) as (
+            proc,
+            master,
+            chunks,
+        ):
+            code, text = _wait_exit(master, chunks, proc)
+        assert code == 0
+        assert "Mappings already match the snapshot" in text
+        assert _no_screen(text)
+
+        config_path.write_text(f"alpha: {target_a}\n")
+        with _pty_cli(["--config", str(config_path), "daemon", "reload"], isolated_home, tmp_path) as (
+            proc,
+            master,
+            chunks,
+        ):
+            deadline = time.monotonic() + _WAIT_S
+            seen = ""
+            while time.monotonic() < deadline and "Apply these mapping removals?" not in seen:
+                seen = _drain(master, chunks)
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            os.write(master, b"n\n")
+            code, text = _wait_exit(master, chunks, proc)
+        assert code == 1
+        assert "Mapping changes were not applied" in text
+        assert _no_screen(text)
+
+
+def test_non_tty_check_start_and_reload_print_the_result_only(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A shell with no terminal prints the result and does not wait for a key."""
+    config_path, target_a, _target_b = _two_projects(tmp_path)
+    code, stdout, stderr = _run_plain(["--config", str(config_path), "daemon", "start"], isolated_home)
+    assert code == 0, stdout + stderr
+    assert "Daemon started" in stdout
+    assert _no_screen(stdout + stderr)
+    try:
+        code, stdout, stderr = _run_plain(["--config", str(config_path), "link", "check"], isolated_home)
+        assert code == 0, stdout + stderr
+        assert "alpha" in stdout and "beta" in stdout
+        assert _no_screen(stdout + stderr)
+        assert "Checking " not in stdout + stderr
+
+        code, stdout, stderr = _run_plain(["--config", str(config_path), "daemon", "reload"], isolated_home)
+        assert code == 0, stdout + stderr
+        assert "Mappings already match the snapshot" in stdout
+        assert _no_screen(stdout + stderr)
+
+        extra = tmp_path / "target-a2"
+        extra.mkdir()
+        config_path.write_text(f"alpha:\n  - {target_a}\n  - {extra}\nbeta: {tmp_path / 'target-b'}\n")
+        code, stdout, stderr = _run_plain(["--config", str(config_path), "daemon", "reload"], isolated_home)
+        assert code == 0, stdout + stderr
+        assert _no_screen(stdout + stderr)
+        assert (extra / "a.txt").is_file()
+    finally:
+        stop_daemon(config_path, isolated_home)

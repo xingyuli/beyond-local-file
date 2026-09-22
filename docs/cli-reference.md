@@ -76,7 +76,9 @@ blf daemon start
 5. If the set's mapping files differ from the mapping snapshot, classifies the diff in the foreground (same as `reload`): removals print one plan and require confirmation; adds apply after. Decline (or no TTY when removals exist) starts nothing.
 6. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths. Same rule inside one project's subpaths.
 7. Warns about out-of-sync paths and held copies and asks you to continue.
-8. Binds IPC, then catch-up. `daemon start` stays in the foreground until phase `ready`. On a TTY it rewrites one status line (`Catching up i/n … item`). Non-TTY has no status line. Live observation starts only in `ready`.
+8. Binds IPC, then catch-up. `daemon start` stays in the foreground until phase `ready`. On a terminal it opens a shell screen through catch-up and leaves it up when the daemon is ready. The header names `daemon start` and all projects. One row per managed project being caught up: state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. The header, the rows, and the hint stay put. When the daemon is ready, the output is `Daemon started (pid …)`. Closing the screen restores the terminal and prints that same line. Without a terminal there is no screen and no status line. Live observation starts only in `ready`.
+
+   While catch-up runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the daemon is ready: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
 9. Catch-up: with no baseline, every projection is made to match the managed project (fresh catch-up). With a baseline, only paths that differ are queued (update catch-up). Leftover blf symlinks to the correct managed item become copies. Nested symlink nodes inside a directory item are copied as symlinks.
 
 ### Examples
@@ -91,11 +93,13 @@ blf -c custom.yml daemon start
 
 ### Output
 
-On a TTY, one rewritten status line, then:
+On a terminal, the shell screen stays up until you close it, then:
 
 ```
 Daemon started (pid 12345)
 ```
+
+Without a terminal, that line is printed with no screen.
 
 If a mapping file is already loaded by another running set:
 
@@ -249,9 +253,19 @@ blf daemon reload
 3. If the file already matches the snapshot: `Mappings already match the snapshot`.
 4. Removals print one plan (project-remove, then target-remove, then item-remove, inner diffs subsumed) and require confirmation. Adds apply automatically after.
 5. Decline commits nothing. No TTY when removals exist also commits nothing.
-6. Warns about out-of-sync paths and held copies and asks you to continue.
+6. Warns about out-of-sync paths and held copies and asks you to continue. That question stays a plain prompt. Answering it does not open a screen by itself.
 
 The daemon does not watch mapping files. Internal mapping edits from `revlink` / `remove` do not go through reload.
+
+#### Terminal
+
+On a terminal, a reload that sends a request to the daemon opens a shell screen and leaves it up until you close it. The header names `daemon reload` and that managed project, or all projects when more than one worker unit's mappings changed. One row per worker unit whose mappings changed: state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. The header, the rows, and the hint stay put. Closing the screen restores the terminal and prints reload's result.
+
+While the request runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the reload finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+
+A reload that never reaches the daemon stays plain text and does not open a screen. That includes `Mappings already match the snapshot`, a daemon that is not running, and a removal confirm that is declined (`Mapping changes were not applied`). The removal confirm stays a plain prompt before any request is sent.
+
+Without a terminal, reload prints its result only and does not wait for a key.
 
 ### Examples
 
@@ -346,7 +360,13 @@ blf link SUBCOMMAND [OPTIONS] [ARGUMENTS]
 
 Check the status of copy projections and Git exclude entries for each project and target location. This is a daemon query: it hashes managed vs target **now**. Match is in-sync. Mismatch is labeled from the baseline when one exists (managed-changed / target-changed / both-changed). There is no `sync-state.yml`.
 
-If the process is in phase `catch-up`, check waits until `ready` rather than failing. On a TTY the shell rewrites one status line (`Checking i/n … item`), then prints the table. Non-TTY: table only. `--format verbose` stays line-oriented.
+If the process is in phase `catch-up`, check waits until `ready` rather than failing.
+
+On a terminal, `link check` opens a shell screen and leaves it up until you close it. The header names `link check` and the project, or all projects when no project is given. One row per worker unit that request uses: managed project, state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. Rows fill in as units finish. The header, the rows, and the hint stay put. The output scrolls. When the check finishes, the plain table fills the output. `--format verbose` stays line-oriented in that output. Closing the screen restores the terminal and prints that same result.
+
+While the check runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the check finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+
+Without a terminal, `link check` prints the table only and does not wait for a key.
 
 ### Syntax
 

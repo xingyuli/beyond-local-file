@@ -311,15 +311,17 @@ def spawn_and_wait(config_path: Path) -> int:
         click.echo("Error: daemon failed to start")
         _echo_log_tail(log_file)
         return 1
-    from .client import wait_until_ready  # noqa: PLC0415
+    from .client import shell_wants_screen, wait_until_ready  # noqa: PLC0415
 
+    wants_screen = shell_wants_screen()
     if wait_until_ready(config_path) != 0 or proc.poll() is not None:
         _clear_runtime_files(config_path)
         click.echo("Error: daemon failed to start")
         _echo_log_tail(log_file)
         return 1
 
-    click.echo(f"Daemon started (pid {proc.pid})")
+    if not wants_screen:
+        click.echo(f"Daemon started (pid {proc.pid})")
     return 0
 
 
