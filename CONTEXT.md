@@ -45,7 +45,7 @@ _Avoid_: global config, .blfrc
 _Avoid_: hub-local .blf, state beside config.yml
 
 **Set run directory**:
-``~/.blf/run/global/`` for the global set; ``~/.blf/run/file-<sha256 of the resolved mapping yaml>/`` for a singleton set. Pid, port, log, mapping snapshot, and item-document baseline live here.
+``~/.blf/run/global/`` for the global set; ``~/.blf/run/file-<sha256 of the resolved mapping yaml>/`` for a singleton set. Pid, port, the idle log, the request log, the daemon log, mapping snapshot, and item-document baseline live here.
 _Avoid_: .blf next to config.yml
 
 **Daemon**:
@@ -67,6 +67,22 @@ _Avoid_: starting, booting, warming
 **Shell**:
 A blf command that sends a request to the daemon. It does not copy, delete, or write mappings itself.
 _Avoid_: Client, wrapper, frontend
+
+**Idle log**:
+The record of idle observe. A tick that finds a change or takes time to look is recorded, together with the apply, held copy, and baseline persist that tick causes. A quick tick that finds nothing is absent.
+_Avoid_: request log, daemon log, heartbeat
+
+**Request log**:
+The record of one shell request and every step of the work that request caused, including a reload's catch-up. Each entry names the worker unit. Queue wait, the operation, and persist are separate times.
+_Avoid_: idle log, daemon log, access log
+
+**Daemon log**:
+The record of the daemon process lifecycle: coming up, the catch-up that belongs to start, ready, going down, and a failure that is neither an idle tick nor a shell request.
+_Avoid_: combined log, the single worker log, idle log, request log
+
+**Shell screen**:
+The full-screen view a shell draws until the user closes it. A header names the command, one row per worker unit that request uses, and the plain result. The shell's questions are lines of that output. An input line appears only while a question is open. A line at the very bottom lists the key combinations that apply right now. When a question decides whether a request is sent, the screen is already up. Closing it leaves the plain result in the terminal. A shell with no terminal has none. ``daemon stop``, ``upgrade``, and reading logs have none.
+_Avoid_: status line, dashboard, resident screen
 
 **Mapping snapshot**:
 The daemon's last committed mappings for its configuration set, persisted in the set run directory so a crash still has a before-state. Start and reload diff the set's mapping files against it to see external mapping edits.
@@ -158,8 +174,8 @@ One daemon process loads one configuration set. Process state lives in the runti
 
 A yaml file already loaded by a running set is served by that process (``-c`` is not a second watcher). Starting a set that shares a mapping file with another running set is an error.
 
-``link check`` hashes managed vs target now. A check with no project name is a job on every worker unit; the table is the merge. With a project name, that one unit. Progress is one rewritten TTY status line (mapping unit ``i/n``, current item name, no per-file paths), filled as worker units finish mapping units. The table is printed once at the end. Non-TTY: no status line, final table only.
+``link check`` hashes managed vs target now. A check with no project name is a job on every worker unit; the table is the merge. With a project name, that one unit. On a terminal the shell screen shows one row per worker unit that request uses, then the table. Closing the screen prints the table again. Non-TTY: table only.
 
-The set's ``daemon.log`` records each served shell request (op, PATH, cwd, start, end, exit), mutating-op steps with durations, and observe/persist work (live tick / item scan, baseline record, snapshot and item-document write) with duration and size context. Request stdout captured for the CLI is not a substitute. See 0015, 0020, and 0021.
+Idle observe is recorded in the idle log. A shell request and every step it caused are recorded in the request log. Process start, the catch-up that belongs to start, ready, and stop are recorded in the daemon log. Stamps are written at millisecond resolution. ``blf logs`` follows the merge and prefixes each line with its record. Request stdout captured for the CLI is not a substitute. See 0015, 0020, 0021, and 0022.
 
-The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating shells routed by mapping snapshot / contribution source. A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. Mutating TTY: ``Waiting …`` if that worker unit is busy, then the op, then ``Writing baseline …``. Non-TTY: no status line, result at the end. After persist, live observation continues from the new baseline without a reload scan. ``daemon reload`` catch-up jobs run only for worker units whose mappings changed. Two worker units splicing the same mapping yaml or ``.git/info/exclude`` take a lock per file so both writes survive.
+The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating shells routed by mapping snapshot / contribution source. A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. On a terminal the shell screen stays up for the request. The hint lists the keys that apply: cancel before a request is sent, stop while it runs, confirm or continue while the stop question is open, close after it finishes. A confirmed stop cancels a running request. Closing a finished screen prints the plain result. Non-TTY: result only, no screen. See 0023. After persist, live observation continues from the new baseline without a reload scan. ``daemon reload`` catch-up jobs run only for worker units whose mappings changed. Two worker units splicing the same mapping yaml or ``.git/info/exclude`` take a lock per file so both writes survive.

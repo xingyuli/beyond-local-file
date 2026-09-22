@@ -21,7 +21,7 @@ from beyond_local_file.daemon.process import singleton_set_id, state_dir
 _WORKER_FLAG = "--worker"
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
-_LOG_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}) (.*)$")
+_LOG_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}) (.*)$")
 
 
 def _invoke(args: list[str], env: dict[str, str] | None = None) -> Result:
@@ -71,7 +71,7 @@ def _pid_path(config_path: Path) -> Path:
 
 
 def _log_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "daemon.log"
+    return _state_dir(config_path) / "logs" / "daemon.log"
 
 
 def _stamped_log_messages(log_file: Path) -> list[str]:
@@ -194,8 +194,8 @@ def test_daemon_start_backgrounds_one_process_stop_status_and_logs(
             "beyond_local_file",
             "--config",
             str(config_path),
-            "daemon",
             "logs",
+            "daemon",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -236,28 +236,25 @@ def test_daemon_log_lines_begin_with_local_offset_timestamp(
     daemon_workspace: tuple[Path, list[Path], list[Path]],
     daemon_env: dict[str, str],
 ) -> None:
-    """After start, worker log lines begin with a local-offset timestamp then the message."""
-    config_path, managed_dirs, _targets = daemon_workspace
+    """After start, daemon-log lines begin with a millisecond local-offset stamp."""
+    config_path, _managed_dirs, _targets = daemon_workspace
     log_file = _log_path(config_path)
 
     started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
     assert started.exit_code == 0, started.output
-    _wait_until(lambda: log_file.exists() and "daemon worker starting" in log_file.read_text(encoding="utf-8"))
-
-    (managed_dirs[0] / "shared.txt").write_text("from-hub")
-    _wait_until(lambda: "live:" in log_file.read_text(encoding="utf-8"))
+    _wait_until(lambda: log_file.exists() and "daemon ready" in log_file.read_text(encoding="utf-8"))
 
     messages = _stamped_log_messages(log_file)
     assert "daemon worker starting" in messages
     assert any(message.startswith("catch-up:") for message in messages)
-    assert any(message.startswith("live:") for message in messages)
+    assert "daemon ready" in messages
 
 
 def test_daemon_logs_prints_stamped_lines_unchanged(
     daemon_workspace: tuple[Path, list[Path], list[Path]],
     daemon_env: dict[str, str],
 ) -> None:
-    """daemon logs reprints daemon.log lines as stored, including the timestamp prefix."""
+    """blf logs daemon reprints logs/daemon.log lines as stored, including the stamp."""
     config_path, _managed, _targets = daemon_workspace
     log_file = _log_path(config_path)
 
@@ -276,8 +273,8 @@ def test_daemon_logs_prints_stamped_lines_unchanged(
             "beyond_local_file",
             "--config",
             str(config_path),
-            "daemon",
             "logs",
+            "daemon",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -615,7 +612,10 @@ def test_daemon_start_writes_state_under_runtime_home_file_hash(
     assert (run_dir / "daemon.pid").is_file()
     assert (run_dir / "daemon.port").is_file()
     assert (run_dir / "daemon.ready").is_file()
-    assert (run_dir / "daemon.log").is_file()
+    assert (run_dir / "logs" / "daemon.log").is_file()
+    assert (run_dir / "logs" / "idle.log").is_file()
+    assert (run_dir / "logs" / "requests.log").is_file()
+    assert not (run_dir / "daemon.log").exists()
     assert (run_dir / "mapping-snapshot.yml").is_file()
     assert (run_dir / "baseline").is_dir()
     assert any((run_dir / "baseline").rglob("*"))

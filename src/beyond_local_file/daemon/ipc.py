@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,7 +14,14 @@ from pathlib import Path
 from threading import Event, Lock
 from typing import Any, Literal
 
-from .log import duration_ms, worker_print
+from .log import (
+    RequestLogState,
+    bind_request_state,
+    duration_ms,
+    log_scope,
+    reset_request_state,
+    worker_print,
+)
 from .process import port_path
 
 type Request = dict[str, Any]
@@ -141,6 +150,83 @@ def send_request(
             return message
     finally:
         client.close()
+
+
+class RequestSession:
+    """One open shell request. Progress is read here; cancel is written here."""
+
+    def __init__(self, conn: socket.socket) -> None:
+        self._conn = conn
+        self._buffer = bytearray()
+        self._send_lock = threading.Lock()
+
+    def cancel(self) -> None:
+        """Ask the daemon to stop this request before the operation starts."""
+        with self._send_lock:
+            try:
+                _write_json(self._conn, {"cancel": True})
+            except OSError:
+                return
+
+    def read_message(self) -> Request | None:
+        """Return the next JSON object, or None when the daemon closes.
+
+        Returns:
+            A progress or response object, or None on EOF.
+        """
+        while True:
+            message = _pop_json_line(self._buffer)
+            if message is not None:
+                return message
+            try:
+                ready, _, _ = select.select([self._conn], [], [], 0.2)
+            except (OSError, ValueError):
+                return None
+            if not ready:
+                continue
+            try:
+                piece = self._conn.recv(_RECV_SIZE)
+            except TimeoutError:
+                continue
+            except OSError:
+                return None
+            if not piece:
+                return None
+            self._buffer.extend(piece)
+
+    def close(self) -> None:
+        """Close the request socket."""
+        try:
+            self._conn.close()
+        except OSError:
+            return
+
+
+def open_request_session(config_path: Path, request: Request) -> RequestSession:
+    """Open one request connection and send *request*.
+
+    Args:
+        config_path: Path to the loaded config file.
+        request: JSON-serialisable request object.
+
+    Returns:
+        A session that reads progress and can send cancel.
+
+    Raises:
+        OSError: If the port file is missing or the connection fails.
+    """
+    port = _read_port(config_path)
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        client.settimeout(_CLIENT_TIMEOUT_S)
+        client.connect((_HOST, port))
+        client.settimeout(None)
+        _write_json(client, request)
+    except OSError:
+        client.close()
+        raise
+    return RequestSession(client)
 
 
 @dataclass
@@ -289,6 +375,40 @@ def _write_progress(item: _Pending, state: WorkerState) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class RequestTimes:
+    """Queue, operation, and persist times for one request boundary line."""
+
+    queue_ms: int
+    op_ms: int
+    persist_ms: int | None = None
+    exit_code: object | None = None
+
+
+def log_request_boundary(label: str, request: Request, units: list[str], times: RequestTimes) -> None:
+    """Write ``request: start`` or ``request: done`` with the request's times.
+
+    Args:
+        label: ``request: start`` or ``request: done``.
+        request: Shell request being served.
+        units: Worker-unit names. A duration suffix (``name:12``) lists that
+            unit's own time on a multi-unit check or reload.
+        times: Queue, operation, and persist milliseconds. ``persist_ms`` is
+            None on a dry-run. ``exit_code`` is omitted on the start line.
+    """
+    fields = _request_log_fields(request)
+    fields["queue_ms"] = times.queue_ms
+    fields["op_ms"] = times.op_ms
+    if times.persist_ms is not None:
+        fields["persist_ms"] = times.persist_ms
+    if times.exit_code is not None:
+        fields["exit"] = times.exit_code
+    text = _format_fields(label, fields)
+    if units:
+        text = f"{text} {' '.join(f'unit={name}' for name in units)}"
+    worker_print(text)
+
+
 def _run_and_reply(
     conn: socket.socket,
     request: Request,
@@ -302,17 +422,73 @@ def _run_and_reply(
         except OSError:
             return
 
-    fields = _request_log_fields(request)
-    worker_print(_format_fields("request: start", fields))
-    started = time.perf_counter()
+    # The accept thread stays inside the handler, so a stop is read here.
+    stop_watch = threading.Event()
+    watched = request.get("op") in {"create", "restore", "remove"}
+    if watched:
+        cancel = threading.Event()
+        request = {**request, "_cancel": cancel}
+        threading.Thread(
+            target=_watch_cancel,
+            args=(conn, cancel, stop_watch),
+            name="blf-cancel",
+            daemon=True,
+        ).start()
+    state = RequestLogState(enqueued=time.perf_counter())
+    token = bind_request_state(state)
     _run_hook(before_request)
     try:
-        response = handler(config_path, request, emit_progress)
-    except Exception as error:
-        response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
-    done = {**fields, "exit": response.get("exit_code"), "duration_ms": duration_ms(started)}
-    worker_print(_format_fields("request: done", done))
+        try:
+            response = handler(config_path, request, emit_progress)
+        except Exception as error:
+            response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
+        if not state.logged:
+            _log_unlogged_request(request, response, state)
+    finally:
+        stop_watch.set()
+        reset_request_state(token)
     _reply(conn, response)
+
+
+def _log_unlogged_request(request: Request, response: Response, state: RequestLogState) -> None:
+    dry_run = bool(request.get("dry_run"))
+    elapsed = duration_ms(state.enqueued)
+    persist_ms = None if dry_run else 0
+    with log_scope("requests"):
+        log_request_boundary("request: start", request, [], RequestTimes(0, 0, persist_ms))
+        log_request_boundary(
+            "request: done",
+            request,
+            [],
+            RequestTimes(0, elapsed, persist_ms, response.get("exit_code")),
+        )
+
+
+def _watch_cancel(conn: socket.socket, cancel: threading.Event, stop: threading.Event) -> None:
+    buffer = bytearray()
+    while not stop.is_set() and not cancel.is_set():
+        try:
+            ready, _, _ = select.select([conn], [], [], 0.2)
+        except (OSError, ValueError):
+            return
+        if not ready:
+            continue
+        try:
+            piece = conn.recv(_RECV_SIZE)
+        except TimeoutError:
+            continue
+        except OSError:
+            return
+        if not piece:
+            return
+        buffer.extend(piece)
+        while True:
+            message = _pop_json_line(buffer)
+            if message is None:
+                break
+            if message.get("cancel") is True:
+                cancel.set()
+                return
 
 
 def _reply(conn: socket.socket, response: Response) -> None:
@@ -377,6 +553,23 @@ def _read_port(config_path: Path) -> int:
 
 def _write_json(conn: socket.socket, payload: Request | Response) -> None:
     conn.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+
+
+def _pop_json_line(buffer: bytearray) -> Request | None:
+    newline = buffer.find(b"\n")
+    if newline < 0:
+        return None
+    line = bytes(buffer[:newline])
+    del buffer[: newline + 1]
+    if not line:
+        return _pop_json_line(buffer)
+    try:
+        data = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise OSError("daemon request channel returned invalid JSON") from error
+    if not isinstance(data, dict):
+        raise OSError("daemon request is not a JSON object")
+    return data
 
 
 def _read_json(conn: socket.socket, buffer: bytearray | None = None) -> Request | Response:

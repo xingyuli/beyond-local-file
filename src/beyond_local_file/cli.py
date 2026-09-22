@@ -16,7 +16,14 @@ from . import __version__
 from .completion import complete_project_names
 from .contribution import contribution_owner, projects_targeting
 from .daemon.client import call_daemon
-from .operations.daemon import follow_daemon_logs, reload_daemon, start_daemon, status_daemon, stop_daemon
+from .operations.daemon import (
+    follow_blf_logs,
+    follow_daemon_logs,
+    reload_daemon,
+    start_daemon,
+    status_daemon,
+    stop_daemon,
+)
 from .operations.upgrade import run_upgrade
 from .options import OutputFormat
 from .project_processor import load_config_projects
@@ -117,6 +124,18 @@ def remove(ctx, path, dry_run):
     )
 
 
+@cli.command("logs")
+@click.argument(
+    "record",
+    required=False,
+    type=click.Choice(["requests", "idle", "daemon"]),
+)
+@click.pass_context
+def logs(ctx, record):
+    """Follow idle, request, and daemon logs. Ctrl-C stops following, not the daemon."""
+    ctx.exit(follow_blf_logs(ctx.obj["config"], record))
+
+
 @cli.group()
 def daemon():
     """Run one background process that catch-up's copy projections."""
@@ -148,7 +167,7 @@ def daemon_status(ctx):
 @daemon.command("logs")
 @click.pass_context
 def daemon_logs(ctx):
-    """Follow the daemon log. Ctrl-C stops following, not the daemon."""
+    """Retired. Use ``blf logs``."""
     ctx.exit(follow_daemon_logs(ctx.obj["config"]))
 
 

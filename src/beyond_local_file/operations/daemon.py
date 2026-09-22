@@ -10,7 +10,7 @@ from beyond_local_file.blfrc import is_global_config_path
 from beyond_local_file.daemon.client import DAEMON_DOWN_HINT, call_daemon
 from beyond_local_file.daemon.ingest import ingest_before_start, prepare_ingest, stdin_is_tty
 from beyond_local_file.daemon.process import (
-    follow_log,
+    follow_logs,
     is_running,
     overlapping_running_set,
     print_status,
@@ -120,10 +120,27 @@ def status_daemon(config: str | None) -> int:
 
 
 def follow_daemon_logs(config: str | None) -> int:
-    """Follow the daemon log until interrupted.
+    """Tell the caller that ``daemon logs`` is retired.
+
+    The command does not open or follow a log file.
+
+    Args:
+        config: Ignored. Kept so existing callers can pass ``--config``.
+
+    Returns:
+        0 after naming ``blf logs``.
+    """
+    del config
+    click.echo("daemon logs is retired; use blf logs")
+    return 0
+
+
+def follow_blf_logs(config: str | None, record: str | None = None) -> int:
+    """Follow one worker log, or the three logs merged by stamp.
 
     Args:
         config: Optional ``--config`` path.
+        record: ``requests``, ``idle``, ``daemon``, or None to merge all three.
 
     Returns:
         Process exit code.
@@ -131,7 +148,7 @@ def follow_daemon_logs(config: str | None) -> int:
     result = load_config_projects(config)
     if result is None:
         return 1
-    return follow_log(result.config_file)
+    return follow_logs(result.config_file, record)
 
 
 def _warn_and_ack_isolation(config_path: Path) -> None:

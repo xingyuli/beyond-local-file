@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TextIO
 
 import click
 
@@ -23,7 +25,11 @@ from beyond_local_file.blfrc import (
 from beyond_local_file.constants import HUB_LOCAL_DIR
 
 PID_NAME = "daemon.pid"
+LOG_DIRECTORY = "logs"
 LOG_NAME = "daemon.log"
+_LOG_RECORDS = ("daemon", "idle", "requests")
+_LOG_RECORD_COLOR = {"daemon": "36", "idle": "33", "requests": "32"}
+_STAMP_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 READY_NAME = "daemon.ready"
 PORT_NAME = "daemon.port"
 MAPPING_FILES_NAME = "mapping-files"
@@ -149,6 +155,18 @@ def pid_path(config_path: Path) -> Path:
     return state_dir(config_path) / PID_NAME
 
 
+def logs_dir(config_path: Path) -> Path:
+    """Return the directory that holds the idle, request, and daemon logs.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        ``logs`` inside the set run directory.
+    """
+    return state_dir(config_path) / LOG_DIRECTORY
+
+
 def log_path(config_path: Path) -> Path:
     """Return the daemon log path.
 
@@ -156,9 +174,22 @@ def log_path(config_path: Path) -> Path:
         config_path: Path to the loaded config file.
 
     Returns:
-        Path to ``daemon.log``.
+        Path to ``logs/daemon.log``.
     """
-    return state_dir(config_path) / LOG_NAME
+    return logs_dir(config_path) / LOG_NAME
+
+
+def record_log_path(config_path: Path, record: str) -> Path:
+    """Return one worker log path.
+
+    Args:
+        config_path: Path to the loaded config file.
+        record: ``daemon``, ``idle``, or ``requests``.
+
+    Returns:
+        Path to that log file.
+    """
+    return logs_dir(config_path) / f"{record}.log"
 
 
 def ready_path(config_path: Path) -> Path:
@@ -340,21 +371,38 @@ def print_status(config_path: Path) -> int:
     return 0
 
 
-def follow_log(config_path: Path) -> int:
-    """Print the daemon log and follow new lines until interrupted.
+def follow_logs(config_path: Path, record: str | None = None) -> int:
+    """Follow one worker log, or the three logs merged by their write-time stamp.
 
-    Ctrl-C stops following; the daemon process is left running.
+    Ctrl-C stops following; the daemon process is left running. A merged follow
+    prefixes each stored line with ``[daemon]``, ``[idle]``, or ``[requests]``.
+    The name is colored when stdout is a terminal. A pipe keeps the prefix and
+    drops the color. A single-file follow prints stored lines with no prefix.
 
     Args:
         config_path: Path to the loaded config file.
+        record: ``daemon``, ``idle``, ``requests``, or None to merge all three.
 
     Returns:
-        0 on a clean interrupt, 1 if the log file is missing.
+        0 on a clean interrupt, 1 if the requested log is missing.
     """
-    path = log_path(config_path)
+    if record is None:
+        paths = {name: record_log_path(config_path, name) for name in _LOG_RECORDS}
+        if not any(path.exists() for path in paths.values()):
+            click.echo("Daemon log not found")
+            return 1
+        return _follow_merged(paths)
+    if record not in _LOG_RECORDS:
+        click.echo("Daemon log not found")
+        return 1
+    path = record_log_path(config_path, record)
     if not path.exists():
         click.echo("Daemon log not found")
         return 1
+    return _follow_one(path)
+
+
+def _follow_one(path: Path) -> int:
     try:
         with open(path, encoding="utf-8") as handle:
             while True:
@@ -365,6 +413,59 @@ def follow_log(config_path: Path) -> int:
                     time.sleep(_FOLLOW_POLL_S)
     except KeyboardInterrupt:
         return 0
+
+
+def _follow_merged(paths: dict[str, Path]) -> int:
+    handles: dict[str, TextIO] = {}
+    try:
+        while True:
+            _open_log_handles(handles, paths)
+            batch: list[tuple[str, int, int, str, str]] = []
+            sequence = 0
+            for name in _LOG_RECORDS:
+                handle = handles.get(name)
+                if handle is None:
+                    continue
+                while True:
+                    line = handle.readline()
+                    if not line:
+                        break
+                    batch.append((_stamp_key(line), _LOG_RECORDS.index(name), sequence, name, line))
+                    sequence += 1
+            if not batch:
+                time.sleep(_FOLLOW_POLL_S)
+                continue
+            batch.sort()
+            for _stamp, _order, _sequence, name, line in batch:
+                _echo_merged(name, line)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+
+def _open_log_handles(handles: dict[str, TextIO], paths: dict[str, Path]) -> None:
+    for name, path in paths.items():
+        if name in handles or not path.exists():
+            continue
+        handles[name] = open(path, encoding="utf-8")  # noqa: SIM115
+
+
+def _stamp_key(line: str) -> str:
+    token = line.split(" ", 1)[0]
+    if _STAMP_PREFIX.match(token):
+        return token
+    return ""
+
+
+def _echo_merged(record: str, line: str) -> None:
+    label = f"[{record}]"
+    colored = sys.stdout.isatty()
+    if colored:
+        code = _LOG_RECORD_COLOR[record]
+        label = f"\033[{code}m{label}\033[0m"
+    click.echo(f"{label} {line}", nl=False, color=colored)
 
 
 def write_ready(config_path: Path) -> None:

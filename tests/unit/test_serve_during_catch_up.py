@@ -43,7 +43,7 @@ def _port_path(config_path: Path) -> Path:
 
 
 def _log_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "daemon.log"
+    return _state_dir(config_path) / "logs" / "daemon.log"
 
 
 def _read_pid(config_path: Path) -> int | None:

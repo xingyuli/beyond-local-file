@@ -14,6 +14,7 @@ from beyond_local_file.contribution import contribution_owner, projects_targetin
 from beyond_local_file.model.config import ConfigProject
 
 from .live import LiveSync
+from .log import log_scope
 from .store import BaselineTrees, load_snapshot, save_baseline
 
 IDLE_OBSERVE_S = 15.0
@@ -86,12 +87,13 @@ class WorkerUnit:
         slot: dict[str, object] = {}
 
         def job() -> None:
-            try:
-                slot["value"] = fn()
-            except Exception as error:
-                slot["error"] = error
-            finally:
-                done.set()
+            with log_scope("requests", self.name):
+                try:
+                    slot["value"] = fn()
+                except Exception as error:
+                    slot["error"] = error
+                finally:
+                    done.set()
 
         self._jobs.put(job)
 
@@ -126,8 +128,9 @@ class WorkerUnit:
         self._busy.set()
         try:
             await_idle_hold(self.name)
-            if self.live.tick(reason="idle"):
-                save_baseline(self.config_path, self.live.baseline, self.live.projects)
+            with log_scope("idle", self.name):
+                if self.live.tick(reason="idle"):
+                    save_baseline(self.config_path, self.live.baseline, self.live.projects)
         finally:
             self._busy.clear()
 

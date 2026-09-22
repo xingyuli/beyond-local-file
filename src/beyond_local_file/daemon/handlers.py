@@ -32,7 +32,7 @@ from beyond_local_file.project_processor import (
 from .catchup import record_baseline, record_item_baseline
 from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
-from .log import log_duration
+from .log import log_duration, note_persist_ms
 from .process import state_dir
 from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
 
@@ -295,13 +295,16 @@ def _resolve_context(
 
 
 def _persist_committed_state(config_path: Path, changed_rel: str | None = None) -> None:
-    with log_duration("persist: done"):
+    with log_duration("persist: done") as fields:
         projects = load_set_projects(config_path)
         save_snapshot(config_path, projects)
         previous = load_baseline(config_path)
         if changed_rel:
             trees = record_item_baseline(projects, previous, changed_rel)
             save_baseline(config_path, trees, projects, changed_rels=[changed_rel])
-            return
-        trees = record_baseline(projects, previous)
-        save_baseline(config_path, trees, projects)
+        else:
+            trees = record_baseline(projects, previous)
+            save_baseline(config_path, trees, projects)
+    elapsed = fields.get("duration_ms")
+    if isinstance(elapsed, int):
+        note_persist_ms(elapsed)

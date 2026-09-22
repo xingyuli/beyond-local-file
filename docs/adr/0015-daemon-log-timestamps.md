@@ -6,6 +6,8 @@ Worker stdout is redirected to ``daemon.log`` in the set run directory (0018) wi
 
 accepted
 
+The single ``daemon.log``, the one-second stamp, and ``daemon logs`` are superseded by 0022. Stamping at write time, in the host's local offset, stands.
+
 ## Context
 
 The daemon worker's stdin is DEVNULL. Catch-up, live, and runtime progress is `print(..., flush=True)`. `spawn_and_wait` opens the set's `daemon.log` as the child's stdout (stderr merged). `daemon logs` follows that file and must not add a display-only clock. Lines already in the file stay as written. TTY status lines for catch-up and `link check` are streamed to the shell (0019); they are not a second clock on the log.
