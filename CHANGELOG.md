@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-22
+
+v0.6.0 is a breaking release: the daemon execution model has been fundamentally redesigned to eliminate the shared performance corridor that made every shell operation wait for a full configuration-set scan and baseline rewrite. The daemon now schedules work per managed project with independent worker units, achieving 25ms response times for simple operations that previously took 26+ seconds.
+
+### Breaking Changes
+
+**Daemon execution model redesigned** — Removed the shared performance bottleneck where every shell operation triggered a full configuration-set scan and baseline rewrite. Restructured daemon with an accept thread for connection handling and a per-managed-project worker-unit thread pool. Each worker unit independently manages one hub and its targets, eliminating cross-project coordination overhead. Baseline persistence changed from a single 6.7MB baseline.yml to per-item documents under baseline/<managed-project>/, enabling incremental updates. Operations now hash each hub and target exactly once per job. Pre-request live ticks removed entirely. Achieved 33-52ms request duration for few-file operations (previously ~26s). Live observe now runs per worker unit on a staggered 15-second cadence from the last observe completion.
+
+**Log structure changed** — Split daemon logging into three focused logs (idle.log, requests.log, daemon.log). Every log line now includes the worker unit name. Request logs show queue_ms, op_ms, and persist_ms separately. Millisecond-resolution timestamps replace second-level timestamps. The `daemon logs` command is replaced by `blf logs` with support for filtering specific log types (requests, idle, daemon).
+
+**Terminal interface redesigned** — Replace the single-line status with a full-screen shell interface. The new shell screen displays command/target header, per-worker-unit status rows showing managed project and current step, and the full result once finished. Supports TTY interactive controls (q/Ctrl+C to close, question prompts) and falls back to plain output for non-TTY.
+
+### Added
+- **Comprehensive daemon request observability** — Logging of shell requests, mutating operation steps, and set-wide scan/write work in the timestamped daemon log. Each request logs start/done with operation, path, working directory, exit code, and duration. Live ticks, baseline recording, and persistence operations include duration and size context (roots, paths, files, hashed bytes, bytes written).
+
+### Changed
+- **TTY progress indication** — TTY operations now show "Waiting…" during worker unit contention, operation steps, and "Writing baseline…" for incremental persistence.
+
+[0.6.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.6.0
+
 ## [0.5.0] - 2026-09-12
 
 v0.5.0 is a breaking release: **copy is the only projection**, and a **live daemon** is the only runtime. This is the [Copy-only projections and a daemon runtime](local-file/initiatives/copy-only-daemon.md) story — tools that refuse workspace-escape (Kiro) can read linked files because projections stay regular files inside the target project.
