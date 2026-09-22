@@ -73,12 +73,12 @@ blf daemon start
 2. Fails if a daemon is already running for that set.
 3. Fails if a mapping file in the set is already loaded by another running set, naming the owner.
 4. First start deletes leftover hub-local `.blf/` next to each mapping file and prints each removed path (skips `~/.blf` itself).
-5. If the set's mapping files differ from the mapping snapshot, classifies the diff in the foreground (same as `reload`): removals print one plan and require confirmation; adds apply after. Decline (or no TTY when removals exist) starts nothing.
+5. If the set's mapping files differ from the mapping snapshot, classifies the diff in the foreground (same as `reload`): removals print one plan and require confirmation; adds apply after. On a terminal that confirm is asked on the shell screen before the daemon is spawned. Decline (or no TTY when removals exist) starts nothing.
 6. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths. Same rule inside one project's subpaths.
-7. Warns about out-of-sync paths and held copies and asks you to continue.
+7. Warns about out-of-sync paths and held copies and asks you to continue. On a terminal that question is asked on the shell screen before the daemon is spawned, one at a time after a removal confirm if both apply.
 8. Binds IPC, then catch-up. `daemon start` stays in the foreground until phase `ready`. On a terminal it opens a shell screen through catch-up and leaves it up when the daemon is ready. The header names `daemon start` and all projects. One row per managed project being caught up: state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. The header, the rows, and the hint stay put. When the daemon is ready, the output is `Daemon started (pid …)`. Closing the screen restores the terminal and prints that same line. Without a terminal there is no screen and no status line. Live observation starts only in `ready`.
 
-   While catch-up runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the daemon is ready: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+   Before the daemon is spawned, a question uses `Enter: answer` and `Ctrl+C: cancel`. Ctrl+C closes the screen and starts nothing. While catch-up runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the daemon is ready: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
 9. Catch-up: with no baseline, every projection is made to match the managed project (fresh catch-up). With a baseline, only paths that differ are queued (update catch-up). Leftover blf symlinks to the correct managed item become copies. Nested symlink nodes inside a directory item are copied as symlinks.
 
 ### Examples
@@ -107,15 +107,7 @@ If a mapping file is already loaded by another running set:
 Error: mapping file /Users/username/company/config.yml is already loaded by the running global set (pid 12345)
 ```
 
-If mapping removals need confirmation:
-
-```
-Mapping removals:
-  item-remove: my-project -> /Users/username/workspace/my-project : .kiro/hooks
-Apply these mapping removals? [y/N]:
-```
-
-Decline prints `Mapping changes were not applied` and does not start the daemon.
+If mapping removals need confirmation, the plan and `Apply these mapping removals?` are lines on the shell screen. Answer `y` or `n`. Anything else prints one line and the question stays open. Decline prints `Mapping changes were not applied` and does not start the daemon. Without a terminal, removals are not applied.
 
 Overlapping items:
 
@@ -251,9 +243,9 @@ blf daemon reload
 1. Fails if the daemon is not running.
 2. Fails if two items on one target overlap (names equal, or one a path prefix of the other), naming both projects and both paths.
 3. If the file already matches the snapshot: `Mappings already match the snapshot`.
-4. Removals print one plan (project-remove, then target-remove, then item-remove, inner diffs subsumed) and require confirmation. Adds apply automatically after.
+4. Removals print one plan (project-remove, then target-remove, then item-remove, inner diffs subsumed) and require confirmation. Adds apply automatically after. On a terminal that confirm is asked on the shell screen before the request is sent.
 5. Decline commits nothing. No TTY when removals exist also commits nothing.
-6. Warns about out-of-sync paths and held copies and asks you to continue. That question stays a plain prompt. Answering it does not open a screen by itself.
+6. Warns about out-of-sync paths and held copies and asks you to continue. On a terminal that question is asked on the shell screen before the request is sent, one at a time after a removal confirm if both apply. A held-copy ack with no mapping change still opens the screen, then finishes with `Mappings already match the snapshot`.
 
 The daemon does not watch mapping files. Internal mapping edits from `revlink` / `remove` do not go through reload.
 
@@ -261,9 +253,9 @@ The daemon does not watch mapping files. Internal mapping edits from `revlink` /
 
 On a terminal, a reload that sends a request to the daemon opens a shell screen and leaves it up until you close it. The header names `daemon reload` and that managed project, or all projects when more than one worker unit's mappings changed. One row per worker unit whose mappings changed: state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. The header, the rows, and the hint stay put. Closing the screen restores the terminal and prints reload's result.
 
-While the request runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the reload finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+Before a request is sent, a question uses `Enter: answer` and `Ctrl+C: cancel`. Ctrl+C closes the screen and sends nothing. While the request runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the reload finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
 
-A reload that never reaches the daemon stays plain text and does not open a screen. That includes `Mappings already match the snapshot`, a daemon that is not running, and a removal confirm that is declined (`Mapping changes were not applied`). The removal confirm stays a plain prompt before any request is sent.
+A reload that never reaches the daemon and has no question stays plain text and does not open a screen. That includes `Mappings already match the snapshot` with no isolation warning, and a daemon that is not running. A declined removal confirm is asked on the screen and then prints `Mapping changes were not applied`.
 
 Without a terminal, reload prints its result only and does not wait for a key.
 
@@ -314,7 +306,7 @@ If any projection fails preflight validation, the command leaves all managed ite
 
 On a terminal, `remove` opens a shell screen and leaves it up until you close it, including a fast removal. The header names `remove` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Removed …`, `Deleted managed copy: …`, and the rest, or the error text).
 
-The input line is hidden except while the stop question is open. It sits directly above the hint.
+The input line is hidden except while a question is open. It sits directly above the hint.
 
 - While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
 - Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
@@ -544,7 +536,7 @@ blf revlink create [OPTIONS] PATH
 ### Behavior
 
 1. Resolves the configuration set (`--config` → `~/.blf/config` → CWD `config.yml`).
-2. Chooses the hub. One managed project targeting CWD: no prompt. PATH already covered by an item: that contribution source, no prompt (then the existing already-covered error). Several hubs targeting CWD and PATH a new item: the same command prompts for a 1-based managed project name. No TTY (or an aborted prompt) lists the names and exits 1.
+2. Chooses the hub. One managed project targeting CWD: no prompt. PATH already covered by an item: that contribution source, no prompt (then the existing already-covered error). Several hubs targeting CWD and PATH a new item: the same command asks for a 1-based managed project name on the shell screen before the request is sent. No TTY lists the names and exits 1. Ctrl+C on that question closes the screen and sends nothing.
 3. Validates the source path (must exist, must not already be a symlink).
 4. Copies the source to `<managed_project_path>/<relative-path>`. Nested symlink nodes inside a directory are copied as symlinks.
 5. Verifies the copy via MD5 checksum; aborts and deletes the copy on mismatch.
@@ -555,10 +547,11 @@ blf revlink create [OPTIONS] PATH
 
 #### Terminal
 
-On a terminal, `revlink create` opens a shell screen after the hub is chosen and leaves it up until you close it, including a fast create. Choosing a managed project stays a plain prompt before the request; it is not asked on the screen. The header names `revlink create` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Computing checksum of …`, `Copying …`, and the rest, or the error text).
+On a terminal, `revlink create` opens a shell screen and leaves it up until you close it, including a fast create. When several hubs target CWD and PATH is new, the numbered hub choice is asked on that screen before the request is sent. The header names `revlink create` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Computing checksum of …`, `Copying …`, and the rest, or the error text).
 
-The input line is hidden except while the stop question is open. It sits directly above the hint.
+The input line is hidden except while a question is open. It sits directly above the hint.
 
+- Before the request is sent: `Enter: answer` and `Ctrl+C: cancel`. A hub choice is answered with its number. Anything else prints one line and the question stays open. Ctrl+C closes the screen and sends nothing.
 - While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
 - Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
 - After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
@@ -584,16 +577,7 @@ blf revlink create --force myfile.txt
 blf -c ~/my-files/config.yml revlink create myfile.txt
 ```
 
-When several managed projects contribute to CWD and PATH is new:
-
-```
-More than one managed project contributes to this directory:
-  1. shared-hooks
-  2. app-settings
-Choose a managed project: 1
-```
-
-Create then continues on the chosen hub.
+When several managed projects contribute to CWD and PATH is new, those lines are output on the shell screen. Answer with the number. Create then continues on the chosen hub.
 
 ### Output
 
@@ -673,7 +657,7 @@ blf revlink restore [OPTIONS] PATH
 
 On a terminal, `revlink restore` opens a shell screen and leaves it up until you close it, including a fast restore. The header names `revlink restore` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Leaving target file in place: …`, `Managed copy deleted: …`, and the rest, or the error text).
 
-The input line is hidden except while the stop question is open. It sits directly above the hint.
+The input line is hidden except while a question is open. It sits directly above the hint.
 
 - While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
 - Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.

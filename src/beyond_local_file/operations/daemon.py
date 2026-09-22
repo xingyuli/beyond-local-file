@@ -7,13 +7,21 @@ from pathlib import Path
 import click
 
 from beyond_local_file.blfrc import is_global_config_path
-from beyond_local_file.daemon.client import DAEMON_DOWN_HINT, call_daemon
+from beyond_local_file.daemon.client import (
+    DAEMON_DOWN_HINT,
+    call_daemon,
+    open_wait_session,
+    shell_wants_screen,
+)
 from beyond_local_file.daemon.ingest import (
     affected_unit_names,
+    commit_ingest,
+    format_removal_plan,
     ingest_before_start,
     prepare_ingest,
     stdin_is_tty,
 )
+from beyond_local_file.daemon.ipc import RequestSession
 from beyond_local_file.daemon.process import (
     follow_logs,
     is_running,
@@ -21,9 +29,16 @@ from beyond_local_file.daemon.process import (
     print_status,
     read_pid,
     spawn_and_wait,
+    spawn_worker,
     stop_process,
 )
 from beyond_local_file.daemon.runtime import run_worker
+from beyond_local_file.daemon.screen import (
+    ScreenSkip,
+    isolation_ack_question,
+    removal_confirm_question,
+    run_shell_screen,
+)
 from beyond_local_file.daemon.store import iter_out_of_sync, load_baseline, load_snapshot
 from beyond_local_file.held import list_held_copies
 from beyond_local_file.model.config import ConfigProject
@@ -54,11 +69,46 @@ def start_daemon(config: str | None, *, worker: bool) -> int:
         owner = "global set" if is_global_config_path(identity) else f"set {identity}"
         click.echo(f"Error: mapping file {mapping} is already loaded by the running {owner} (pid {pid})")
         return 1
-    ingest_code = ingest_before_start(result.config_file)
+    if shell_wants_screen():
+        return _start_on_screen(result.config_file)
+    return _start_off_screen(result.config_file)
+
+
+def _start_off_screen(config_path: Path) -> int:
+    """Confirm ingest and isolation on stdin, then spawn without a shell screen."""
+    ingest_code = ingest_before_start(config_path)
     if ingest_code != 0:
         return ingest_code
-    _warn_and_ack_isolation(result.config_file)
-    return spawn_and_wait(result.config_file)
+    _warn_and_ack_isolation(config_path)
+    return spawn_and_wait(config_path)
+
+
+def _start_on_screen(config_path: Path) -> int:
+    """Ask start questions on the shell screen, then spawn and wait through ready."""
+    code, file_projects, snapshot_projects, diff = prepare_ingest(config_path, confirm=False)
+    if code != 0:
+        return code
+    iso_lines = _isolation_lines(config_path, warning=True)
+    questions = []
+    if diff is not None and diff.removals:
+        questions.append(removal_confirm_question(format_removal_plan(diff.removals)))
+    if iso_lines:
+        questions.append(isolation_ack_question(iso_lines))
+    if not questions:
+        if commit_ingest(config_path, file_projects, snapshot_projects, diff) != 0:
+            return 1
+        return spawn_and_wait(config_path)
+
+    def connect(answers: tuple[str, ...]) -> RequestSession:
+        if diff is not None and diff.removals and answers[0] == "n":
+            raise ScreenSkip("Mapping changes were not applied\n")
+        if commit_ingest(config_path, file_projects, snapshot_projects, diff) != 0:
+            raise ScreenSkip("Mapping changes were not applied\n")
+        if spawn_worker(config_path) != 0:
+            raise ScreenSkip("Error: daemon failed to start\n")
+        return open_wait_session(config_path)
+
+    return run_shell_screen({"op": "wait"}, questions=tuple(questions), connect=connect)
 
 
 def reload_daemon(config: str | None) -> int:
@@ -76,21 +126,52 @@ def reload_daemon(config: str | None) -> int:
     if not is_running(result.config_file):
         click.echo(DAEMON_DOWN_HINT)
         return 1
-    code, file_projects, snapshot_projects, diff = prepare_ingest(result.config_file)
+    on_screen = shell_wants_screen()
+    code, file_projects, snapshot_projects, diff = prepare_ingest(
+        result.config_file,
+        confirm=not on_screen,
+    )
     if code != 0:
         return code
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
         return 1
-    _warn_and_ack_isolation(result.config_file)
-    if diff is None or file_projects is None or snapshot_projects is None:
+    iso_lines = _isolation_lines(result.config_file, warning=True)
+    if not on_screen:
+        _ack_isolation(iso_lines)
+    no_diff = diff is None or file_projects is None or snapshot_projects is None
+    questions = []
+    if on_screen and diff is not None and diff.removals:
+        questions.append(removal_confirm_question(format_removal_plan(diff.removals)))
+    if on_screen and iso_lines:
+        questions.append(isolation_ack_question(iso_lines))
+    if no_diff and not questions:
         click.echo("Mappings already match the snapshot")
         return 0
-    names = sorted(affected_unit_names(snapshot_projects, file_projects, diff))
+    names = () if no_diff else sorted(affected_unit_names(snapshot_projects, file_projects, diff))
     target = names[0] if len(names) == 1 else "all projects"
+    request = {
+        "op": "reload",
+        "confirmed": False if questions else bool(diff is not None and diff.removals),
+        "screen_target": target,
+    }
+
+    def apply_answers(answers: tuple[str, ...], pending: dict) -> ScreenSkip | None:
+        index = 0
+        if diff is not None and diff.removals:
+            if answers[index] == "n":
+                return ScreenSkip("Mapping changes were not applied\n")
+            pending["confirmed"] = True
+            index += 1
+        if no_diff:
+            return ScreenSkip("Mappings already match the snapshot\n", exit_code=0)
+        return None
+
     return call_daemon(
         result.config_file,
-        {"op": "reload", "confirmed": bool(diff.removals), "screen_target": target},
+        request,
+        questions=tuple(questions),
+        apply_answers=apply_answers if questions else None,
     )
 
 
@@ -160,8 +241,15 @@ def follow_blf_logs(config: str | None, record: str | None = None) -> int:
 
 def _warn_and_ack_isolation(config_path: Path) -> None:
     """Print held/out-of-sync WARNINGs and require ack without aborting."""
-    if not _echo_isolation(config_path, warning=True):
+    _ack_isolation(_isolation_lines(config_path, warning=True))
+
+
+def _ack_isolation(lines: list[str]) -> None:
+    """Print *lines* and, on a TTY, require ack without aborting."""
+    if not lines:
         return
+    for line in lines:
+        click.echo(line)
     if stdin_is_tty():
         click.confirm(
             "Continue without resolving held copies and out-of-sync paths?",
@@ -179,26 +267,37 @@ def _echo_isolation(config_path: Path, *, warning: bool) -> bool:
     Returns:
         True when any out-of-sync path or held copy was printed.
     """
+    lines = _isolation_lines(config_path, warning=warning)
+    for line in lines:
+        click.echo(line)
+    return bool(lines)
+
+
+def _isolation_lines(config_path: Path, *, warning: bool) -> list[str]:
+    """Return out-of-sync and held-copy lines for the shell or the screen."""
     oos = iter_out_of_sync(load_baseline(config_path) or {})
     held = [
         copy
         for project in _projects_for_isolation(config_path).values()
         for copy in list_held_copies(project.managed_project_path)
     ]
+    lines: list[str] = []
     prefix = "WARNING: " if warning else ""
     if oos:
         if not warning:
-            click.echo("Out-of-sync:")
+            lines.append("Out-of-sync:")
         for replica, rel in oos:
-            line = f"out-of-sync {replica.as_posix()} {rel}"
-            click.echo(f"{prefix}{line}" if warning else f"  {replica.as_posix()}  {rel}")
+            if warning:
+                lines.append(f"{prefix}out-of-sync {replica.as_posix()} {rel}")
+            else:
+                lines.append(f"  {replica.as_posix()}  {rel}")
     if held:
         if not warning:
-            click.echo("Held copies:")
+            lines.append("Held copies:")
         for copy in held:
-            click.echo(f"{prefix}{copy.clause}" if warning else f"  {copy.clause}")
-            click.echo(f"Held at {copy.slot.as_posix()}")
-    return bool(oos or held)
+            lines.append(f"{prefix}{copy.clause}" if warning else f"  {copy.clause}")
+            lines.append(f"Held at {copy.slot.as_posix()}")
+    return lines
 
 
 def _projects_for_isolation(config_path: Path) -> dict[str, ConfigProject]:

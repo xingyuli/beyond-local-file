@@ -15,7 +15,8 @@ import click
 from . import __version__
 from .completion import complete_project_names
 from .contribution import contribution_owner, projects_targeting
-from .daemon.client import call_daemon
+from .daemon.client import call_daemon, shell_wants_screen
+from .daemon.screen import ScreenSkip, hub_choice_question
 from .operations.daemon import (
     follow_blf_logs,
     follow_daemon_logs,
@@ -197,18 +198,19 @@ def revlink_create(ctx, path, dry_run, force):
     .git/info/exclude if the target directory is a Git repository.
     """
     cwd = _cwd_containing(ctx, path, resolve_source=True)
-    project_name = _choose_create_project(ctx, cwd, path)
-    _call_daemon(
-        ctx,
-        {
-            "op": "create",
-            "cwd": str(cwd),
-            "path": path,
-            "dry_run": dry_run,
-            "force": force,
-            "project_name": project_name,
-        },
-    )
+    project_name, ask_names = _choose_create_project(ctx, cwd, path)
+    request = {
+        "op": "create",
+        "cwd": str(cwd),
+        "path": path,
+        "dry_run": dry_run,
+        "force": force,
+        "project_name": project_name,
+    }
+    if ask_names:
+        _call_create_with_hub_choice(ctx, request, ask_names)
+        return
+    _call_daemon(ctx, request)
 
 
 @revlink.command("restore")
@@ -235,8 +237,8 @@ def revlink_restore(ctx, path, dry_run):
     )
 
 
-def _choose_create_project(ctx: click.Context, cwd: Path, path: str) -> str | None:
-    """Return the hub for ``revlink create``, interviewing when PATH is new.
+def _choose_create_project(ctx: click.Context, cwd: Path, path: str) -> tuple[str | None, list[str] | None]:
+    """Return the hub for ``revlink create``, or names to ask on the shell screen.
 
     Args:
         ctx: Active Click context carrying ``--config``.
@@ -244,30 +246,59 @@ def _choose_create_project(ctx: click.Context, cwd: Path, path: str) -> str | No
         path: User-supplied path argument.
 
     Returns:
-        The chosen managed project name, or ``None`` when no project targets
-        ``cwd`` (the daemon still reports that).
+        ``(name, None)`` when the hub is known, ``(None, names)`` when a TTY
+        create should interview on the shell screen, or ``(None, None)`` when
+        no project targets ``cwd`` (the daemon still reports that).
     """
     loaded = load_config_projects(ctx.obj["config"])
     if loaded is None:
         ctx.exit(1)
-        return None
+        return None, None
     matches = projects_targeting(loaded.projects, cwd)
     if not matches:
-        return None
+        return None, None
     if len(matches) == 1:
-        return matches[0].managed_project_name
+        return matches[0].managed_project_name, None
     source = Path(path).resolve()
     rel = source.relative_to(cwd).as_posix()
     owner = contribution_owner(loaded.projects, cwd, rel)
     if owner is not None:
-        return owner.managed_project_name
+        return owner.managed_project_name, None
     names = [project.managed_project_name for project in matches]
+    if shell_wants_screen():
+        return None, names
+    return _interview_or_exit(ctx, names)
+
+
+def _interview_or_exit(ctx: click.Context, names: list[str]) -> tuple[str | None, list[str] | None]:
+    """Interview for a hub when the shell has no screen, or exit 1."""
     chosen = _interview_create_project(names)
-    if chosen is None:
-        click.echo("Error: more than one managed project contributes to this directory: " + ", ".join(names))
+    if chosen is not None:
+        return chosen, None
+    click.echo("Error: more than one managed project contributes to this directory: " + ", ".join(names))
+    ctx.exit(1)
+    return None, None
+
+
+def _call_create_with_hub_choice(ctx: click.Context, request: dict[str, Any], names: list[str]) -> None:
+    """Open the shell screen, ask for a hub number, then send the create request."""
+    result = load_config_projects(ctx.obj["config"])
+    if result is None:
         ctx.exit(1)
+        return
+
+    def apply_answers(answers: tuple[str, ...], pending: dict[str, Any]) -> ScreenSkip | None:
+        pending["project_name"] = names[int(answers[0]) - 1]
         return None
-    return chosen
+
+    ctx.exit(
+        call_daemon(
+            result.config_file,
+            request,
+            questions=(hub_choice_question(names),),
+            apply_answers=apply_answers,
+        )
+    )
 
 
 def _interview_create_project(names: list[str]) -> str | None:

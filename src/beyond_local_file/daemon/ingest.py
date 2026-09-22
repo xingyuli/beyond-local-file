@@ -128,11 +128,15 @@ def format_removal_plan(removals: tuple[MappingChange, ...]) -> str:
 
 def prepare_ingest(
     config_path: Path,
+    *,
+    confirm: bool = True,
 ) -> tuple[int, dict[str, ConfigProject] | None, dict[str, ConfigProject] | None, MappingDiff | None]:
     """Classify the config file against the snapshot and confirm removals.
 
     Args:
         config_path: Path to the loaded config file.
+        confirm: When True, print the plan and require yes on a TTY. When False,
+            return the diff so the shell screen can ask.
 
     Returns:
         Exit code, file projects, snapshot projects, and the diff when ingest
@@ -149,7 +153,7 @@ def prepare_ingest(
         for path in missing:
             click.echo(f"Error: hub file does not exist: {path}")
         return 1, None, None, None
-    if diff.removals:
+    if diff.removals and confirm:
         click.echo(format_removal_plan(diff.removals))
         if not confirm_removals():
             click.echo("Mapping changes were not applied")
@@ -172,6 +176,26 @@ def ingest_before_start(config_path: Path) -> int:
     code, file_projects, snapshot_projects, diff = prepare_ingest(config_path)
     if code != 0:
         return code
+    return commit_ingest(config_path, file_projects, snapshot_projects, diff)
+
+
+def commit_ingest(
+    config_path: Path,
+    file_projects: dict[str, ConfigProject] | None,
+    snapshot_projects: dict[str, ConfigProject] | None,
+    diff: MappingDiff | None,
+) -> int:
+    """Apply a classified start ingest after confirmation.
+
+    Args:
+        config_path: Path to the loaded config file.
+        file_projects: Config file projects.
+        snapshot_projects: Mapping snapshot.
+        diff: Classified diff, or None when there is nothing to apply.
+
+    Returns:
+        0 after the snapshot is saved, or when there is nothing to apply.
+    """
     if diff is None or file_projects is None or snapshot_projects is None:
         return 0
     apply_removals(snapshot_projects, diff.removals)

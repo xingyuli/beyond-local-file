@@ -10,9 +10,9 @@ from typing import Any
 
 import click
 
-from .ipc import ProgressCallback, Request, Response, open_request_session, send_request
+from .ipc import ProgressCallback, Request, RequestSession, Response, open_request_session, send_request
 from .process import is_running, port_path
-from .screen import run_shell_screen
+from .screen import ScreenQuestion, ScreenSkip, run_shell_screen
 
 DAEMON_DOWN_HINT = "Error: daemon is not running. Start it with: blf daemon start"
 DAEMON_RUNNING_HINT = "Error: daemon is running. Stop it with: blf daemon stop"
@@ -50,16 +50,26 @@ def shell_wants_screen() -> bool:
     return stdin_is_tty() and stdout_is_tty()
 
 
-def call_daemon(config_path: Path, request: dict[str, Any]) -> int:
+def call_daemon(
+    config_path: Path,
+    request: dict[str, Any],
+    *,
+    questions: tuple[ScreenQuestion, ...] = (),
+    apply_answers: Callable[[tuple[str, ...], Request], ScreenSkip | None] | None = None,
+) -> int:
     """Send *request* to the daemon and print its captured stdout.
 
     Create, restore, remove, check, and reload on a terminal open the shell
     screen and leave it up until the user closes it. A shell with no terminal
-    prints the result and does not wait.
+    prints the result and does not wait. Pre-request *questions* are asked on
+    that screen; nothing is sent until they are answered.
 
     Args:
         config_path: Path to the loaded config file.
         request: JSON-serialisable daemon request.
+        questions: Shell-screen questions asked before the request is sent.
+        apply_answers: Writes answers into *request*, or returns a skip to
+            finish without sending.
 
     Returns:
         The daemon's exit code, or 1 when the daemon is not accepting requests.
@@ -68,7 +78,12 @@ def call_daemon(config_path: Path, request: dict[str, Any]) -> int:
         click.echo(DAEMON_DOWN_HINT)
         return 1
     if _wants_shell_screen(request) and shell_wants_screen():
-        return _call_on_shell_screen(config_path, request)
+        return _call_on_shell_screen(
+            config_path,
+            request,
+            questions=questions,
+            apply_answers=apply_answers,
+        )
     return _call_with_status_line(config_path, request)
 
 
@@ -76,7 +91,22 @@ def _wants_shell_screen(request: dict[str, Any]) -> bool:
     return request.get("op") in {"create", "restore", "remove", "check", "reload"}
 
 
-def _call_on_shell_screen(config_path: Path, request: dict[str, Any]) -> int:
+def _call_on_shell_screen(
+    config_path: Path,
+    request: dict[str, Any],
+    *,
+    questions: tuple[ScreenQuestion, ...] = (),
+    apply_answers: Callable[[tuple[str, ...], Request], ScreenSkip | None] | None = None,
+) -> int:
+    def connect(answers: tuple[str, ...]) -> RequestSession:
+        if apply_answers is not None:
+            skipped = apply_answers(answers, request)
+            if skipped is not None:
+                raise skipped
+        return _retry_while_down(config_path, lambda: open_request_session(config_path, request))
+
+    if questions:
+        return run_shell_screen(request, questions=questions, connect=connect)
     try:
         session = _retry_while_down(config_path, lambda: open_request_session(config_path, request))
     except OSError:
@@ -110,6 +140,11 @@ def _print_response(response: Response) -> int:
         return 1
 
 
+def open_wait_session(config_path: Path) -> RequestSession:
+    """Open a wait request, retrying while the worker is alive but not yet listening."""
+    return _retry_while_down(config_path, lambda: open_request_session(config_path, {"op": "wait"}))
+
+
 def wait_until_ready(config_path: Path) -> int:
     """Block until the daemon reports phase ready.
 
@@ -137,7 +172,7 @@ def wait_until_ready(config_path: Path) -> int:
 
 def _wait_on_shell_screen(config_path: Path) -> int:
     try:
-        session = _retry_while_down(config_path, lambda: open_request_session(config_path, {"op": "wait"}))
+        session = open_wait_session(config_path)
     except OSError:
         return 1
     try:

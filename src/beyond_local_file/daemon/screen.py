@@ -7,6 +7,7 @@ import select
 import sys
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import click
@@ -17,6 +18,7 @@ if os.name != "nt":
     import termios
     import tty
 
+_HINT_ASK = "Enter: answer  Ctrl+C: cancel"
 _HINT_RUNNING = "Ctrl+C: stop"
 _HINT_STOP = "Enter: answer  Ctrl+C: confirm stop  Esc: continue"
 _HINT_DONE = "q: close  Ctrl+C: close"
@@ -51,14 +53,88 @@ _COMMANDS = {
 }
 _SINGLE_ROW_OPS = frozenset({"create", "restore", "remove"})
 _READY_MESSAGE = "Daemon started (pid {pid})"
+_CHOOSE_NUMBER = "Choose a number."
 
 
-def run_shell_screen(request: Request, session: RequestSession) -> int:
+@dataclass(frozen=True)
+class ScreenQuestion:
+    """A question shown as output lines before the request is sent."""
+
+    lines: tuple[str, ...]
+    choices: tuple[str, ...] | None = None
+    invalid: str = _ANSWER_LINE
+
+
+class ScreenSkip(Exception):
+    """Raised when a pre-request answer means the shell should send nothing."""
+
+    def __init__(self, stdout: str, *, exit_code: int = 1) -> None:
+        super().__init__(stdout)
+        self.stdout = stdout
+        self.exit_code = exit_code
+
+
+def isolation_ack_question(lines: Sequence[str]) -> ScreenQuestion:
+    """Return the held-copy / out-of-sync ack asked on the shell screen.
+
+    Args:
+        lines: Warning lines already formatted for the screen.
+
+    Returns:
+        A yes/no question. Either answer continues; Ctrl+C cancels.
+    """
+    return ScreenQuestion(
+        lines=(*lines, "Continue without resolving held copies and out-of-sync paths?"),
+    )
+
+
+def removal_confirm_question(plan: str) -> ScreenQuestion:
+    """Return the yes/no mapping-removal confirm asked on the shell screen.
+
+    Args:
+        plan: Multi-line removal plan from ``format_removal_plan``.
+
+    Returns:
+        A yes/no question whose prompt is ``Apply these mapping removals?``.
+    """
+    return ScreenQuestion(lines=(*plan.splitlines(), "Apply these mapping removals?"))
+
+
+def hub_choice_question(names: Sequence[str]) -> ScreenQuestion:
+    """Return the numbered hub choice asked on the shell screen.
+
+    Args:
+        names: Managed project names in the order they are numbered.
+
+    Returns:
+        A choice question whose answers are ``1`` through ``len(names)``.
+    """
+    lines = (
+        "More than one managed project contributes to this directory:",
+        *(f"  {index}. {name}" for index, name in enumerate(names, start=1)),
+        "Choose a managed project",
+    )
+    return ScreenQuestion(
+        lines=lines,
+        choices=tuple(str(index) for index in range(1, len(names) + 1)),
+        invalid=_CHOOSE_NUMBER,
+    )
+
+
+def run_shell_screen(
+    request: Request,
+    session: RequestSession | None = None,
+    *,
+    questions: tuple[ScreenQuestion, ...] = (),
+    connect: Callable[[tuple[str, ...]], RequestSession] | None = None,
+) -> int:
     """Draw the shell screen until the user closes it, then print the transcript.
 
     Args:
         request: Daemon request. The header uses its operation and target.
-        session: Open request channel streaming progress and the final response.
+        session: Open request channel, or None when *questions* must be answered first.
+        questions: Pre-request questions. Nothing is sent until they are answered.
+        connect: Opens the request channel from the answers. Used when *questions* is set.
 
     Returns:
         The command's exit code.
@@ -70,10 +146,15 @@ def run_shell_screen(request: Request, session: RequestSession) -> int:
         fallback=_fallback_project(request),
         op=op,
     )
-    with _Terminal() as terminal:
-        screen.run(terminal, session)
-    _print_transcript(screen.stdout)
-    return screen.exit_code
+    owned: RequestSession | None = None
+    try:
+        with _Terminal() as terminal:
+            owned = screen.run(terminal, session, questions=questions, connect=connect)
+        _print_transcript(screen.stdout)
+        return screen.exit_code
+    finally:
+        if owned is not None:
+            owned.close()
 
 
 def _header(request: Request) -> str:
@@ -153,7 +234,14 @@ class _UnitRow:
 class _ShellScreen:
     """One request's header, worker-unit rows, output, and hint."""
 
-    def __init__(self, header: str, *, single: bool, fallback: str, op: str) -> None:
+    def __init__(
+        self,
+        header: str,
+        *,
+        single: bool,
+        fallback: str,
+        op: str,
+    ) -> None:
         self._lock = threading.Lock()
         self._header = header
         self._fallback = fallback
@@ -168,6 +256,8 @@ class _ShellScreen:
         self._stdout = ""
         self._cancel_sent = False
         self._closed = False
+        self._current_question: ScreenQuestion | None = None
+        self._last_answer = ""
 
     @property
     def stdout(self) -> str:
@@ -179,10 +269,29 @@ class _ShellScreen:
         """Return the daemon exit code for this request."""
         return self._exit_code
 
-    def run(self, terminal: _Terminal, session: RequestSession) -> None:
-        """Read keys and progress until the user closes a finished screen."""
-        reader = threading.Thread(target=self._read, args=(session,), name="blf-screen", daemon=True)
-        reader.start()
+    def run(
+        self,
+        terminal: _Terminal,
+        session: RequestSession | None,
+        *,
+        questions: tuple[ScreenQuestion, ...] = (),
+        connect: Callable[[tuple[str, ...]], RequestSession] | None = None,
+    ) -> RequestSession | None:
+        """Read keys and progress until the user closes a finished screen.
+
+        Returns:
+            The session opened after pre-request questions, when this screen owns it.
+        """
+        owned: RequestSession | None = None
+        if questions:
+            owned = self._ask_then_connect(terminal, questions, connect)
+            session = owned
+            if self._closed:
+                return owned
+        reader: threading.Thread | None = None
+        if session is not None and self._phase != "finished":
+            reader = threading.Thread(target=self._read, args=(session,), name="blf-screen", daemon=True)
+            reader.start()
         terminal.draw(self._paint())
         while not self._closed:
             try:
@@ -196,7 +305,9 @@ class _ShellScreen:
             if self._closed:
                 break
             terminal.draw(self._paint())
-        reader.join(timeout=1)
+        if reader is not None:
+            reader.join(timeout=1)
+        return owned
 
     def apply_progress(self, line: str) -> None:
         """Update one worker-unit row from a daemon progress line."""
@@ -267,7 +378,83 @@ class _ShellScreen:
         except OSError:
             self.fail(_daemon_down_text())
 
-    def _on_key(self, key: str, session: RequestSession) -> None:
+    def _ask_then_connect(
+        self,
+        terminal: _Terminal,
+        questions: tuple[ScreenQuestion, ...],
+        connect: Callable[[tuple[str, ...]], RequestSession] | None,
+    ) -> RequestSession | None:
+        answers: list[str] = []
+        self._phase = "asking"
+        for question in questions:
+            self._begin_question(question)
+            terminal.draw(self._paint())
+            while self._question and not self._closed:
+                try:
+                    keys = terminal.read_keys(_KEY_POLL_S)
+                except KeyboardInterrupt:
+                    keys = ["ctrl-c"]
+                for key in keys:
+                    self._on_ask_key(key)
+                    if self._closed or not self._question:
+                        break
+                terminal.draw(self._paint())
+            if self._closed:
+                return None
+            answers.append(self._last_answer)
+        if connect is None:
+            self._phase = "running"
+            return None
+        try:
+            session = connect(tuple(answers))
+        except OSError:
+            self.fail(_daemon_down_text())
+            return None
+        except ScreenSkip as skipped:
+            self.finish({"exit_code": skipped.exit_code, "stdout": skipped.stdout})
+            return None
+        self._phase = "running"
+        return session
+
+    def _begin_question(self, question: ScreenQuestion) -> None:
+        with self._lock:
+            self._notes.extend(question.lines)
+            self._current_question = question
+            self._question = True
+            self._buffer = ""
+
+    def _on_ask_key(self, key: str) -> None:
+        if key == "ctrl-c":
+            self._closed = True
+            return
+        if key == "enter":
+            self._submit_ask()
+            return
+        if key == "backspace":
+            with self._lock:
+                self._buffer = self._buffer[:-1]
+            return
+        if len(key) == 1 and key.isprintable():
+            with self._lock:
+                if len(self._buffer) < _INPUT_LIMIT:
+                    self._buffer += key
+
+    def _submit_ask(self) -> None:
+        with self._lock:
+            answer = self._buffer.strip()
+            self._buffer = ""
+            question = self._current_question
+            if not self._question or question is None:
+                return
+            accepted = _accepted_answer(question, answer)
+            if accepted is None:
+                self._notes.append(question.invalid)
+                return
+            self._last_answer = accepted
+            self._question = False
+            self._current_question = None
+
+    def _on_key(self, key: str, session: RequestSession | None) -> None:
         with self._lock:
             phase = self._phase
             question = self._question
@@ -278,7 +465,7 @@ class _ShellScreen:
         if question:
             self._on_question_key(key, session)
             return
-        if key == "ctrl-c":
+        if key == "ctrl-c" and session is not None:
             self._ask_stop()
 
     def _ask_stop(self) -> None:
@@ -367,7 +554,7 @@ class _ShellScreen:
             unit_lines = [row.text() for row in self._rows]
             hint = self._hint_text()
             output = list(self._output if self._phase == "finished" else self._notes)
-            question = self._question and self._phase == "running"
+            question = self._question and self._phase in {"running", "asking"}
             typed = self._buffer
         reserved = len(unit_lines) + 2 + (1 if question else 0)
         body_height = max(0, rows - reserved)
@@ -383,6 +570,8 @@ class _ShellScreen:
     def _hint_text(self) -> str:
         if self._phase == "finished":
             return _HINT_DONE
+        if self._phase == "asking":
+            return _HINT_ASK
         if self._question:
             return _HINT_STOP
         return _HINT_RUNNING
@@ -417,6 +606,15 @@ class _Terminal:
         if os.name == "nt":
             return _read_keys_windows(timeout)
         return _read_keys_posix(self._fd, timeout)
+
+
+def _accepted_answer(question: ScreenQuestion, answer: str) -> str | None:
+    if question.choices is not None:
+        return answer if answer in question.choices else None
+    lowered = answer.lower()
+    if lowered in {"y", "n"}:
+        return lowered
+    return None
 
 
 def _daemon_down_text() -> str:

@@ -268,14 +268,14 @@ def is_running(config_path: Path) -> bool:
     return pid is not None and pid_is_alive(pid)
 
 
-def spawn_and_wait(config_path: Path) -> int:
-    """Spawn the daemon worker and wait until it is ready.
+def spawn_worker(config_path: Path) -> int:
+    """Spawn the daemon worker and wait until it accepts connections.
 
     Args:
         config_path: Path to the loaded config file.
 
     Returns:
-        0 when the daemon is running, 1 on error.
+        0 when the port is ready, 1 on error.
     """
     if is_running(config_path):
         click.echo(f"Error: daemon is already running (pid {read_pid(config_path)})")
@@ -311,17 +311,32 @@ def spawn_and_wait(config_path: Path) -> int:
         click.echo("Error: daemon failed to start")
         _echo_log_tail(log_file)
         return 1
+    return 0
+
+
+def spawn_and_wait(config_path: Path) -> int:
+    """Spawn the daemon worker and wait until it is ready.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        0 when the daemon is running, 1 on error.
+    """
+    if spawn_worker(config_path) != 0:
+        return 1
     from .client import shell_wants_screen, wait_until_ready  # noqa: PLC0415
 
     wants_screen = shell_wants_screen()
-    if wait_until_ready(config_path) != 0 or proc.poll() is not None:
+    pid = read_pid(config_path)
+    if wait_until_ready(config_path) != 0 or pid is None or not pid_is_alive(pid):
         _clear_runtime_files(config_path)
         click.echo("Error: daemon failed to start")
-        _echo_log_tail(log_file)
+        _echo_log_tail(log_path(config_path))
         return 1
 
     if not wants_screen:
-        click.echo(f"Daemon started (pid {proc.pid})")
+        click.echo(f"Daemon started (pid {pid})")
     return 0
 
 
