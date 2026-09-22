@@ -1024,3 +1024,95 @@ def test_tty_start_asks_removal_confirm_on_the_shell_screen(
         assert (beta / "b.txt").read_text() == "bbb"
     finally:
         stop_daemon(config_path, isolated_home)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_status_shows_pid_and_phase_without_worker_unit_rows(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A TTY status keeps the screen up with pid and phase, and no worker-unit rows."""
+    config_path, _target_a, _target_b = _two_projects(tmp_path)
+    with daemon_running(config_path, isolated_home):
+        code, plain, plain_err = _run_plain(["--config", str(config_path), "daemon", "status"], isolated_home)
+        assert code == 0, plain + plain_err
+        assert _no_screen(plain + plain_err)
+        with _pty_cli(
+            ["--config", str(config_path), "daemon", "status"],
+            isolated_home,
+            tmp_path,
+        ) as (proc, master, chunks):
+            text = _wait(
+                master,
+                chunks,
+                proc,
+                lambda _text, frame: "Daemon is running" in frame
+                and "phase ready" in frame
+                and _hint(frame) == _HINT_DONE,
+            )
+            assert proc.poll() is None
+            assert _ALT_ON in text
+            frame = _last_frame(text)
+            header = _placed(frame).get(1, "")
+            assert "ready" in header
+            assert re.search(r"\d+", header)
+            row = _placed(frame).get(2, "")
+            assert not re.search(r" (waiting|working|done|failed) ", f" {row} ")
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert _normalize(_after_exit(text)) == _normalize(plain)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_status_when_down_stays_plain(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Status without a running daemon prints a sentence and does not open a screen."""
+    config_path, _target_a, _target_b = _two_projects(tmp_path)
+    with _pty_cli(
+        ["--config", str(config_path), "daemon", "status"],
+        isolated_home,
+        tmp_path,
+    ) as (proc, master, chunks):
+        code, text = _wait_exit(master, chunks, proc)
+    assert code == 0
+    assert "Daemon is not running" in text
+    assert _no_screen(text)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_status_includes_held_copies_in_the_output(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Status output on the screen includes held-copy lines, then reprints them."""
+    config_path, target_a, _target_b = _two_projects(tmp_path)
+    sidecar = tmp_path / "hub-bytes.txt"
+    sidecar.write_text("kept-hub-bytes")
+    with daemon_running(config_path, isolated_home):
+        store_held_copy(
+            tmp_path / "alpha",
+            rel_path=Path("a.txt"),
+            source=sidecar,
+            replica=target_a,
+            reason=REASON_DELETE_GAP,
+        )
+        code, plain, plain_err = _run_plain(["--config", str(config_path), "daemon", "status"], isolated_home)
+        assert code == 0, plain + plain_err
+        assert "Held copies:" in plain or "held" in plain.lower()
+        with _pty_cli(
+            ["--config", str(config_path), "daemon", "status"],
+            isolated_home,
+            tmp_path,
+        ) as (proc, master, chunks):
+            text = _wait(
+                master,
+                chunks,
+                proc,
+                lambda _text, frame: "Held at " in frame and _hint(frame) == _HINT_DONE,
+            )
+            assert proc.poll() is None
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert _normalize(_after_exit(text)) == _normalize(plain)

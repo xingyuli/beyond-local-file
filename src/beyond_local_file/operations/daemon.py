@@ -202,8 +202,16 @@ def status_daemon(config: str | None) -> int:
     result = load_config_projects(config)
     if result is None:
         return 1
+    iso = tuple(_isolation_lines(result.config_file, warning=False))
+    if shell_wants_screen() and is_running(result.config_file):
+        return call_daemon(
+            result.config_file,
+            {"op": "status", "pid": read_pid(result.config_file)},
+            trailer=iso,
+        )
     code = print_status(result.config_file)
-    _echo_isolation(result.config_file, warning=False)
+    for line in iso:
+        click.echo(line)
     return code
 
 

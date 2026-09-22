@@ -50,8 +50,10 @@ _COMMANDS = {
     "check": "link check",
     "reload": "daemon reload",
     "wait": "daemon start",
+    "status": "daemon status",
 }
 _SINGLE_ROW_OPS = frozenset({"create", "restore", "remove"})
+_NO_ROW_OPS = frozenset({"status"})
 _READY_MESSAGE = "Daemon started (pid {pid})"
 _CHOOSE_NUMBER = "Choose a number."
 
@@ -127,6 +129,7 @@ def run_shell_screen(
     *,
     questions: tuple[ScreenQuestion, ...] = (),
     connect: Callable[[tuple[str, ...]], RequestSession] | None = None,
+    trailer: tuple[str, ...] = (),
 ) -> int:
     """Draw the shell screen until the user closes it, then print the transcript.
 
@@ -135,6 +138,7 @@ def run_shell_screen(
         session: Open request channel, or None when *questions* must be answered first.
         questions: Pre-request questions. Nothing is sent until they are answered.
         connect: Opens the request channel from the answers. Used when *questions* is set.
+        trailer: Extra output lines appended after the daemon transcript.
 
     Returns:
         The command's exit code.
@@ -145,6 +149,7 @@ def run_shell_screen(
         single=op in _SINGLE_ROW_OPS,
         fallback=_fallback_project(request),
         op=op,
+        trailer=trailer,
     )
     owned: RequestSession | None = None
     try:
@@ -168,6 +173,10 @@ def _header(request: Request) -> str:
         return f"{command}  {target}"
     if op == "wait":
         return f"{command}  all projects"
+    if op == "status":
+        pid = request.get("pid") or ""
+        phase = request.get("phase") or ""
+        return f"{pid}  {phase}".strip()
     if op == "reload":
         target = str(request.get("screen_target") or "all projects")
         return f"{command}  {target}"
@@ -241,11 +250,13 @@ class _ShellScreen:
         single: bool,
         fallback: str,
         op: str,
+        trailer: tuple[str, ...] = (),
     ) -> None:
         self._lock = threading.Lock()
         self._header = header
         self._fallback = fallback
         self._op = op
+        self._trailer = trailer
         self._rows: list[_UnitRow] = [_UnitRow()] if single else []
         self._notes: list[str] = []
         self._output: list[str] = []
@@ -340,10 +351,18 @@ class _ShellScreen:
             text = str(response.get("stdout") or "")
             if self._op == "wait" and code == 0:
                 text = f"{_READY_MESSAGE.format(pid=response.get('pid'))}\n"
+            if self._op == "status":
+                pid = response.get("pid")
+                phase = response.get("phase")
+                if pid is not None and phase is not None:
+                    self._header = f"{pid}  {phase}"
+            if self._trailer:
+                extra = "\n".join(self._trailer)
+                text = f"{text.rstrip()}\n{extra}\n" if text.strip() else f"{extra}\n"
             self._stdout = text
             self._exit_code = code
             self._output = [*self._notes, *text.splitlines()]
-            if not self._rows:
+            if not self._rows and self._op not in _NO_ROW_OPS:
                 self._rows.append(_UnitRow(project=self._fallback))
             now = time.monotonic()
             final = "done" if code == 0 else "failed"

@@ -151,6 +151,12 @@ Show whether the daemon is running (pid and phase), plus out-of-sync paths and h
 blf daemon status
 ```
 
+### Terminal
+
+On a terminal, a running daemon opens a shell screen and leaves it up until you close it. The header is pid and phase. There are no worker-unit rows. The output is the status text, then out-of-sync paths and held copies when those exist. After it finishes: `q: close` and `Ctrl+C: close`. Closing restores the terminal and prints that same text.
+
+If the daemon is not running, status prints `Daemon is not running` and does not open a screen. Without a terminal, status prints the same text and does not wait for a key.
+
 ### Output
 
 ```

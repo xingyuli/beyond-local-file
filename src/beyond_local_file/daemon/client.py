@@ -56,13 +56,14 @@ def call_daemon(
     *,
     questions: tuple[ScreenQuestion, ...] = (),
     apply_answers: Callable[[tuple[str, ...], Request], ScreenSkip | None] | None = None,
+    trailer: tuple[str, ...] = (),
 ) -> int:
     """Send *request* to the daemon and print its captured stdout.
 
-    Create, restore, remove, check, and reload on a terminal open the shell
-    screen and leave it up until the user closes it. A shell with no terminal
-    prints the result and does not wait. Pre-request *questions* are asked on
-    that screen; nothing is sent until they are answered.
+    Create, restore, remove, check, reload, and status on a terminal open the
+    shell screen and leave it up until the user closes it. A shell with no
+    terminal prints the result and does not wait. Pre-request *questions* are
+    asked on that screen; nothing is sent until they are answered.
 
     Args:
         config_path: Path to the loaded config file.
@@ -70,6 +71,7 @@ def call_daemon(
         questions: Shell-screen questions asked before the request is sent.
         apply_answers: Writes answers into *request*, or returns a skip to
             finish without sending.
+        trailer: Extra output lines appended after the daemon transcript.
 
     Returns:
         The daemon's exit code, or 1 when the daemon is not accepting requests.
@@ -83,12 +85,13 @@ def call_daemon(
             request,
             questions=questions,
             apply_answers=apply_answers,
+            trailer=trailer,
         )
     return _call_with_status_line(config_path, request)
 
 
 def _wants_shell_screen(request: dict[str, Any]) -> bool:
-    return request.get("op") in {"create", "restore", "remove", "check", "reload"}
+    return request.get("op") in {"create", "restore", "remove", "check", "reload", "status"}
 
 
 def _call_on_shell_screen(
@@ -97,6 +100,7 @@ def _call_on_shell_screen(
     *,
     questions: tuple[ScreenQuestion, ...] = (),
     apply_answers: Callable[[tuple[str, ...], Request], ScreenSkip | None] | None = None,
+    trailer: tuple[str, ...] = (),
 ) -> int:
     def connect(answers: tuple[str, ...]) -> RequestSession:
         if apply_answers is not None:
@@ -106,14 +110,14 @@ def _call_on_shell_screen(
         return _retry_while_down(config_path, lambda: open_request_session(config_path, request))
 
     if questions:
-        return run_shell_screen(request, questions=questions, connect=connect)
+        return run_shell_screen(request, questions=questions, connect=connect, trailer=trailer)
     try:
         session = _retry_while_down(config_path, lambda: open_request_session(config_path, request))
     except OSError:
         click.echo(DAEMON_DOWN_HINT)
         return 1
     try:
-        return run_shell_screen(request, session)
+        return run_shell_screen(request, session, trailer=trailer)
     finally:
         session.close()
 
