@@ -9,18 +9,20 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from beyond_local_file.held import list_held_copies
-from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.project_processor import load_set_projects
 
+from .catchup import rel_in_items
 from .process import resolve_port_path, resolve_token_path
-from .store import get_state, iter_out_of_sync, load_baseline, load_snapshot
+from .store import BaselineTrees, get_state, is_out_of_sync, iter_out_of_sync, load_baseline, load_snapshot
 
 _HOST = "127.0.0.1"
 _TOKEN_BYTES = 32
 _MAX_PORT = 65535
+_SAME_AS_HUB_BG = "#c8e6c9"
 
 
 class ResolveHttp:
@@ -121,11 +123,15 @@ def _handler_for(config_path: Path, token: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
-            got = (parse_qs(parsed.query).get("token") or [""])[0]
+            query = parse_qs(parsed.query)
+            got = (query.get("token") or [""])[0]
             if not got or not hmac.compare_digest(got, token):
                 self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
                 return
-            body = _page_html(config_path).encode("utf-8")
+            project = (query.get("project") or [""])[0]
+            rel = (query.get("path") or [""])[0]
+            replica = (query.get("replica") or [""])[0]
+            body = _page_html(config_path, token=token, project=project, rel=rel, replica=replica).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -138,42 +144,262 @@ def _handler_for(config_path: Path, token: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def _page_html(config_path: Path) -> str:
-    oos_items, held_items = _isolation(config_path)
-    oos_rows = "\n".join(_oos_row(replica, rel, clause) for replica, rel, clause in oos_items) or "<li>None</li>"
-    held_rows = "\n".join(_held_row(clause, slot) for clause, slot in held_items) or "<li>None</li>"
+def _page_html(config_path: Path, *, token: str, project: str, rel: str, replica: str) -> str:
+    projects = _projects(config_path)
+    trees = load_baseline(config_path) or {}
+    rows = _nav_rows(projects, trees)
+    nav = _nav_html(rows, token)
+    detail = _detail_html(projects, trees, token, (project, rel, replica))
     return (
-        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resolve UI</title></head><body>'
-        "<h1>Out-of-sync</h1><ul>"
-        f"{oos_rows}"
-        "</ul><h1>Held copies</h1><ul>"
-        f"{held_rows}"
-        "</ul></body></html>"
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resolve UI</title>'
+        f"<style>{_css()}</style></head><body>"
+        f'<nav class="index">{nav}</nav><main>{detail}</main>'
+        "</body></html>"
     )
 
 
-def _oos_row(replica: Path, rel: str, clause: str) -> str:
-    line = f"{html.escape(replica.as_posix())} {html.escape(rel)}"
-    if clause:
-        line += f"<br>{html.escape(clause)}"
-    return f"<li>{line}</li>"
+def _css() -> str:
+    return (
+        "body{display:flex;margin:0;font-family:sans-serif}"
+        "nav.index{width:18rem;border-right:1px solid #ccc;padding:1rem;box-sizing:border-box}"
+        "nav.index h2{font-size:1rem;margin:1rem 0 .25rem}"
+        "nav.index ul,nav.switcher ul{list-style:none;margin:0;padding:0}"
+        ".nav-row,.switcher li{margin:.25rem 0;padding:.25rem}"
+        ".badge{display:inline-block;margin-left:.4rem;font-size:.8rem;background:#eee;padding:.1rem .4rem}"
+        "main{flex:1;padding:1rem;min-width:0}"
+        ".panes{display:flex;gap:.5rem;align-items:stretch}"
+        ".pane{flex:1;min-width:0;border:1px solid #ddd;padding:.5rem}"
+        ".pane pre{white-space:pre-wrap;word-break:break-all;margin:0}"
+        "nav.switcher{display:flex;flex-direction:column;min-width:12rem}"
+        f".same-as-hub{{background:{_SAME_AS_HUB_BG}}}"
+        ".clause,.held p{margin:0 0 1rem}"
+    )
 
 
-def _held_row(clause: str, slot: Path) -> str:
-    return f"<li>{html.escape(clause)}<br>{html.escape(slot.as_posix())}</li>"
-
-
-def _isolation(config_path: Path) -> tuple[list[tuple[Path, str, str]], list[tuple[str, Path]]]:
-    trees = load_baseline(config_path) or {}
-    oos: list[tuple[Path, str, str]] = []
+def _nav_rows(projects: dict[str, ConfigProject], trees: BaselineTrees) -> list[tuple[str, str, bool, bool]]:
+    flags: dict[tuple[str, str], list[bool]] = {}
     for replica, rel in iter_out_of_sync(trees):
-        clause = str(get_state(trees, replica, rel).get("clause") or "")
-        oos.append((replica, rel, clause))
-    held: list[tuple[str, Path]] = []
-    for project in _projects(config_path).values():
+        project = _owner(projects, replica, rel)
+        if project is None:
+            continue
+        flags.setdefault((project.managed_project_name, rel), [False, False])[0] = True
+    for project in projects.values():
         for copy in list_held_copies(project.managed_project_path):
-            held.append((copy.clause, copy.slot))
+            flags.setdefault((project.managed_project_name, copy.path), [False, False])[1] = True
+    return [(name, rel, oos, held) for (name, rel), (oos, held) in sorted(flags.items())]
+
+
+def _nav_html(rows: list[tuple[str, str, bool, bool]], token: str) -> str:
+    if not rows:
+        return "<p>None</p>"
+    sections: list[str] = []
+    current = ""
+    items: list[str] = []
+    for name, rel, oos, held in rows:
+        if name != current:
+            if current:
+                sections.append(_project_section(current, items))
+            current = name
+            items = []
+        href = html.escape(_detail_href(token, name, rel), quote=True)
+        badge = html.escape(_badge(oos, held))
+        items.append(
+            f'<li class="nav-row"><a href="{href}">{html.escape(rel)}</a><span class="badge">{badge}</span></li>'
+        )
+    if current:
+        sections.append(_project_section(current, items))
+    return "".join(sections)
+
+
+def _project_section(name: str, items: list[str]) -> str:
+    return f"<section><h2>{html.escape(name)}</h2><ul>{''.join(items)}</ul></section>"
+
+
+def _badge(oos: bool, held: bool) -> str:
+    if oos and held:
+        return "both"
+    if oos:
+        return "out-of-sync"
+    return "held"
+
+
+def _detail_html(
+    projects: dict[str, ConfigProject],
+    trees: BaselineTrees,
+    token: str,
+    selection: tuple[str, str, str],
+) -> str:
+    project_name, rel, replica_raw = selection
+    if not project_name or not rel:
+        return ""
+    project = _project_named(projects, project_name)
+    if project is None:
+        return ""
+    oos, held = _row_flags(trees, project, rel)
+    if not oos and not held:
+        return ""
+    parts: list[str] = []
+    if oos:
+        parts.append(_copy_view_html(project, trees, token=token, rel=rel, replica_raw=replica_raw))
+    if held:
+        clauses = [copy.clause for copy in list_held_copies(project.managed_project_path) if copy.path == rel]
+        held_rows = "".join(f"<p>{html.escape(clause)}</p>" for clause in clauses)
+        parts.append(f'<section class="held">{held_rows}</section>')
+    return "".join(parts)
+
+
+def _copy_view_html(
+    project: ConfigProject,
+    trees: BaselineTrees,
+    *,
+    token: str,
+    rel: str,
+    replica_raw: str,
+) -> str:
+    replicas = _replicas_for(project, rel)
+    selected = _selected_replica(replicas, trees, rel, replica_raw)
+    hub_text = html.escape(_live_text(project.managed_project_path, rel))
+    replica_text = html.escape(_live_text(selected, rel)) if selected is not None else ""
+    clause = ""
+    if selected is not None:
+        clause = str(get_state(trees, selected, rel).get("clause") or "")
+    clause_html = f'<p class="clause">{html.escape(clause)}</p>' if clause else ""
+    switcher = _switcher_html(
+        project,
+        token=token,
+        rel=rel,
+        replicas=replicas,
+        selected=selected,
+    )
+    return (
+        f'{clause_html}<div class="panes">'
+        f'<section class="pane" id="hub-now"><h2>hub-now</h2><pre>{hub_text}</pre></section>'
+        '<section class="pane" id="result"></section>'
+        f'<section class="pane" id="replica-now"><h2>replica-now</h2><pre>{replica_text}</pre></section>'
+        f'<nav class="switcher">{switcher}</nav>'
+        "</div>"
+    )
+
+
+def _switcher_html(
+    project: ConfigProject,
+    *,
+    token: str,
+    rel: str,
+    replicas: list[Path],
+    selected: Path | None,
+) -> str:
+    hub = project.managed_project_path
+    items: list[str] = []
+    for replica in replicas:
+        href = html.escape(_detail_href(token, project.managed_project_name, rel, replica.as_posix()), quote=True)
+        classes = []
+        if selected is not None and _same_path(replica, selected):
+            classes.append("selected")
+        same = _same_as_hub(hub, replica, rel)
+        if same:
+            classes.append("same-as-hub")
+        class_attr = f' class="{" ".join(classes)}"' if classes else ""
+        label = html.escape(replica.as_posix())
+        extra = " same as hub" if same else ""
+        items.append(f'<li{class_attr}><a href="{href}">{label}</a>{extra}</li>')
+    return f"<ul>{''.join(items)}</ul>"
+
+
+def _selected_replica(replicas: list[Path], trees: BaselineTrees, rel: str, replica_raw: str) -> Path | None:
+    matched = _match_replica(replicas, replica_raw)
+    if matched is not None:
+        return matched
+    for replica in replicas:
+        if is_out_of_sync(get_state(trees, replica, rel)):
+            return replica
+    return replicas[0] if replicas else None
+
+
+def _replicas_for(project: ConfigProject, rel: str) -> list[Path]:
+    found: dict[str, Path] = {}
+    for mapping in project.mappings:
+        if not _mapping_has_rel(mapping, rel):
+            continue
+        for target in mapping.targets:
+            resolved = target.resolve()
+            found[resolved.as_posix()] = resolved
+    return [found[key] for key in sorted(found)]
+
+
+def _match_replica(replicas: list[Path], raw: str) -> Path | None:
+    if not raw:
+        return None
+    wanted = Path(raw)
+    for replica in replicas:
+        if replica == wanted or replica.as_posix() == wanted.as_posix():
+            return replica
+        try:
+            if replica.resolve() == wanted.resolve():
+                return replica
+        except OSError:
+            continue
+    return None
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    if left == right or left.as_posix() == right.as_posix():
+        return True
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return False
+
+
+def _same_as_hub(hub: Path, replica: Path, rel: str) -> bool:
+    left = hub / rel
+    right = replica / rel
+    if not left.is_file() or left.is_symlink() or not right.is_file() or right.is_symlink():
+        return False
+    return left.read_bytes() == right.read_bytes()
+
+
+def _live_text(root: Path, rel: str) -> str:
+    path = root / rel
+    if path.is_file() and not path.is_symlink():
+        return path.read_bytes().decode("latin-1")
+    return ""
+
+
+def _mapping_has_rel(mapping: Mapping, rel: str) -> bool:
+    if mapping.subpaths is None:
+        return True
+    return rel_in_items(rel, mapping.subpaths)
+
+
+def _owner(projects: dict[str, ConfigProject], replica: Path, rel: str) -> ConfigProject | None:
+    for project in projects.values():
+        for mapping in project.mappings:
+            if not _mapping_has_rel(mapping, rel):
+                continue
+            if any(_same_path(target, replica) for target in mapping.targets):
+                return project
+    return None
+
+
+def _project_named(projects: dict[str, ConfigProject], name: str) -> ConfigProject | None:
+    for project in projects.values():
+        if project.managed_project_name == name:
+            return project
+    return projects.get(name)
+
+
+def _row_flags(trees: BaselineTrees, project: ConfigProject, rel: str) -> tuple[bool, bool]:
+    oos = any(is_out_of_sync(get_state(trees, replica, rel)) for replica in _replicas_for(project, rel))
+    held = any(copy.path == rel for copy in list_held_copies(project.managed_project_path))
     return oos, held
+
+
+def _detail_href(token: str, project: str, rel: str, replica: str | None = None) -> str:
+    query = {"token": token, "project": project, "path": rel}
+    if replica:
+        query["replica"] = replica
+    return "/?" + urlencode(query)
 
 
 def _projects(config_path: Path) -> dict[str, ConfigProject]:

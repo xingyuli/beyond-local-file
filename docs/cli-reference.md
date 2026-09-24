@@ -183,7 +183,7 @@ Held at /Users/username/.blf/held/<sha256>/...
 http://127.0.0.1:12345/?token=...
 ```
 
-The resolve UI page lists those same out-of-sync rows and held copies. There is no merge editor on this page yet.
+The resolve UI is index plus detail at that URL. Query parameters `project`, `path`, and `replica` select a detail row; every link keeps the token. The left nav is grouped by managed project name, one row per managed project and relative path, with a badge for out-of-sync, held, or both. Out-of-sync detail shows hub-now on the left and one replica-now on the right. A vertical replica switcher lists every target of that managed project that has the item. The right pane starts on the first out-of-sync replica (sorted by replica root). A replica whose live bytes match hub-now is labeled `same as hub`. The out-of-sync reason clause is the one for the replica on the right. Held-only rows show hold-reason clauses and no copy view. The middle pane is empty until merge lands.
 
 0.5.0 has no restore/discard shells for held copies. `start` and `reload` warn and continue.
 
