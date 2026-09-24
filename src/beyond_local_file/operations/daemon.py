@@ -39,7 +39,7 @@ from beyond_local_file.daemon.screen import (
     removal_confirm_question,
     run_shell_screen,
 )
-from beyond_local_file.daemon.store import iter_out_of_sync, load_baseline, load_snapshot
+from beyond_local_file.daemon.store import get_state, iter_out_of_sync, load_baseline, load_snapshot
 from beyond_local_file.held import list_held_copies
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.project_processor import load_config_projects, load_set_projects, resolve_configuration_set
@@ -283,7 +283,8 @@ def _echo_isolation(config_path: Path, *, warning: bool) -> bool:
 
 def _isolation_lines(config_path: Path, *, warning: bool) -> list[str]:
     """Return out-of-sync and held-copy lines for the shell or the screen."""
-    oos = iter_out_of_sync(load_baseline(config_path) or {})
+    trees = load_baseline(config_path) or {}
+    oos = iter_out_of_sync(trees)
     held = [
         copy
         for project in _projects_for_isolation(config_path).values()
@@ -295,10 +296,15 @@ def _isolation_lines(config_path: Path, *, warning: bool) -> list[str]:
         if not warning:
             lines.append("Out-of-sync:")
         for replica, rel in oos:
+            clause = str(get_state(trees, replica, rel).get("clause") or "")
             if warning:
                 lines.append(f"{prefix}out-of-sync {replica.as_posix()} {rel}")
+                if clause:
+                    lines.append(f"{prefix}{clause}")
             else:
                 lines.append(f"  {replica.as_posix()}  {rel}")
+                if clause:
+                    lines.append(f"  {clause}")
     if held:
         if not warning:
             lines.append("Held copies:")

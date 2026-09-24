@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,13 +19,21 @@ from beyond_local_file.cli import cli
 from beyond_local_file.config import Config
 from beyond_local_file.daemon.catchup import run_catch_up
 from beyond_local_file.daemon.live import LiveSync
-from beyond_local_file.daemon.store import save_baseline, save_snapshot
+from beyond_local_file.daemon.process import state_dir
+from beyond_local_file.daemon.store import load_baseline, oos_reason_clause, save_baseline, save_snapshot
 from beyond_local_file.held import REASON_DELETE_GAP, list_held_copies, reason_clause, store_held_copy
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
 
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
 _DELETE_GAP_CLAUSE = "delete applied past the generation window; kept hub bytes of shared.txt (reason: delete-gap)"
+_STALE_BASE_CLAUSE = (
+    "update lost compare-and-swap at shared.txt on /tmp/target-b; "
+    "hub generation 1 from /tmp/target-a (reason: stale-base)"
+)
+_FAN_OUT_MISMATCH_CLAUSE = (
+    "fan-out skipped shared.txt on /tmp/target-b; disk was not hub generation 1 (reason: fan-out-mismatch)"
+)
 
 
 def _expected_held_dir(managed: Path, home: Path) -> Path:
@@ -107,6 +119,55 @@ def _mark_loser_out_of_sync(live: LiveSync, target_a: Path, target_b: Path) -> N
     live.tick()
 
 
+def _mark_fan_out_mismatch(live: LiveSync, target_a: Path, target_b: Path) -> None:
+    """Fan-out sees disk bytes that were not the expected base and were not in the mailbox."""
+    (target_a / "shared.txt").write_text("from-a")
+    live.observe()
+    (target_b / "shared.txt").write_text("divergent")
+    live.apply()
+
+
+def _stale_base_clause(replica: Path, winner: Path, *, path: str = "shared.txt", gen: int = 1) -> str:
+    """Return the stale-base clause tests expect in status and WARNINGs."""
+    return (
+        f"update lost compare-and-swap at {path} on {replica.as_posix()}; "
+        f"hub generation {gen} from {winner.as_posix()} (reason: stale-base)"
+    )
+
+
+def _fan_out_mismatch_clause(replica: Path, *, path: str = "shared.txt", gen: int = 1) -> str:
+    """Return the fan-out-mismatch clause tests expect in status and WARNINGs."""
+    return (
+        f"fan-out skipped {path} on {replica.as_posix()}; disk was not hub generation {gen} (reason: fan-out-mismatch)"
+    )
+
+
+def _oos_state(live: LiveSync, replica: Path, rel: str = "shared.txt") -> dict:
+    """Return the baseline row for one replica path."""
+    return live.baseline[str(replica)][rel]
+
+
+def _load_oos_from_new_process(config_path: Path, replica: Path, env: dict[str, str], rel: str = "shared.txt") -> dict:
+    """Load one out-of-sync row in a fresh interpreter so in-process cache cannot hide a miss."""
+    script = (
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "from beyond_local_file.daemon.store import load_baseline\n"
+        f"trees = load_baseline(Path({str(config_path)!r})) or {{}}\n"
+        f"state = trees[{str(replica)!r}][{rel!r}]\n"
+        "sys.stdout.write(json.dumps({k: state.get(k) for k in ('oos', 'reason', 'clause', 'ancestor')}))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
 @pytest.fixture
 def live_workspace(tmp_path: Path, isolated_home: dict[str, str]) -> tuple[LiveSync, Path, Path, Path, Path]:
     """In-process live observer after a fresh catch-up onto two targets."""
@@ -137,6 +198,46 @@ def test_two_targets_same_path_first_apply_wins_other_listed_out_of_sync(
     assert (target_b / "shared.txt").read_text() == "from-b"
     assert (target_b, "shared.txt") in live.out_of_sync
     assert (target_a, "shared.txt") not in live.out_of_sync
+
+
+def test_two_targets_same_path_loser_is_stale_base_with_clause_and_ancestor(
+    live_workspace: tuple[LiveSync, Path, Path, Path, Path],
+) -> None:
+    """A lost compare-and-swap stores stale-base, the winning replica, and hub bytes from before the winner applied."""
+    live, _config_path, managed, target_a, target_b = live_workspace
+    _mark_loser_out_of_sync(live, target_a, target_b)
+
+    state = _oos_state(live, target_b)
+    assert state["reason"] == "stale-base"
+    assert state["ancestor"] == "v0"
+    assert state["clause"] == _stale_base_clause(target_b, target_a)
+    assert str(target_a) in state["clause"]
+    assert str(managed) not in state["clause"]
+    assert list_held_copies(managed) == ()
+
+
+def test_fan_out_mismatch_marks_replica_with_clause_and_ancestor(
+    live_workspace: tuple[LiveSync, Path, Path, Path, Path],
+    isolated_home: dict[str, str],
+) -> None:
+    """Fan-out skip for unexpected disk bytes is fan-out-mismatch with the pre-apply hub bytes."""
+    live, config_path, managed, target_a, target_b = live_workspace
+    _mark_fan_out_mismatch(live, target_a, target_b)
+
+    assert (managed / "shared.txt").read_text() == "from-a"
+    assert (target_b / "shared.txt").read_text() == "divergent"
+    assert (target_b, "shared.txt") in live.out_of_sync
+    state = _oos_state(live, target_b)
+    assert state["reason"] == "fan-out-mismatch"
+    assert state["ancestor"] == "v0"
+    assert state["clause"] == _fan_out_mismatch_clause(target_b)
+    assert str(target_a) not in state["clause"]
+    assert list_held_copies(managed) == ()
+    _persist(config_path, live)
+    spawned = _load_oos_from_new_process(config_path, target_b, isolated_home)
+    assert spawned["reason"] == "fan-out-mismatch"
+    assert spawned["ancestor"] == "v0"
+    assert spawned["clause"] == _fan_out_mismatch_clause(target_b)
 
 
 def test_out_of_sync_skipped_by_later_fan_out_and_further_edits_discarded(
@@ -174,9 +275,15 @@ def test_equal_hashes_clear_out_of_sync_and_rejoin_fan_out(
 
     assert (target_b, "shared.txt") not in live.out_of_sync
     assert (target_b / "shared.txt").read_text() == "from-a"
+    cleared_state = _oos_state(live, target_b)
+    assert "oos" not in cleared_state
+    assert "reason" not in cleared_state
+    assert "clause" not in cleared_state
+    assert "ancestor" not in cleared_state
     _persist(config_path, live)
     cleared = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
     assert "Out-of-sync:" not in cleared.output
+    assert "stale-base" not in cleared.output
 
     (managed / "shared.txt").write_text("from-hub")
     live.tick()
@@ -217,9 +324,7 @@ def test_delete_past_generation_gap_holds_then_delete_wins(
     assert meta["clause"] == _DELETE_GAP_CLAUSE
 
 
-def test_store_held_copy_writes_under_runtime_home(
-    tmp_path: Path, isolated_home: dict[str, str]
-) -> None:
+def test_store_held_copy_writes_under_runtime_home(tmp_path: Path, isolated_home: dict[str, str]) -> None:
     """New holds land under ~/.blf/held/<hash>/."""
     managed = tmp_path / "proj"
     replica = tmp_path / "target"
@@ -269,6 +374,7 @@ def test_status_lists_out_of_sync_and_held_copies(
     assert "out-of-sync" in result.output.lower() or "out of sync" in result.output.lower()
     assert "shared.txt" in result.output
     assert str(target_b) in result.output
+    assert _stale_base_clause(target_b, target_a) in result.output
     assert _DELETE_GAP_CLAUSE in result.output
     held_root = _expected_held_dir(managed, Path(isolated_home["BLF_HOME"]))
     assert str(held_root) in result.output
@@ -301,6 +407,7 @@ def test_start_warns_and_acks_without_blocking(
     assert "WARNING" in result.output
     assert "shared.txt" in result.output
     assert str(target_b) in result.output
+    assert _stale_base_clause(target_b, target_a) in result.output
     assert _DELETE_GAP_CLAUSE in result.output
     assert str(slot) in result.output
     assert "without resolving" in result.output.lower() or "continue" in result.output.lower()
@@ -340,14 +447,86 @@ def test_reload_warns_and_acks_without_blocking(
     assert "WARNING" in result.output
     assert "shared.txt" in result.output
     assert str(target_b) in result.output
+    assert _stale_base_clause(target_b, target_a) in result.output
     assert _DELETE_GAP_CLAUSE in result.output
     assert str(slot) in result.output
     assert "without resolving" in result.output.lower() or "continue" in result.output.lower()
     status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
     assert "running" in status.output.lower()
     assert "not running" not in status.output.lower()
+    assert _stale_base_clause(target_b, target_a) in status.output
+
+
+def test_out_of_sync_reason_and_ancestor_survive_save_load_and_spawned_status(
+    live_workspace: tuple[LiveSync, Path, Path, Path, Path],
+    isolated_home: dict[str, str],
+) -> None:
+    """Ancestor bytes and the out-of-sync reason survive persist, a new process, and daemon start."""
+    live, config_path, managed, target_a, target_b = live_workspace
+    _mark_loser_out_of_sync(live, target_a, target_b)
+    clause = _stale_base_clause(target_b, target_a)
+    _persist(config_path, live)
+
+    loaded = load_baseline(config_path)
+    assert loaded is not None
+    persisted = loaded[str(target_b)]["shared.txt"]
+    assert persisted["reason"] == "stale-base"
+    assert persisted["ancestor"] == "v0"
+    assert persisted["clause"] == clause
+    assert list_held_copies(managed) == ()
+
+    spawned = _load_oos_from_new_process(config_path, target_b, isolated_home)
+    assert spawned["reason"] == "stale-base"
+    assert spawned["ancestor"] == "v0"
+    assert spawned["clause"] == clause
+
+    start_daemon(config_path, isolated_home)
+    try:
+        document = state_dir(config_path) / "baseline" / "proj" / "files"
+        data = yaml.safe_load(document.read_text(encoding="utf-8"))
+        row = data["trees"][str(target_b)]["shared.txt"]
+        assert row["reason"] == "stale-base"
+        assert row["ancestor"] == "v0"
+        assert row["clause"] == clause
+        after_start = _load_oos_from_new_process(config_path, target_b, isolated_home)
+        assert after_start["reason"] == "stale-base"
+        assert after_start["ancestor"] == "v0"
+        status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
+        assert status.exit_code == 0, status.output
+        assert clause in status.output
+        assert str(target_b) in status.output
+        assert "shared.txt" in status.output
+    finally:
+        stop_daemon(config_path, isolated_home)
 
 
 def test_reason_clause_delete_gap_is_stable() -> None:
     """Hold-reason clause text is the same string status and WARNINGs must show."""
     assert reason_clause("delete-gap", path="shared.txt", replica="/tmp/target-b") == _DELETE_GAP_CLAUSE
+
+
+def test_oos_reason_clause_stale_base_is_stable() -> None:
+    """stale-base clause names replica, path, hub generation, and the winning replica."""
+    assert (
+        oos_reason_clause(
+            "stale-base",
+            replica="/tmp/target-b",
+            path="shared.txt",
+            gen=1,
+            winner="/tmp/target-a",
+        )
+        == _STALE_BASE_CLAUSE
+    )
+
+
+def test_oos_reason_clause_fan_out_mismatch_is_stable() -> None:
+    """fan-out-mismatch clause names replica, path, and hub generation, not a winner."""
+    assert (
+        oos_reason_clause(
+            "fan-out-mismatch",
+            replica="/tmp/target-b",
+            path="shared.txt",
+            gen=1,
+        )
+        == _FAN_OUT_MISMATCH_CLAUSE
+    )

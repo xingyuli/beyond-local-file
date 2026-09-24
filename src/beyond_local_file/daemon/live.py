@@ -21,11 +21,14 @@ from .catchup import (
 )
 from .log import duration_ms, log_duration, worker_print
 from .store import (
+    REASON_FAN_OUT_MISMATCH,
+    REASON_STALE_BASE,
     BaselineTrees,
     PathState,
     get_generation,
     get_state,
     is_out_of_sync,
+    oos_reason_clause,
     path_state,
     state_equal,
 )
@@ -74,6 +77,8 @@ class LiveSync:
         self._baseline = baseline
         self._mailbox: dict[tuple[str, str], PathChange] = {}
         self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
+        self._last_source: dict[tuple[str, str], Path] = {}
+        self._prev_hub_bytes: dict[tuple[str, str], str] = {}
         self._watch_roots = _build_watch_roots(projects)
         self._last_seen = self._scan_all(reason="init")
 
@@ -182,6 +187,8 @@ class LiveSync:
         self._projects = projects
         self._baseline = baseline
         self._oos = _oos_from_baseline(baseline)
+        self._last_source = {}
+        self._prev_hub_bytes = {}
         self._watch_roots = _build_watch_roots(projects)
         self._last_seen = _last_seen_from_baseline(baseline)
         self._mailbox.clear()
@@ -206,37 +213,68 @@ class LiveSync:
         old_hub = scan_path_state(change.hub, change.rel)
         old_hub_gen = get_generation(self._baseline, change.hub, change.rel)
         if change.kind == "delete":
+            ancestor = _file_bytes(change.hub / change.rel)
             if not _delete_allowed(change, old_hub, old_hub_gen):
                 self._hold_delete_gap(change)
             remove_path(change.hub / change.rel)
         else:
             if not state_equal(old_hub, path_state(change.base_present, change.base_hash)):
-                self._mark_oos(change.replica, change.rel)
+                winner = self._winning_replica(change.hub, change.rel)
+                ancestor = self._prev_hub_bytes.get(
+                    (str(change.hub), change.rel),
+                    _file_bytes(change.hub / change.rel),
+                )
+                self._mark_oos(
+                    change.replica,
+                    change.rel,
+                    reason=REASON_STALE_BASE,
+                    clause=oos_reason_clause(
+                        REASON_STALE_BASE,
+                        replica=change.replica.as_posix(),
+                        path=change.rel,
+                        gen=old_hub_gen,
+                        winner=winner.as_posix(),
+                    ),
+                    ancestor=ancestor,
+                )
                 return
+            ancestor = _file_bytes(change.hub / change.rel)
             source = change.replica / change.rel
             if not source.exists() and not source.is_symlink():
                 return
+            self._prev_hub_bytes[(str(change.hub), change.rel)] = ancestor
             replace_with_copy(source, change.hub / change.rel)
         new_gen = old_hub_gen + 1
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
         self._record(change.replica, change.rel, scan_path_state(change.replica, change.rel), new_gen)
         self._oos.discard((str(change.replica), change.rel))
+        self._last_source[(str(change.hub), change.rel)] = change.replica
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
-        self._fan_out(change, old_hub, new_hub, new_gen)
+        self._fan_out(change, old_hub, new_hub, new_gen, ancestor)
         self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
 
     def _commit_hub_source(self, change: PathChange) -> None:
         previous = get_state(self._baseline, change.hub, change.rel)
         old_hub = path_state(bool(previous.get("present")), previous.get("hash") if previous.get("present") else None)
+        ancestor = self._bytes_matching(change.hub, change.rel, old_hub)
+        self._prev_hub_bytes[(str(change.hub), change.rel)] = ancestor
         new_gen = get_generation(self._baseline, change.hub, change.rel) + 1
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
+        self._last_source[(str(change.hub), change.rel)] = change.replica
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
-        self._fan_out(change, old_hub, new_hub, new_gen)
+        self._fan_out(change, old_hub, new_hub, new_gen, ancestor)
         self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
 
-    def _fan_out(self, change: PathChange, old_hub: PathState, new_hub: PathState, new_gen: int) -> None:
+    def _fan_out(
+        self,
+        change: PathChange,
+        old_hub: PathState,
+        new_hub: PathState,
+        new_gen: int,
+        ancestor: str,
+    ) -> None:
         for watch in self._watch_roots:
             if watch.is_hub or watch.root == change.replica:
                 continue
@@ -250,7 +288,18 @@ class LiveSync:
                 continue
             disk = scan_path_state(watch.root, change.rel)
             if not state_equal(disk, old_hub):
-                self._mark_oos(watch.root, change.rel)
+                self._mark_oos(
+                    watch.root,
+                    change.rel,
+                    reason=REASON_FAN_OUT_MISMATCH,
+                    clause=oos_reason_clause(
+                        REASON_FAN_OUT_MISMATCH,
+                        replica=watch.root.as_posix(),
+                        path=change.rel,
+                        gen=new_gen,
+                    ),
+                    ancestor=ancestor,
+                )
                 continue
             destination = watch.root / change.rel
             if new_hub.get("present"):
@@ -277,16 +326,43 @@ class LiveSync:
     def _is_oos(self, replica: Path, rel: str) -> bool:
         return (str(replica), rel) in self._oos
 
-    def _mark_oos(self, replica: Path, rel: str) -> None:
+    def _mark_oos(
+        self,
+        replica: Path,
+        rel: str,
+        *,
+        reason: str,
+        clause: str,
+        ancestor: str,
+    ) -> None:
         self._oos.add((str(replica), rel))
         current = get_state(self._baseline, replica, rel)
         present = bool(current.get("present"))
-        self._baseline.setdefault(str(replica), {})[rel] = path_state(
+        state = path_state(
             present,
             current.get("hash") if present else None,
             get_generation(self._baseline, replica, rel),
             oos=True,
         )
+        state["reason"] = reason
+        state["clause"] = clause
+        state["ancestor"] = ancestor
+        self._baseline.setdefault(str(replica), {})[rel] = state
+
+    def _winning_replica(self, hub: Path, rel: str) -> Path:
+        return self._last_source.get((str(hub), rel), hub)
+
+    def _bytes_matching(self, hub: Path, rel: str, expected: PathState) -> str:
+        for watch in self._watch_roots:
+            if watch.root == hub:
+                continue
+            if not rel_in_items(rel, watch.item_names):
+                continue
+            if _owner_hub(watch, rel) != hub:
+                continue
+            if state_equal(scan_path_state(watch.root, rel), expected):
+                return _file_bytes(watch.root / rel)
+        return ""
 
     def _clear_oos(self, replica: Path, rel: str, hub: Path) -> None:
         self._oos.discard((str(replica), rel))
@@ -406,6 +482,13 @@ def _last_seen_from_baseline(baseline: BaselineTrees) -> BaselineTrees:
                 slot[rel] = path_state(True, state.get("hash"))
         seen[root] = slot
     return seen
+
+
+def _file_bytes(path: Path) -> str:
+    """Return file bytes as a latin-1 string, or empty when *path* is not a file."""
+    if path.is_file() and not path.is_symlink():
+        return path.read_bytes().decode("latin-1")
+    return ""
 
 
 def _oos_from_baseline(baseline: BaselineTrees) -> set[tuple[str, str]]:

@@ -173,8 +173,7 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
                 state["gen"] = int(prev.get("gen") or 0)
             except (TypeError, ValueError):
                 state["gen"] = 0
-            if prev.get("oos"):
-                state["oos"] = True
+            _copy_oos_metadata(state, prev)
     for root, prev_paths in previous.items():
         slot = trees.setdefault(root, {})
         for rel, prev in prev_paths.items():
@@ -187,7 +186,19 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
                 gen = int(prev.get("gen") or 0)
             except (TypeError, ValueError):
                 gen = 0
-            slot[rel] = path_state(False, None, gen, oos=oos)
+            recorded = path_state(False, None, gen, oos=oos)
+            _copy_oos_metadata(recorded, prev)
+            slot[rel] = recorded
+
+
+def _copy_oos_metadata(state: PathState, prev: PathState) -> None:
+    """Copy out-of-sync reason, clause, and ancestor bytes from a previous row."""
+    if not prev.get("oos"):
+        return
+    state["oos"] = True
+    for key in ("reason", "clause", "ancestor"):
+        if key in prev:
+            state[key] = prev[key]
 
 
 def _announce_waiting(units: list[MappingUnit], on_line: LineFn | None) -> None:

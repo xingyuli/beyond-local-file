@@ -176,6 +176,7 @@ When isolation state exists:
 ```
 Out-of-sync:
   /Users/username/workspace/project-b  notes.md
+  update lost compare-and-swap at notes.md on /Users/username/workspace/project-b; hub generation 1 from /Users/username/workspace/project-a (reason: stale-base)
 Held copies:
   delete applied past the generation window; kept hub bytes of notes.md (reason: delete-gap)
 Held at /Users/username/.blf/held/<sha256>/...

@@ -125,12 +125,24 @@ Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
-A stable clause naming why a held copy exists. WARNINGs and the later resolve UI show it. 0.5.0 reasons: `create-overwrite` (item-add fan-out replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
+A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (item-add fan-out replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
-A replica is excluded from a path after its update lost compare-and-swap (hub generation/hash no longer matches its base). Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again. `status` lists these; `start` and `reload` warn and ack.
+A replica is excluded from a path after a lost compare-and-swap, or after fan-out skipped it because its disk bytes were not the expected base. Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, or when a **resolve** force-overwrites that path. `status` lists these; `start` and `reload` warn and ack. Each mark has an **out-of-sync reason**.
 _Avoid_: Freeze, conflict, diverge, partition
+
+**Out-of-sync reason**:
+A stable clause naming why a replica is out-of-sync for a path. Status, WARNINGs, and the resolve UI show it. Reasons: `stale-base` (target update lost compare-and-swap), `fan-out-mismatch` (fan-out skipped because disk was not the expected base). The clause names the replica, path, hub generation, and the winning replica when the mark was a lost compare-and-swap.
+_Avoid_: Conflict type, error code, note, isolation reason
+
+**Resolve**:
+Applying the confirmed fact for a path: write those bytes as a new hub generation, force-overwrite every replica that has that item (including out-of-sync replicas), and clear out-of-sync for that path. The daemon is the writer. Isolated replica bytes that did not enter the confirmed fact are not held.
+_Avoid_: Force-overwrite, sync, pick winner, merge
+
+**Resolve UI**:
+The localhost HTML the daemon serves while it is ready. Left nav lists each out-of-sync or held path, keyed by managed project and relative path, grouped by managed project name. Out-of-sync detail is a 3-way merge: hub-now, result, replica-now with a replica switcher. A replica whose live bytes match hub-now is labeled ``same as hub``. Held-only detail shows hold-reason clauses until a later slice. On a TTY, ``daemon status`` opens it with a key. A later desktop notification may open the same URLs.
+_Avoid_: Desktop app, isolation page, status screen, shell screen, source badge
 
 **Mapping change**:
 A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove.

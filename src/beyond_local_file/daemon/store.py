@@ -25,6 +25,9 @@ type SnapshotData = dict[str, Any]
 type PathState = dict[str, Any]
 type BaselineTrees = dict[str, dict[str, PathState]]
 
+REASON_STALE_BASE = "stale-base"
+REASON_FAN_OUT_MISMATCH = "fan-out-mismatch"
+
 _baseline_memory: dict[Path, BaselineTrees] = {}
 
 
@@ -249,6 +252,38 @@ def _remember_baseline(config_path: Path, trees: BaselineTrees, *, replace: bool
         _baseline_memory[key] = copied
         return
     _baseline_memory[key].update(copied)
+
+
+def oos_reason_clause(
+    reason: str,
+    *,
+    replica: str,
+    path: str,
+    gen: int,
+    winner: str | None = None,
+) -> str:
+    """Return the human clause for an out-of-sync reason.
+
+    Args:
+        reason: Stable out-of-sync reason id.
+        replica: Replica that was marked out-of-sync.
+        path: Relative path of the item.
+        gen: Hub generation at the mark.
+        winner: Replica whose apply won the compare-and-swap, when *reason* is
+            ``stale-base``. Ignored for ``fan-out-mismatch``.
+
+    Returns:
+        Text for status, WARNINGs, and the later resolve UI.
+    """
+    if reason == REASON_STALE_BASE:
+        source = winner if winner is not None else replica
+        return (
+            f"update lost compare-and-swap at {path} on {replica}; "
+            f"hub generation {gen} from {source} (reason: {reason})"
+        )
+    if reason == REASON_FAN_OUT_MISMATCH:
+        return f"fan-out skipped {path} on {replica}; disk was not hub generation {gen} (reason: {reason})"
+    return f"{reason}: {path} on {replica} gen {gen}"
 
 
 def path_state(present: bool, digest: str | None, gen: int = 0, oos: bool = False) -> PathState:
