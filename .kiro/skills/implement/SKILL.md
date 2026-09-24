@@ -12,4 +12,4 @@ Run typechecking regularly, single test files regularly, and the full test suite
 
 Once done, use /code-review to review the work.
 
-Suggest git commit message that covers all your work, do not commit on behalf of user directly.
+Suggest commit message cover your work, DO NOT directly commit on behalf of user.
