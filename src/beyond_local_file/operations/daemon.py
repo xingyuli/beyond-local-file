@@ -32,6 +32,7 @@ from beyond_local_file.daemon.process import (
     spawn_worker,
     stop_process,
 )
+from beyond_local_file.daemon.resolve_ui import resolve_ui_url
 from beyond_local_file.daemon.runtime import run_worker
 from beyond_local_file.daemon.screen import (
     ScreenSkip,
@@ -202,7 +203,11 @@ def status_daemon(config: str | None) -> int:
     result = load_config_projects(config)
     if result is None:
         return 1
-    iso = tuple(_isolation_lines(result.config_file, warning=False))
+    iso_lines = _isolation_lines(result.config_file, warning=False)
+    url = resolve_ui_url(result.config_file) if iso_lines else None
+    if url:
+        iso_lines.append(url)
+    iso = tuple(iso_lines)
     if shell_wants_screen() and is_running(result.config_file):
         return call_daemon(
             result.config_file,

@@ -32,6 +32,8 @@ _LOG_RECORD_COLOR = {"daemon": "36", "idle": "33", "requests": "32"}
 _STAMP_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 READY_NAME = "daemon.ready"
 PORT_NAME = "daemon.port"
+RESOLVE_PORT_NAME = "resolve.port"
+RESOLVE_TOKEN_NAME = "resolve.token"
 MAPPING_FILES_NAME = "mapping-files"
 GLOBAL_SET_ID = "global"
 _START_TIMEOUT_S = 30.0
@@ -214,6 +216,30 @@ def port_path(config_path: Path) -> Path:
         Path to ``daemon.port``.
     """
     return state_dir(config_path) / PORT_NAME
+
+
+def resolve_port_path(config_path: Path) -> Path:
+    """Return the resolve UI HTTP-port file path.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        Path to ``resolve.port``.
+    """
+    return state_dir(config_path) / RESOLVE_PORT_NAME
+
+
+def resolve_token_path(config_path: Path) -> Path:
+    """Return the resolve UI token file path.
+
+    Args:
+        config_path: Path to the loaded config file.
+
+    Returns:
+        Path to ``resolve.token``.
+    """
+    return state_dir(config_path) / RESOLVE_TOKEN_NAME
 
 
 def read_pid(config_path: Path) -> int | None:
@@ -524,7 +550,13 @@ def _write_pid(config_path: Path, pid: int) -> None:
 
 
 def _clear_runtime_files(config_path: Path) -> None:
-    for path in (pid_path(config_path), ready_path(config_path), port_path(config_path)):
+    for path in (
+        pid_path(config_path),
+        ready_path(config_path),
+        port_path(config_path),
+        resolve_port_path(config_path),
+        resolve_token_path(config_path),
+    ):
         path.unlink(missing_ok=True)
 
 

@@ -43,6 +43,7 @@ from .log import (
     reset_persist_samples,
 )
 from .process import state_dir, write_ready
+from .resolve_ui import ResolveHttp, start_resolve_ui, stop_resolve_ui
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 from .workers import WorkerUnit, build_worker_units, route_worker_unit, trees_for_project
 
@@ -69,6 +70,7 @@ class _LiveRuntime:
     state: WorkerState
     units: dict[str, WorkerUnit]
     failed: threading.Event
+    resolve_http: ResolveHttp | None = None
 
 
 def run_worker(config_path: Path) -> int:
@@ -112,6 +114,7 @@ def run_worker(config_path: Path) -> int:
         _on_request,
         ServeLoop(shutdown=runtime.shutdown, bound=runtime.bound, state=runtime.state),
     )
+    stop_resolve_ui(runtime.resolve_http)
     print("daemon stopping", flush=True)
     return 1 if runtime.failed.is_set() else 0
 
@@ -546,6 +549,10 @@ def _catch_up_worker(runtime: _LiveRuntime) -> None:
     runtime.units.update(build_worker_units(projects, trees, runtime.config_path, runtime.shutdown))
     for unit in runtime.units.values():
         unit.start()
+    try:
+        runtime.resolve_http = start_resolve_ui(runtime.config_path)
+    except OSError as error:
+        print(f"resolve UI: failed to bind: {error}", flush=True)
     write_ready(runtime.config_path)
     print("daemon ready", flush=True)
     runtime.state.set_ready()

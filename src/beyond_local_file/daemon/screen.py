@@ -7,6 +7,7 @@ import select
 import sys
 import threading
 import time
+import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -22,6 +23,7 @@ _HINT_ASK = "Enter: answer  Ctrl+C: cancel"
 _HINT_RUNNING = "Ctrl+C: stop"
 _HINT_STOP = "Enter: answer  Ctrl+C: confirm stop  Esc: continue"
 _HINT_DONE = "q: close  Ctrl+C: close"
+_HINT_DONE_OPEN = "o: open  q: close  Ctrl+C: close"
 _STOP_QUESTION = "Stop this command?"
 _ANSWER_LINE = "Answer y or n."
 _ALT_ENTER = "\x1b[?1049h\x1b[?25l"
@@ -139,6 +141,7 @@ def run_shell_screen(
         questions: Pre-request questions. Nothing is sent until they are answered.
         connect: Opens the request channel from the answers. Used when *questions* is set.
         trailer: Extra output lines appended after the daemon transcript.
+            A ``http://127.0.0.1:`` line enables ``o: open`` on a finished screen.
 
     Returns:
         The command's exit code.
@@ -160,6 +163,13 @@ def run_shell_screen(
     finally:
         if owned is not None:
             owned.close()
+
+
+def _open_url_from(trailer: tuple[str, ...]) -> str | None:
+    for line in reversed(trailer):
+        if line.startswith("http://127.0.0.1:"):
+            return line
+    return None
 
 
 def _header(request: Request) -> str:
@@ -257,6 +267,7 @@ class _ShellScreen:
         self._fallback = fallback
         self._op = op
         self._trailer = trailer
+        self._open_url = _open_url_from(trailer) if op == "status" else None
         self._rows: list[_UnitRow] = [_UnitRow()] if single else []
         self._notes: list[str] = []
         self._output: list[str] = []
@@ -477,7 +488,11 @@ class _ShellScreen:
         with self._lock:
             phase = self._phase
             question = self._question
+            open_url = self._open_url
         if phase == "finished":
+            if key == "o" and open_url:
+                webbrowser.open(open_url)
+                return
             if key in {"q", "ctrl-c"}:
                 self._closed = True
             return
@@ -588,6 +603,8 @@ class _ShellScreen:
 
     def _hint_text(self) -> str:
         if self._phase == "finished":
+            if self._open_url:
+                return _HINT_DONE_OPEN
             return _HINT_DONE
         if self._phase == "asking":
             return _HINT_ASK

@@ -27,6 +27,7 @@ _ALT_OFF = "\x1b[?1049l"
 _HINT_RUNNING = "Ctrl+C: stop"
 _HINT_STOP = "Enter: answer  Ctrl+C: confirm stop  Esc: continue"
 _HINT_DONE = "q: close  Ctrl+C: close"
+_HINT_OPEN = "o: open  q: close  Ctrl+C: close"
 _HINT_ASK = "Enter: answer  Ctrl+C: cancel"
 _STOP_QUESTION = "Stop this command?"
 _ANSWER_LINE = "Answer y or n."
@@ -892,8 +893,7 @@ def test_tty_reload_declined_removal_does_not_send(
                 master,
                 chunks,
                 proc,
-                lambda _text, frame: _hint(frame) == _HINT_DONE
-                and "Mapping changes were not applied" in frame,
+                lambda _text, frame: _hint(frame) == _HINT_DONE and "Mapping changes were not applied" in frame,
             )
             assert proc.poll() is None
             code, text = _close_and_read(master, chunks, proc, b"q")
@@ -941,8 +941,7 @@ def test_tty_reload_asks_isolation_ack_on_the_shell_screen(
                 master,
                 chunks,
                 proc,
-                lambda _text, frame: _hint(frame) == _HINT_DONE
-                and "Mappings already match the snapshot" in frame,
+                lambda _text, frame: _hint(frame) == _HINT_DONE and "Mappings already match the snapshot" in frame,
             )
             code, text = _close_and_read(master, chunks, proc, b"q")
         assert code == 0
@@ -1046,9 +1045,9 @@ def test_tty_status_shows_pid_and_phase_without_worker_unit_rows(
                 master,
                 chunks,
                 proc,
-                lambda _text, frame: "Daemon is running" in frame
-                and "phase ready" in frame
-                and _hint(frame) == _HINT_DONE,
+                lambda _text, frame: (
+                    "Daemon is running" in frame and "phase ready" in frame and _hint(frame) == _HINT_DONE
+                ),
             )
             assert proc.poll() is None
             assert _ALT_ON in text
@@ -1110,9 +1109,61 @@ def test_tty_status_includes_held_copies_in_the_output(
                 master,
                 chunks,
                 proc,
-                lambda _text, frame: "Held at " in frame and _hint(frame) == _HINT_DONE,
+                lambda _text, frame: "Held at " in frame and _hint(frame) == _HINT_OPEN,
             )
             assert proc.poll() is None
             code, text = _close_and_read(master, chunks, proc, b"q")
         assert code == 0
         assert _normalize(_after_exit(text)) == _normalize(plain)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_status_with_isolation_open_key_opens_resolve_ui(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """TTY status with isolation keeps the listing; o opens the resolve UI and leaves the screen up."""
+    config_path, target_a, _target_b = _two_projects(tmp_path)
+    sidecar = tmp_path / "hub-bytes.txt"
+    sidecar.write_text("kept-hub-bytes")
+    opened = tmp_path / "opened-url"
+    fake_browser = tmp_path / "fake-browser"
+    fake_browser.write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\nimport sys\nPath({str(opened)!r}).write_text(sys.argv[1])\n"
+    )
+    fake_browser.chmod(0o755)
+    env = {**isolated_home, "BROWSER": str(fake_browser)}
+    with daemon_running(config_path, env):
+        store_held_copy(
+            tmp_path / "alpha",
+            rel_path=Path("a.txt"),
+            source=sidecar,
+            replica=target_a,
+            reason=REASON_DELETE_GAP,
+        )
+        with _pty_cli(
+            ["--config", str(config_path), "daemon", "status"],
+            env,
+            tmp_path,
+        ) as (proc, master, chunks):
+            _wait(
+                master,
+                chunks,
+                proc,
+                lambda _text, frame: "Held at " in frame and _hint(frame) == _HINT_OPEN,
+            )
+            assert proc.poll() is None
+            os.write(master, b"o")
+            deadline = time.monotonic() + _WAIT_S
+            while time.monotonic() < deadline:
+                if opened.is_file() and "http://127.0.0.1:" in opened.read_text() and "token=" in opened.read_text():
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(opened.read_text() if opened.is_file() else "browser was not opened")
+            assert proc.poll() is None
+            frame = _last_frame(_drain(master, chunks))
+            assert _hint(frame) == _HINT_OPEN
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert "Held at " in _after_exit(text)

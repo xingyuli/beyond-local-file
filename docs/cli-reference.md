@@ -153,9 +153,9 @@ blf daemon status
 
 ### Terminal
 
-On a terminal, a running daemon opens a shell screen and leaves it up until you close it. The header is pid and phase. There are no worker-unit rows. The output is the status text, then out-of-sync paths and held copies when those exist. After it finishes: `q: close` and `Ctrl+C: close`. Closing restores the terminal and prints that same text.
+On a terminal, a running daemon opens a shell screen and leaves it up until you close it. The header is pid and phase. There are no worker-unit rows. The output is the status text, then out-of-sync paths and held copies when those exist. After it finishes: `q: close` and `Ctrl+C: close`. When isolation exists and the daemon is ready, the hint is `o: open  q: close  Ctrl+C: close`. `o` opens the resolve UI in the default browser and leaves the screen up. Closing restores the terminal and prints that same text.
 
-If the daemon is not running, status prints `Daemon is not running` and does not open a screen. Without a terminal, status prints the same text and does not wait for a key.
+The ready daemon owns a second localhost HTTP port for the resolve UI (`127.0.0.1` only), authenticated by a token in the set run directory. JSON IPC stays on `daemon.port`. If the daemon is not running, status prints `Daemon is not running` and does not open a screen. Without a terminal, status prints the same text and does not wait for a key. When isolation exists, non-TTY status also prints the resolve UI URL and does not open a browser.
 
 ### Output
 
@@ -180,9 +180,12 @@ Out-of-sync:
 Held copies:
   delete applied past the generation window; kept hub bytes of notes.md (reason: delete-gap)
 Held at /Users/username/.blf/held/<sha256>/...
+http://127.0.0.1:12345/?token=...
 ```
 
-0.5.0 has no resolve/restore/discard shells for these. Status is enough to copy by hand; `start` and `reload` warn and continue.
+The resolve UI page lists those same out-of-sync rows and held copies. There is no merge editor on this page yet.
+
+0.5.0 has no restore/discard shells for held copies. `start` and `reload` warn and continue.
 
 ---
 
