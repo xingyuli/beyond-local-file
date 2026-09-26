@@ -19,12 +19,13 @@ if os.name != "nt":
     import termios
     import tty
 
-_HINT_ASK = "Enter: answer  Ctrl+C: cancel"
-_HINT_RUNNING = "Ctrl+C: stop"
-_HINT_STOP = "Enter: answer  Ctrl+C: confirm stop  Esc: continue"
-_HINT_DONE = "q: close  Ctrl+C: close"
-_HINT_DONE_OPEN = "o: open  q: close  Ctrl+C: close"
-_STOP_QUESTION = "Stop this command?"
+_HINT_ASK_ACK = "Enter: continue  Ctrl+C: interrupt"
+_HINT_ASK_YN = "Enter: y/n  Ctrl+C: interrupt"
+_HINT_RUNNING = "Ctrl+C: interrupt"
+_HINT_INTERRUPT = "Enter: interrupt  Esc: resume"
+_HINT_DONE = "q: close"
+_HINT_DONE_OPEN = "o: open  q: close"
+_STOP_QUESTION = "Interrupt this command?"
 _ANSWER_LINE = "Answer y or n."
 _ALT_ENTER = "\x1b[?1049h\x1b[?25l"
 _ALT_LEAVE = "\x1b[?25h\x1b[?1049l"
@@ -67,6 +68,7 @@ class ScreenQuestion:
     lines: tuple[str, ...]
     choices: tuple[str, ...] | None = None
     invalid: str = _ANSWER_LINE
+    ack: bool = False
 
 
 class ScreenSkip(Exception):
@@ -85,10 +87,12 @@ def isolation_ack_question(lines: Sequence[str]) -> ScreenQuestion:
         lines: Warning lines already formatted for the screen.
 
     Returns:
-        A yes/no question. Either answer continues; Ctrl+C cancels.
+        An ack. Enter continues; Ctrl+C interrupts and sends nothing.
     """
     return ScreenQuestion(
         lines=(*lines, "Continue without resolving held copies and out-of-sync paths?"),
+        ack=True,
+        invalid="Press Enter to continue.",
     )
 
 
@@ -492,12 +496,14 @@ class _ShellScreen:
         if phase == "finished":
             if key == "o" and open_url:
                 webbrowser.open(open_url)
+                self._closed = True
                 return
             if key in {"q", "ctrl-c"}:
                 self._closed = True
             return
         if question:
-            self._on_question_key(key, session)
+            if session is not None:
+                self._on_question_key(key, session)
             return
         if key == "ctrl-c" and session is not None:
             self._ask_stop()
@@ -511,39 +517,12 @@ class _ShellScreen:
             self._buffer = ""
 
     def _on_question_key(self, key: str, session: RequestSession) -> None:
-        if key == "ctrl-c":
+        if key == "enter":
             self._confirm_stop(session)
             return
         if key == "esc":
             self._continue()
             return
-        if key == "enter":
-            self._submit(session)
-            return
-        if key == "backspace":
-            with self._lock:
-                self._buffer = self._buffer[:-1]
-            return
-        if len(key) == 1 and key.isprintable():
-            with self._lock:
-                if len(self._buffer) < _INPUT_LIMIT:
-                    self._buffer += key
-
-    def _submit(self, session: RequestSession) -> None:
-        with self._lock:
-            answer = self._buffer.strip().lower()
-            self._buffer = ""
-            if not self._question or self._phase != "running":
-                return
-        if answer == "y":
-            self._confirm_stop(session)
-            return
-        if answer == "n":
-            self._continue()
-            return
-        with self._lock:
-            if self._question:
-                self._notes.append(_ANSWER_LINE)
 
     def _continue(self) -> None:
         with self._lock:
@@ -588,16 +567,21 @@ class _ShellScreen:
             unit_lines = [row.text() for row in self._rows]
             hint = self._hint_text()
             output = list(self._output if self._phase == "finished" else self._notes)
-            question = self._question and self._phase in {"running", "asking"}
-            typed = self._buffer
-        reserved = len(unit_lines) + 2 + (1 if question else 0)
+            typed = (
+                self._question
+                and self._phase == "asking"
+                and self._current_question is not None
+                and not self._current_question.ack
+            )
+            buffer = self._buffer
+        reserved = len(unit_lines) + 2 + (1 if typed else 0)
         body_height = max(0, rows - reserved)
         visible = output[-body_height:] if body_height else []
         if len(visible) < body_height:
             visible.extend([""] * (body_height - len(visible)))
         lines = [header, *unit_lines, *visible]
-        if question:
-            lines.append(f"> {typed}")
+        if typed:
+            lines.append(f"> {buffer}")
         lines.append(hint)
         return _render(columns, lines)
 
@@ -607,9 +591,11 @@ class _ShellScreen:
                 return _HINT_DONE_OPEN
             return _HINT_DONE
         if self._phase == "asking":
-            return _HINT_ASK
+            if self._current_question is not None:
+                return _ask_hint(self._current_question)
+            return _HINT_ASK_YN
         if self._question:
-            return _HINT_STOP
+            return _HINT_INTERRUPT
         return _HINT_RUNNING
 
 
@@ -644,7 +630,17 @@ class _Terminal:
         return _read_keys_posix(self._fd, timeout)
 
 
+def _ask_hint(question: ScreenQuestion) -> str:
+    if question.ack:
+        return _HINT_ASK_ACK
+    if question.choices is not None:
+        return f"Enter: 1-{len(question.choices)}  Ctrl+C: interrupt"
+    return _HINT_ASK_YN
+
+
 def _accepted_answer(question: ScreenQuestion, answer: str) -> str | None:
+    if question.ack:
+        return "y" if answer == "" else None
     if question.choices is not None:
         return answer if answer in question.choices else None
     lowered = answer.lower()

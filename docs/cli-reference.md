@@ -78,7 +78,7 @@ blf daemon start
 7. Warns about out-of-sync paths and held copies and asks you to continue. On a terminal that question is asked on the shell screen before the daemon is spawned, one at a time after a removal confirm if both apply.
 8. Binds IPC, then catch-up. `daemon start` stays in the foreground until phase `ready`. On a terminal it opens a shell screen through catch-up and leaves it up when the daemon is ready. The header names `daemon start` and all projects. One row per managed project being caught up: state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. The header, the rows, and the hint stay put. When the daemon is ready, the output is `Daemon started (pid …)`. Closing the screen restores the terminal and prints that same line. Without a terminal there is no screen and no status line. Live observation starts only in `ready`.
 
-   Before the daemon is spawned, a question uses `Enter: answer` and `Ctrl+C: cancel`. Ctrl+C closes the screen and starts nothing. While catch-up runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the daemon is ready: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+   Before the daemon is spawned, removal confirm uses `Enter: y/n` and `Ctrl+C: interrupt`. Isolation ack uses `Enter: continue` and `Ctrl+C: interrupt` (one Enter, no input line; `y` or `n` does not continue). Ctrl+C closes the screen and starts nothing. While catch-up runs: `Ctrl+C: interrupt`. That prints `Interrupt this command?` with no input line. Interrupt confirm: `Enter: interrupt`, `Esc: resume`. After the daemon is ready: `q: close`. Ctrl+C also closes but is not listed. Closing does not ask for confirmation.
 9. Catch-up: with no baseline, every projection is made to match the managed project (fresh catch-up). With a baseline, only paths that differ are queued (update catch-up). Leftover blf symlinks to the correct managed item become copies. Nested symlink nodes inside a directory item are copied as symlinks.
 
 ### Examples
@@ -153,7 +153,7 @@ blf daemon status
 
 ### Terminal
 
-On a terminal, a running daemon opens a shell screen and leaves it up until you close it. The header is pid and phase. There are no worker-unit rows. The output is the status text, then out-of-sync paths and held copies when those exist. After it finishes: `q: close` and `Ctrl+C: close`. When isolation exists and the daemon is ready, the hint is `o: open  q: close  Ctrl+C: close`. `o` opens the resolve UI in the default browser and leaves the screen up. Closing restores the terminal and prints that same text.
+On a terminal, a running daemon opens a shell screen and leaves it up until you close it. The header is pid and phase. There are no worker-unit rows. The output is the status text, then out-of-sync paths and held copies when those exist. After it finishes: `q: close`. When isolation exists and the daemon is ready, the hint is `o: open  q: close`. `o` opens the resolve UI in the default browser and closes the screen. `q` closes without opening. Ctrl+C also closes but is not listed. Closing restores the terminal and prints that same text.
 
 The ready daemon owns a second localhost HTTP port for the resolve UI (`127.0.0.1` only), authenticated by a token in the set run directory. JSON IPC stays on `daemon.port`. If the daemon is not running, status prints `Daemon is not running` and does not open a screen. Without a terminal, status prints the same text and does not wait for a key. When isolation exists, non-TTY status also prints the resolve UI URL and does not open a browser.
 
@@ -265,7 +265,7 @@ The daemon does not watch mapping files. Internal mapping edits from `revlink` /
 
 On a terminal, a reload that sends a request to the daemon opens a shell screen and leaves it up until you close it. The header names `daemon reload` and that managed project, or all projects when more than one worker unit's mappings changed. One row per worker unit whose mappings changed: state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. The header, the rows, and the hint stay put. Closing the screen restores the terminal and prints reload's result.
 
-Before a request is sent, a question uses `Enter: answer` and `Ctrl+C: cancel`. Ctrl+C closes the screen and sends nothing. While the request runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the reload finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+Before a request is sent, removal confirm uses `Enter: y/n` and `Ctrl+C: interrupt`. Isolation ack uses `Enter: continue` and `Ctrl+C: interrupt` (one Enter, no input line; `y` or `n` does not continue). Ctrl+C closes the screen and sends nothing. While the request runs: `Ctrl+C: interrupt`. That prints `Interrupt this command?` with no input line. Interrupt confirm: `Enter: interrupt`, `Esc: resume`. After the reload finishes: `q: close`. Ctrl+C also closes but is not listed. Closing does not ask for confirmation.
 
 A reload that never reaches the daemon and has no question stays plain text and does not open a screen. That includes `Mappings already match the snapshot` with no isolation warning, and a daemon that is not running. A declined removal confirm is asked on the screen and then prints `Mapping changes were not applied`.
 
@@ -318,11 +318,11 @@ If any projection fails preflight validation, the command leaves all managed ite
 
 On a terminal, `remove` opens a shell screen and leaves it up until you close it, including a fast removal. The header names `remove` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Removed …`, `Deleted managed copy: …`, and the rest, or the error text).
 
-The input line is hidden except while a question is open. It sits directly above the hint.
+The input line is hidden except while a typed answer is required. It sits directly above the hint.
 
-- While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
-- Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
-- After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+- While the request runs: `Ctrl+C: interrupt`. That prints `Interrupt this command?` with no input line.
+- Interrupt confirm: `Enter: interrupt`, `Esc: resume`. Enter interrupts. Esc resumes. A second Ctrl+C does nothing.
+- After the command finishes: `q: close`. Ctrl+C also closes but is not listed. Closing does not ask for confirmation.
 
 Closing the screen restores the terminal and prints that same transcript. Without a terminal, `remove` prints the transcript and exits with the command's exit code. It does not draw a screen or wait for a key.
 
@@ -368,7 +368,7 @@ If the process is in phase `catch-up`, check waits until `ready` rather than fai
 
 On a terminal, `link check` opens a shell screen and leaves it up until you close it. The header names `link check` and the project, or all projects when no project is given. One row per worker unit that request uses: managed project, state (`waiting`, `working`, `done`, or `failed`), the current item, and elapsed time. Rows fill in as units finish. The header, the rows, and the hint stay put. The output scrolls. When the check finishes, the plain table fills the output. `--format verbose` stays line-oriented in that output. Closing the screen restores the terminal and prints that same result.
 
-While the check runs: `Ctrl+C: stop`. That prints `Stop this command?`. Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. After the check finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+While the check runs: `Ctrl+C: interrupt`. That prints `Interrupt this command?` with no input line. Interrupt confirm: `Enter: interrupt`, `Esc: resume`. After the check finishes: `q: close`. Ctrl+C also closes but is not listed. Closing does not ask for confirmation.
 
 Without a terminal, `link check` prints the table only and does not wait for a key.
 
@@ -561,12 +561,12 @@ blf revlink create [OPTIONS] PATH
 
 On a terminal, `revlink create` opens a shell screen and leaves it up until you close it, including a fast create. When several hubs target CWD and PATH is new, the numbered hub choice is asked on that screen before the request is sent. The header names `revlink create` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Computing checksum of …`, `Copying …`, and the rest, or the error text).
 
-The input line is hidden except while a question is open. It sits directly above the hint.
+The input line is hidden except while a typed answer is required. It sits directly above the hint.
 
-- Before the request is sent: `Enter: answer` and `Ctrl+C: cancel`. A hub choice is answered with its number. Anything else prints one line and the question stays open. Ctrl+C closes the screen and sends nothing.
-- While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
-- Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
-- After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+- Before the request is sent: `Enter: 1-N` and `Ctrl+C: interrupt`. A hub choice is answered with its number. Anything else prints one line and the question stays open. Ctrl+C closes the screen and sends nothing.
+- While the request runs: `Ctrl+C: interrupt`. That prints `Interrupt this command?` with no input line.
+- Interrupt confirm: `Enter: interrupt`, `Esc: resume`. Enter interrupts. Esc resumes. A second Ctrl+C does nothing.
+- After the command finishes: `q: close`. Ctrl+C also closes but is not listed. Closing does not ask for confirmation.
 
 Closing the screen restores the terminal and prints that same transcript. Without a terminal, `revlink create` prints the transcript and exits with the command's exit code. It does not draw a screen or wait for a key.
 
@@ -669,11 +669,11 @@ blf revlink restore [OPTIONS] PATH
 
 On a terminal, `revlink restore` opens a shell screen and leaves it up until you close it, including a fast restore. The header names `revlink restore` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Leaving target file in place: …`, `Managed copy deleted: …`, and the rest, or the error text).
 
-The input line is hidden except while a question is open. It sits directly above the hint.
+The input line is hidden except while a typed answer is required. It sits directly above the hint.
 
-- While the request runs: `Ctrl+C: stop`. That prints `Stop this command?` and shows the input.
-- Stop question: `Enter: answer`, `Ctrl+C: confirm stop`, `Esc: continue`. `y` stops the command. `n` continues. Anything else prints one line and the question stays open. A second Ctrl+C stops. Esc continues.
-- After the command finishes: `q: close` and `Ctrl+C: close`. Closing does not ask for confirmation.
+- While the request runs: `Ctrl+C: interrupt`. That prints `Interrupt this command?` with no input line.
+- Interrupt confirm: `Enter: interrupt`, `Esc: resume`. Enter interrupts. Esc resumes. A second Ctrl+C does nothing.
+- After the command finishes: `q: close`. Ctrl+C also closes but is not listed. Closing does not ask for confirmation.
 
 Closing the screen restores the terminal and prints that same transcript. Without a terminal, `revlink restore` prints the transcript and exits with the command's exit code. It does not draw a screen or wait for a key.
 

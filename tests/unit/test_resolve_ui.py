@@ -411,8 +411,8 @@ def test_status_when_daemon_down_is_unchanged_and_prints_no_url(
     assert not _resolve_token_path(config_path).exists()
 
 
-def test_finished_status_o_opens_browser_and_leaves_the_screen(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pressing o on a finished status screen calls webbrowser.open and does not close."""
+def test_finished_status_o_opens_browser_and_closes_the_screen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pressing o on a finished status screen opens the resolve UI and closes."""
     opened: list[str] = []
     monkeypatch.setattr(
         "beyond_local_file.daemon.screen.webbrowser.open",
@@ -428,11 +428,9 @@ def test_finished_status_o_opens_browser_and_leaves_the_screen(monkeypatch: pyte
             "phase": "ready",
         }
     )
-    assert screen._hint_text() == "o: open  q: close  Ctrl+C: close"
+    assert screen._hint_text() == "o: open  q: close"
     screen._on_key("o", None)
     assert opened == [url]
-    assert not screen._closed
-    screen._on_key("q", None)
     assert screen._closed
 
 

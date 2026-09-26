@@ -24,13 +24,14 @@ from tests.daemon_support import daemon_running, start_daemon, stop_daemon
 _WAIT_S = 15.0
 _ALT_ON = "\x1b[?1049h"
 _ALT_OFF = "\x1b[?1049l"
-_HINT_RUNNING = "Ctrl+C: stop"
-_HINT_STOP = "Enter: answer  Ctrl+C: confirm stop  Esc: continue"
-_HINT_DONE = "q: close  Ctrl+C: close"
-_HINT_OPEN = "o: open  q: close  Ctrl+C: close"
-_HINT_ASK = "Enter: answer  Ctrl+C: cancel"
-_STOP_QUESTION = "Stop this command?"
-_ANSWER_LINE = "Answer y or n."
+_HINT_RUNNING = "Ctrl+C: interrupt"
+_HINT_INTERRUPT = "Enter: interrupt  Esc: resume"
+_HINT_DONE = "q: close"
+_HINT_OPEN = "o: open  q: close"
+_HINT_ASK_ACK = "Enter: continue  Ctrl+C: interrupt"
+_HINT_ASK_YN = "Enter: y/n  Ctrl+C: interrupt"
+_HINT_ASK_HUB = "Enter: 1-2  Ctrl+C: interrupt"
+_STOP_QUESTION = "Interrupt this command?"
 _ROW_MARK = re.compile(r"\x1b\[(\d+);1H\x1b\[2K")
 
 type FrameCheck = Callable[[str, str], bool]
@@ -252,13 +253,11 @@ def test_q_is_not_required_when_ctrl_c_closes_finished_screen(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-@pytest.mark.parametrize("confirm", [b"y\r", b"\x03"])
-def test_confirming_stop_cancels_the_running_command(
+def test_confirming_interrupt_cancels_the_running_command(
     tmp_path: Path,
     isolated_home: dict[str, str],
-    confirm: bytes,
 ) -> None:
-    """Ctrl+C asks to stop; y or a second Ctrl+C cancels before the op runs."""
+    """Ctrl+C asks to interrupt; Enter cancels before the op runs."""
     config_path, managed, target = _workspace(tmp_path)
     hold = tmp_path / "idle-hold"
     hold.write_text("1")
@@ -274,9 +273,9 @@ def test_confirming_stop_cancels_the_running_command(
             _wait(master, chunks, proc, _row_is("waiting"))
 
             os.write(master, b"\x03")
-            _wait(master, chunks, proc, _stop_question_open)
+            _wait(master, chunks, proc, _interrupt_question_open)
 
-            os.write(master, confirm)
+            os.write(master, b"\r")
             _wait(master, chunks, proc, _running_again)
             time.sleep(0.2)
             hold.unlink(missing_ok=True)
@@ -293,11 +292,11 @@ def test_confirming_stop_cancels_the_running_command(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_esc_continues_a_running_command(
+def test_esc_resumes_a_running_command(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """Esc dismisses the stop question and the command still finishes."""
+    """Esc dismisses the interrupt question and the command still finishes."""
     config_path, managed, target = _workspace(tmp_path)
     hold = tmp_path / "idle-hold"
     hold.write_text("1")
@@ -312,7 +311,7 @@ def test_esc_continues_a_running_command(
         ) as (proc, master, chunks):
             _wait(master, chunks, proc, _row_is("waiting"))
             os.write(master, b"\x03")
-            _wait(master, chunks, proc, _stop_question_open)
+            _wait(master, chunks, proc, _interrupt_question_open)
             os.write(master, b"\x1b")
             _wait(master, chunks, proc, _running_again)
             hold.unlink(missing_ok=True)
@@ -327,11 +326,11 @@ def test_esc_continues_a_running_command(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_other_answer_keeps_the_stop_question_open(
+def test_second_ctrl_c_does_not_confirm_interrupt(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """A submission other than y or n prints one line and leaves the question open."""
+    """A second Ctrl+C on the interrupt question does not cancel; Enter still can."""
     config_path, managed, target = _workspace(tmp_path)
     hold = tmp_path / "idle-hold"
     hold.write_text("1")
@@ -346,17 +345,21 @@ def test_other_answer_keeps_the_stop_question_open(
         ) as (proc, master, chunks):
             _wait(master, chunks, proc, _row_is("waiting"))
             os.write(master, b"\x03")
-            _wait(master, chunks, proc, _stop_question_open)
-            os.write(master, b"no\r")
-            text = _wait(master, chunks, proc, _invalid_answer_shown)
-            assert _ANSWER_LINE in _last_frame(text)
-            os.write(master, b"n\r")
+            _wait(master, chunks, proc, _interrupt_question_open)
+            os.write(master, b"\x03")
+            time.sleep(0.2)
+            _wait(master, chunks, proc, _interrupt_question_open)
+            assert proc.poll() is None
+            os.write(master, b"\r")
             _wait(master, chunks, proc, _running_again)
+            time.sleep(0.2)
             hold.unlink(missing_ok=True)
-            _wait(master, chunks, proc, _finished("revlink create  item.txt", "Computing checksum"))
-            code, _text = _close_and_read(master, chunks, proc, b"q")
-        assert code == 0
-        assert (managed / "item.txt").read_text() == "adopt me"
+            text = _wait(master, chunks, proc, _failed_stopped)
+            assert proc.poll() is None
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 1
+        assert "Stopped" in _after_exit(text)
+        assert not (managed / "item.txt").exists()
     finally:
         hold.unlink(missing_ok=True)
         stop_daemon(config_path, env)
@@ -409,12 +412,8 @@ def _row_is(state: str) -> FrameCheck:
     return predicate
 
 
-def _invalid_answer_shown(_text: str, frame: str) -> bool:
-    return _stop_question_open(_text, frame) and _ANSWER_LINE in frame
-
-
-def _stop_question_open(_text: str, frame: str) -> bool:
-    return _hint(frame) == _HINT_STOP and _above_hint(frame).startswith("> ") and _STOP_QUESTION in frame
+def _interrupt_question_open(_text: str, frame: str) -> bool:
+    return _hint(frame) == _HINT_INTERRUPT and not _above_hint(frame).startswith("> ") and _STOP_QUESTION in frame
 
 
 def _running_again(_text: str, frame: str) -> bool:
@@ -505,7 +504,7 @@ def test_tty_link_check_shows_one_row_per_worker_unit_then_prints_the_table(
             text = _wait(master, chunks, proc, _rows_show(["alpha", "beta"], header="link check  all projects"))
             assert proc.poll() is None
             assert _ALT_ON in text
-            assert "Ctrl+C: stop" in text or _HINT_DONE in text
+            assert "Ctrl+C: interrupt" in text or _HINT_DONE in text
             frame = _last_frame(text)
             assert "a.txt" in frame or "b.txt" in frame
             joined = "\n".join(_unit_rows(frame, 2))
@@ -745,7 +744,7 @@ def _hub_choice_open(_text: str, frame: str) -> bool:
         and "  1. shared-hooks" in frame
         and "  2. shared-settings" in frame
         and "Choose a managed project" in frame
-        and _hint(frame) == _HINT_ASK
+        and _hint(frame) == _HINT_ASK_HUB
         and _above_hint(frame).startswith("> ")
     )
 
@@ -835,7 +834,7 @@ def _removal_confirm_open(_text: str, frame: str) -> bool:
         "Mapping removals:" in frame
         and "project-remove: beta" in frame
         and "Apply these mapping removals?" in frame
-        and _hint(frame) == _HINT_ASK
+        and _hint(frame) == _HINT_ASK_YN
         and _above_hint(frame).startswith("> ")
     )
 
@@ -906,8 +905,8 @@ def _isolation_ack_open(_text: str, frame: str) -> bool:
     return (
         "WARNING:" in frame
         and "Continue without resolving held copies and out-of-sync paths?" in frame
-        and _hint(frame) == _HINT_ASK
-        and _above_hint(frame).startswith("> ")
+        and _hint(frame) == _HINT_ASK_ACK
+        and not _above_hint(frame).startswith("> ")
     )
 
 
@@ -936,7 +935,7 @@ def test_tty_reload_asks_isolation_ack_on_the_shell_screen(
             text = _wait(master, chunks, proc, _isolation_ack_open)
             assert proc.poll() is None
             assert _ALT_ON in text
-            os.write(master, b"y\r")
+            os.write(master, b"\r")
             _wait(
                 master,
                 chunks,
@@ -946,6 +945,50 @@ def test_tty_reload_asks_isolation_ack_on_the_shell_screen(
             code, text = _close_and_read(master, chunks, proc, b"q")
         assert code == 0
         assert "Mappings already match the snapshot" in _after_exit(text)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
+def test_tty_isolation_ack_rejects_y_and_n_until_bare_enter(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Isolation ack continues only on a bare Enter, not y or n."""
+    config_path, target_a, _target_b = _two_projects(tmp_path)
+    sidecar = tmp_path / "hub-bytes.txt"
+    sidecar.write_text("kept-hub-bytes")
+    with daemon_running(config_path, isolated_home):
+        store_held_copy(
+            tmp_path / "alpha",
+            rel_path=Path("a.txt"),
+            source=sidecar,
+            replica=target_a,
+            reason=REASON_DELETE_GAP,
+        )
+        with _pty_cli(
+            ["--config", str(config_path), "daemon", "reload"],
+            isolated_home,
+            tmp_path,
+        ) as (proc, master, chunks):
+            _wait(master, chunks, proc, _isolation_ack_open)
+            os.write(master, b"y\r")
+            text = _wait(master, chunks, proc, _isolation_ack_invalid)
+            assert "Press Enter to continue." in _last_frame(text)
+            os.write(master, b"n\r")
+            _wait(master, chunks, proc, _isolation_ack_invalid)
+            os.write(master, b"\r")
+            _wait(
+                master,
+                chunks,
+                proc,
+                lambda _text, frame: _hint(frame) == _HINT_DONE and "Mappings already match the snapshot" in frame,
+            )
+            code, text = _close_and_read(master, chunks, proc, b"q")
+        assert code == 0
+        assert "Mappings already match the snapshot" in _after_exit(text)
+
+
+def _isolation_ack_invalid(_text: str, frame: str) -> bool:
+    return _isolation_ack_open(_text, frame) and "Press Enter to continue." in frame
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
@@ -974,7 +1017,7 @@ def test_tty_start_asks_isolation_ack_on_the_shell_screen(
             assert proc.poll() is None
             assert _placed(_last_frame(text)).get(1, "") == "daemon start  all projects"
             assert _ALT_ON in text
-            os.write(master, b"y\r")
+            os.write(master, b"\r")
             _wait(
                 master,
                 chunks,
@@ -1122,7 +1165,7 @@ def test_tty_status_with_isolation_open_key_opens_resolve_ui(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """TTY status with isolation keeps the listing; o opens the resolve UI and leaves the screen up."""
+    """TTY status with isolation keeps the listing; o opens the resolve UI and closes."""
     config_path, target_a, _target_b = _two_projects(tmp_path)
     sidecar = tmp_path / "hub-bytes.txt"
     sidecar.write_text("kept-hub-bytes")
@@ -1156,14 +1199,19 @@ def test_tty_status_with_isolation_open_key_opens_resolve_ui(
             os.write(master, b"o")
             deadline = time.monotonic() + _WAIT_S
             while time.monotonic() < deadline:
-                if opened.is_file() and "http://127.0.0.1:" in opened.read_text() and "token=" in opened.read_text():
+                _drain(master, chunks)
+                if (
+                    proc.poll() is not None
+                    and opened.is_file()
+                    and "http://127.0.0.1:" in opened.read_text()
+                    and "token=" in opened.read_text()
+                ):
                     break
                 time.sleep(0.05)
             else:
                 raise AssertionError(opened.read_text() if opened.is_file() else "browser was not opened")
-            assert proc.poll() is None
-            frame = _last_frame(_drain(master, chunks))
-            assert _hint(frame) == _HINT_OPEN
-            code, text = _close_and_read(master, chunks, proc, b"q")
+            time.sleep(0.1)
+            text = _drain(master, chunks)
+            code = proc.poll()
         assert code == 0
         assert "Held at " in _after_exit(text)
