@@ -1,0 +1,644 @@
+/* Resolve UI: modern, minimal look (ADR 0025). No build step; hand-written, plain CSS. */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e3e5e8;
+  --text: #1f2328;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-contrast: #ffffff;
+  --green: #16a34a;
+  --green-bg: #eafaf0;
+  --amber-bg: #fff8e6;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Left global nav: every out-of-sync / held path across all managed projects. */
+
+nav.index {
+  width: 18rem;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 0.75rem 1rem 1.25rem;
+  background: var(--surface);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.nav-toggle-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.25rem;
+}
+
+.nav-toggle {
+  padding: 0.35rem;
+  line-height: 0;
+}
+
+.nav-toggle-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.nav-toggle-chevron-out {
+  display: none;
+}
+
+body.nav-collapsed .nav-toggle-chevron-in {
+  display: none;
+}
+
+body.nav-collapsed .nav-toggle-chevron-out {
+  display: block;
+}
+
+.nav-toggle-keys {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1;
+}
+
+body.nav-collapsed nav.index {
+  width: auto;
+  padding: 0.75rem 0.75rem 1.25rem;
+}
+
+body.nav-collapsed #nav-body {
+  display: none;
+}
+
+nav.index h2 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 1.25rem 0 0.4rem;
+}
+
+nav.index h2:first-child {
+  margin-top: 0;
+}
+
+nav.index ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+nav.index li.nav-row {
+  border-radius: var(--radius);
+  padding: 0.4rem 0.6rem;
+}
+
+nav.index li.nav-row:hover {
+  background: var(--bg);
+}
+
+nav.index a {
+  display: block;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+nav.index a:hover {
+  color: var(--accent);
+}
+
+/* The currently open path: a background highlight is the whole signal, no text label. Once set,
+   it survives tab switches and page reloads because the server (not client memory) knows the
+   current selection from the URL and marks this row every time it renders the page. */
+nav.index li.nav-row[data-current="true"] {
+  background: var(--accent);
+}
+
+nav.index li.nav-row[data-current="true"] a {
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+nav.index li.nav-row[data-current="true"]:hover {
+  background: #1d4ed8;
+}
+
+/* Category switcher: out-of-sync vs held is a pick-one-then-drill-down hierarchy, so it is a top
+   tab pane (position + highlight), not a label repeated on every row below. Pure CSS radio
+   toggle — no JS needed to switch panes. When only one category has anything in it the switcher
+   itself would be redundant, so the server leaves .nav-tabs out and the lone pane just shows. */
+
+nav.index input.nav-tab-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-tab-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.nav-tab-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+}
+
+#nav-tab-oos:checked ~ .nav-tabs label[for="nav-tab-oos"],
+#nav-tab-held:checked ~ .nav-tabs label[for="nav-tab-held"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.nav-pane {
+  display: none;
+}
+
+#nav-tab-oos:checked ~ #nav-pane-oos {
+  display: block;
+}
+
+#nav-tab-held:checked ~ #nav-pane-held {
+  display: block;
+}
+
+main {
+  flex: 1;
+  min-width: 0;
+  padding: 1.5rem 2rem;
+}
+
+/* Held-only rows (no copy view). */
+
+.held p {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin: 0 0 0.75rem;
+}
+
+/* Resolve app: header + list + stage, rendered by app.js. */
+
+#resolve-app {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: calc(100vh - 3rem);
+}
+
+/* One toolbar row: common path prefix, then every replica as a small chip, then submit — a lone
+   submit button on its own row wasted the whole width for one control. The chip list is the only
+   flexible member (flex: 1, min-width: 0) so it is what wraps first if replicas do not fit; the
+   prefix and submit button stay put at each end. */
+
+.resolve-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+}
+
+.common-prefix {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  word-break: break-all;
+  padding-right: 0.6rem;
+  border-right: 1px solid var(--border);
+}
+
+.replica-chip-list {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each chip is two lines — label, then status — instead of one wide "label STATUS" line; that is
+   what lets several chips share a row with the prefix and submit instead of needing a row of
+   their own. */
+
+.replica-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.6rem;
+}
+
+.replica-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+}
+
+.replica-status {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.replica-row.replica-same-as-hub {
+  background: var(--green-bg);
+}
+
+.replica-row.replica-same-as-hub .replica-status {
+  color: var(--green);
+}
+
+.replica-row.replica-merged {
+  opacity: 0.6;
+}
+
+.replica-row.replica-merged .replica-status {
+  color: var(--green);
+}
+
+.replica-row.replica-current {
+  background: var(--amber-bg);
+  border: 1px solid #f3c969;
+}
+
+.replica-row.replica-pending {
+  color: var(--muted);
+}
+
+/* The stage: either the CodeMirror merge editor, or the binary picker. */
+
+.resolve-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.text-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.merge-labels {
+  display: grid;
+  grid-template-columns: 1fr 8px 1fr 4.75rem 1fr;
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+.merge-labels span {
+  text-align: center;
+}
+
+.merge-labels span:nth-child(1) {
+  grid-column: 1;
+}
+
+.merge-labels span:nth-child(2) {
+  grid-column: 3;
+}
+
+.merge-labels span:nth-child(3) {
+  grid-column: 5;
+}
+
+#merge-mount {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* Vendor merge.css hard-codes height: 350px, and the panes are inline-block with no height of
+   their own. Percentage height on .CodeMirror then resolves against the pane's content height,
+   so the editor grows with the file, #merge-mount clips it, and there is no inner scrollbar.
+   Pin the widget to the mount so each pane is a bounded box that CodeMirror can scroll. */
+#merge-mount .CodeMirror-merge {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}
+
+#merge-mount .CodeMirror-merge-pane,
+#merge-mount .CodeMirror-merge .CodeMirror {
+  height: 100%;
+}
+
+#merge-mount .CodeMirror-scroll {
+  overflow-y: scroll;
+}
+
+/* Left gap is a rule only. Right gap is a dedicated column for ← Accept so the chip
+   does not sit on replica text. */
+.CodeMirror-merge-3pane .CodeMirror-merge-pane {
+  width: calc((100% - 8px - 4.75rem) / 3);
+}
+
+.CodeMirror-merge-3pane .CodeMirror-merge-left + .CodeMirror-merge-gap {
+  width: 8px;
+}
+
+.CodeMirror-merge-3pane .CodeMirror-merge-editor + .CodeMirror-merge-gap {
+  width: 4.75rem;
+}
+
+/* The scroll-lock toggle in the gap between panes is redundant with connect:"align" (which
+   already keeps panes visually aligned) and reads as an unlabeled mystery icon; drop it. */
+.CodeMirror-merge-scrolllock-wrap {
+  display: none;
+}
+
+/* Intra-line marks, IntelliJ-style: red = in RESULT but not on that side, green = on that
+   side but not in RESULT. The hunk-wide yellow wash is off — it forced reading the whole
+   paragraph to find the actual edit. Vendor's wavy PNG underlines stay off too. */
+.CodeMirror-merge-r-chunk,
+.CodeMirror-merge-l-chunk,
+.CodeMirror-merge-r-chunk.CodeMirror-merge-l-chunk {
+  background: transparent;
+}
+
+.CodeMirror-merge-r-chunk-start,
+.CodeMirror-merge-l-chunk-start,
+.CodeMirror-merge-r-chunk-end,
+.CodeMirror-merge-l-chunk-end {
+  border: none;
+}
+
+.CodeMirror-merge-r-inserted,
+.CodeMirror-merge-l-inserted,
+.CodeMirror-merge-r-deleted,
+.CodeMirror-merge-l-deleted {
+  background-image: none;
+}
+
+.CodeMirror-merge-r-inserted,
+.CodeMirror-merge-l-inserted {
+  background-color: #fecaca;
+}
+
+.CodeMirror-merge-r-deleted,
+.CodeMirror-merge-l-deleted {
+  background-color: #bbf7d0;
+}
+
+/* Pairing: a hunk is two ranges (replica + the result it would replace). An inset bar on both
+   sides, aligned by connect:"align", shows the mapping without a hunk-wide wash. Hovering
+   ← Accept strengthens that pair. */
+.CodeMirror-merge-editor .CodeMirror-linebackground.CodeMirror-merge-r-chunk {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.CodeMirror-merge-right .CodeMirror-linebackground.CodeMirror-merge-r-chunk {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.CodeMirror-linebackground.merge-pair-hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+/* Sequential merge: left is a frozen reference (hub, then the previous round's result). Copy
+   buttons there would restore hub over the merge after ← Accept, which reads as a second donor.
+   Only the current replica donates. */
+.CodeMirror-merge-copybuttons-left {
+  display: none;
+}
+
+/* Replace the 8px ⇜ glyph with a readable Accept chip. Centered in the right gutter,
+   not overlaid on replica text. */
+.CodeMirror-merge-copy {
+  font-size: 0;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 0.2rem 0.4rem;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.CodeMirror-merge-copybuttons-right .CodeMirror-merge-copy {
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.CodeMirror-merge-copybuttons-right .CodeMirror-merge-copy::after {
+  content: "← Accept";
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.review-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#review-mount {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+#review-mount .CodeMirror {
+  height: 100%;
+}
+
+#review-mount .CodeMirror-scroll {
+  overflow-y: scroll;
+}
+
+.hunk-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+}
+
+.all-done {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.submit-result {
+  margin-top: 0.75rem;
+  color: var(--green);
+  font-size: 0.85rem;
+}
+
+/* Binary picker: one card per candidate, no diff possible. */
+
+.binary-stage {
+  display: flex;
+  gap: 1rem;
+}
+
+.binary-card {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.binary-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.binary-meta {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+  word-break: break-all;
+  margin: 0 0 0.75rem;
+}
+
+/* Buttons */
+
+.btn {
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: #c7cbd1;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+
+/* In-app confirm: same surface/buttons as the rest of the page. beforeunload (reload/close)
+   still uses the browser's own prompt — pages cannot replace that. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 35, 40, 0.4);
+}
+
+.dialog-backdrop[hidden] {
+  display: none;
+}
+
+.dialog {
+  width: 22rem;
+  max-width: calc(100vw - 2rem);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem 1rem;
+  box-shadow: 0 10px 30px rgba(31, 35, 40, 0.18);
+}
+
+.dialog h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dialog p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}

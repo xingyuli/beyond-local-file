@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import html
+import json
 import secrets
 import threading
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -16,13 +19,26 @@ from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import rel_in_items
+from .merge import is_binary
 from .process import resolve_port_path, resolve_token_path
 from .store import BaselineTrees, get_state, is_out_of_sync, iter_out_of_sync, load_baseline, load_snapshot
 
 _HOST = "127.0.0.1"
 _TOKEN_BYTES = 32
 _MAX_PORT = 65535
-_SAME_AS_HUB_BG = "#c8e6c9"
+_MAX_POST = 8 * 1024 * 1024
+_MIN_SHARED_PATH_PARTS = 2
+_STATIC_PREFIX = "/static/"
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_STATIC_ASSETS: dict[str, str] = {
+    "vendor/codemirror.js": "text/javascript; charset=utf-8",
+    "vendor/codemirror.css": "text/css; charset=utf-8",
+    "vendor/merge.js": "text/javascript; charset=utf-8",
+    "vendor/merge.css": "text/css; charset=utf-8",
+    "vendor/diff_match_patch.js": "text/javascript; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
+    "app.css": "text/css; charset=utf-8",
+}
 
 
 class ResolveHttp:
@@ -122,21 +138,37 @@ def _read_text(path: Path) -> str:
 def _handler_for(config_path: Path, token: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            parsed = urlparse(self.path)
-            query = parse_qs(parsed.query)
-            got = (query.get("token") or [""])[0]
-            if not got or not hmac.compare_digest(got, token):
-                self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+            parsed_path = urlparse(self.path).path
+            if parsed_path.startswith(_STATIC_PREFIX):
+                _serve_static(self, parsed_path[len(_STATIC_PREFIX) :])
+                return
+            query = _authorized_query(self, token)
+            if query is None:
                 return
             project = (query.get("project") or [""])[0]
             rel = (query.get("path") or [""])[0]
-            replica = (query.get("replica") or [""])[0]
-            body = _page_html(config_path, token=token, project=project, rel=rel, replica=replica).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            if not project or not rel:
+                default = _first_nav_selection(config_path)
+                if default is not None:
+                    _redirect(self, _detail_href(token, *default))
+                    return
+            body = _page_html(config_path, token=token, project=project, rel=rel).encode("utf-8")
+            _send(self, HTTPStatus.OK, body, "text/html; charset=utf-8")
+
+        def do_POST(self) -> None:
+            query = _authorized_query(self, token)
+            if query is None:
+                return
+            payload = _read_json_payload(self)
+            if payload is None:
+                return
+            project = str(payload.get("project") or (query.get("project") or [""])[0])
+            rel = str(payload.get("path") or (query.get("path") or [""])[0])
+            action = str(payload.get("action") or "")
+            body = json.dumps(
+                _resolve_post(config_path, {**payload, "project": project, "path": rel, "action": action})
+            ).encode("utf-8")
+            _send(self, HTTPStatus.OK, body, "application/json; charset=utf-8")
 
         def log_message(self, fmt: str, *args: object) -> None:
             del fmt, args
@@ -144,35 +176,122 @@ def _handler_for(config_path: Path, token: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def _page_html(config_path: Path, *, token: str, project: str, rel: str, replica: str) -> str:
+def _serve_static(handler: BaseHTTPRequestHandler, name: str) -> None:
+    """Serve one static asset by exact allow-listed name; no token required.
+
+    Args:
+        handler: The active request handler.
+        name: The path segment after ``/static/``, checked against a fixed allowlist.
+    """
+    content_type = _STATIC_ASSETS.get(name)
+    path = _STATIC_DIR / name if content_type is not None else None
+    if content_type is None or path is None or not path.is_file():
+        handler.send_error(HTTPStatus.NOT_FOUND, "Not found")
+        return
+    _send(handler, HTTPStatus.OK, path.read_bytes(), content_type)
+
+
+def _authorized_query(handler: BaseHTTPRequestHandler, token: str) -> dict[str, list[str]] | None:
+    query = parse_qs(urlparse(handler.path).query)
+    got = (query.get("token") or [""])[0]
+    if not got or not hmac.compare_digest(got, token):
+        handler.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+        return None
+    return query
+
+
+def _read_json_payload(handler: BaseHTTPRequestHandler) -> dict | None:
+    length = _content_length(handler)
+    if length is None:
+        handler.send_error(HTTPStatus.BAD_REQUEST, "Bad request")
+        return None
+    raw = handler.rfile.read(length) if length else b"{}"
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        handler.send_error(HTTPStatus.BAD_REQUEST, "Bad request")
+        return None
+    if not isinstance(payload, dict):
+        handler.send_error(HTTPStatus.BAD_REQUEST, "Bad request")
+        return None
+    return payload
+
+
+def _content_length(handler: BaseHTTPRequestHandler) -> int | None:
+    raw = handler.headers.get("Content-Length", "0")
+    try:
+        length = int(raw)
+    except ValueError:
+        return None
+    if length < 0 or length > _MAX_POST:
+        return None
+    return length
+
+
+def _send(handler: BaseHTTPRequestHandler, status: int, body: bytes, content_type: str) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _redirect(handler: BaseHTTPRequestHandler, location: str) -> None:
+    handler.send_response(HTTPStatus.FOUND)
+    handler.send_header("Location", location)
+    handler.send_header("Content-Length", "0")
+    handler.end_headers()
+
+
+def _first_nav_selection(config_path: Path) -> tuple[str, str] | None:
+    """Return the (project, rel) that opens by default: the first out-of-sync row, or else held.
+
+    Matches ``_default_nav_tab``'s pane priority, so landing on the index is indistinguishable
+    from clicking that row yourself — same URL, same highlighted nav item.
+    """
     projects = _projects(config_path)
     trees = load_baseline(config_path) or {}
     rows = _nav_rows(projects, trees)
-    nav = _nav_html(rows, token)
-    detail = _detail_html(projects, trees, token, (project, rel, replica))
+    for row in rows:
+        if row[2]:
+            return row[0], row[1]
+    for row in rows:
+        if row[3]:
+            return row[0], row[1]
+    return None
+
+
+def _page_html(config_path: Path, *, token: str, project: str, rel: str) -> str:
+    projects = _projects(config_path)
+    trees = load_baseline(config_path) or {}
+    rows = _nav_rows(projects, trees)
+    nav = _nav_html(rows, token, (project, rel))
+    detail = _detail_html(projects, trees, (project, rel))
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resolve UI</title>'
-        f"<style>{_css()}</style></head><body>"
-        f'<nav class="index">{nav}</nav><main>{detail}</main>'
+        '<link rel="stylesheet" href="/static/vendor/codemirror.css">'
+        '<link rel="stylesheet" href="/static/vendor/merge.css">'
+        '<link rel="stylesheet" href="/static/app.css">'
+        "</head><body>"
+        '<nav class="index">'
+        '<div class="nav-toggle-wrap">'
+        '<button type="button" class="btn nav-toggle" id="nav-toggle" aria-expanded="true" aria-controls="nav-body" aria-label="Hide files">'
+        '<svg class="nav-toggle-icon" viewBox="0 0 16 16" aria-hidden="true">'
+        '<rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.35"/>'
+        '<path d="M6 2.5v11" fill="none" stroke="currentColor" stroke-width="1.35"/>'
+        '<path class="nav-toggle-chevron-in" d="M10.4 6.1 8.3 8l2.1 1.9" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>'
+        '<path class="nav-toggle-chevron-out" d="M8.3 6.1 10.4 8 8.3 9.9" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>'
+        "</svg></button>"
+        '<span class="nav-toggle-keys" id="nav-toggle-keys"></span>'
+        "</div>"
+        f'<div id="nav-body">{nav}</div>'
+        "</nav><main>"
+        f"{detail}</main>"
+        '<script src="/static/vendor/codemirror.js"></script>'
+        '<script src="/static/vendor/diff_match_patch.js"></script>'
+        '<script src="/static/vendor/merge.js"></script>'
+        '<script src="/static/app.js"></script>'
         "</body></html>"
-    )
-
-
-def _css() -> str:
-    return (
-        "body{display:flex;margin:0;font-family:sans-serif}"
-        "nav.index{width:18rem;border-right:1px solid #ccc;padding:1rem;box-sizing:border-box}"
-        "nav.index h2{font-size:1rem;margin:1rem 0 .25rem}"
-        "nav.index ul,nav.switcher ul{list-style:none;margin:0;padding:0}"
-        ".nav-row,.switcher li{margin:.25rem 0;padding:.25rem}"
-        ".badge{display:inline-block;margin-left:.4rem;font-size:.8rem;background:#eee;padding:.1rem .4rem}"
-        "main{flex:1;padding:1rem;min-width:0}"
-        ".panes{display:flex;gap:.5rem;align-items:stretch}"
-        ".pane{flex:1;min-width:0;border:1px solid #ddd;padding:.5rem}"
-        ".pane pre{white-space:pre-wrap;word-break:break-all;margin:0}"
-        "nav.switcher{display:flex;flex-direction:column;min-width:12rem}"
-        f".same-as-hub{{background:{_SAME_AS_HUB_BG}}}"
-        ".clause,.held p{margin:0 0 1rem}"
     )
 
 
@@ -189,47 +308,89 @@ def _nav_rows(projects: dict[str, ConfigProject], trees: BaselineTrees) -> list[
     return [(name, rel, oos, held) for (name, rel), (oos, held) in sorted(flags.items())]
 
 
-def _nav_html(rows: list[tuple[str, str, bool, bool]], token: str) -> str:
+def _nav_html(rows: list[tuple[str, str, bool, bool]], token: str, selection: tuple[str, str]) -> str:
+    """Render the left nav as two top panes (out-of-sync / held), not a per-row type label.
+
+    The two categories are a natural hierarchy (pick a category, then a path), so a tab switcher
+    communicates that with position and a background highlight instead of a repeated text badge
+    on every row. When only one category has anything in it, the switcher itself is redundant and
+    is left out; the lone pane is simply the whole nav.
+    """
     if not rows:
         return "<p>None</p>"
+    oos_rows = [row for row in rows if row[2]]
+    held_rows = [row for row in rows if row[3]]
+    default_tab = _default_nav_tab(oos_rows, held_rows, selection)
+    tabs = ""
+    if oos_rows and held_rows:
+        tabs = (
+            '<div class="nav-tabs">'
+            '<label class="nav-tab-label" for="nav-tab-oos">Out of sync'
+            f'<span class="nav-tab-count">{len(oos_rows)}</span></label>'
+            '<label class="nav-tab-label" for="nav-tab-held">Held'
+            f'<span class="nav-tab-count">{len(held_rows)}</span></label>'
+            "</div>"
+        )
+    oos_checked = " checked" if default_tab == "oos" else ""
+    held_checked = " checked" if default_tab == "held" else ""
+    return (
+        f'<input type="radio" name="nav-tab" id="nav-tab-oos" class="nav-tab-radio"{oos_checked}>'
+        f'<input type="radio" name="nav-tab" id="nav-tab-held" class="nav-tab-radio"{held_checked}>'
+        f"{tabs}"
+        f'<div class="nav-pane" id="nav-pane-oos">{_nav_pane_body(oos_rows, token, selection)}</div>'
+        f'<div class="nav-pane" id="nav-pane-held">{_nav_pane_body(held_rows, token, selection)}</div>'
+    )
+
+
+def _default_nav_tab(
+    oos_rows: list[tuple[str, str, bool, bool]],
+    held_rows: list[tuple[str, str, bool, bool]],
+    selection: tuple[str, str],
+) -> str:
+    """Return which pane should open checked: whichever already holds the current selection."""
+    if any((name, rel) == selection for name, rel, _oos, _held in oos_rows):
+        return "oos"
+    if any((name, rel) == selection for name, rel, _oos, _held in held_rows):
+        return "held"
+    return "oos" if oos_rows else "held"
+
+
+def _nav_pane_body(rows: list[tuple[str, str, bool, bool]], token: str, selection: tuple[str, str]) -> str:
+    if not rows:
+        return ""
     sections: list[str] = []
     current = ""
     items: list[str] = []
-    for name, rel, oos, held in rows:
+    for name, rel, _oos, _held in rows:
         if name != current:
             if current:
                 sections.append(_project_section(current, items))
             current = name
             items = []
-        href = html.escape(_detail_href(token, name, rel), quote=True)
-        badge = html.escape(_badge(oos, held))
-        items.append(
-            f'<li class="nav-row"><a href="{href}">{html.escape(rel)}</a><span class="badge">{badge}</span></li>'
-        )
+        items.append(_nav_row_html(token, name, rel, is_current=(name, rel) == selection))
     if current:
         sections.append(_project_section(current, items))
     return "".join(sections)
+
+
+def _nav_row_html(token: str, name: str, rel: str, *, is_current: bool) -> str:
+    """One nav row: the path is the only label; ``data-current`` marks the open item for CSS."""
+    href = html.escape(_detail_href(token, name, rel), quote=True)
+    title = html.escape(rel, quote=True)
+    current_attr = ' data-current="true"' if is_current else ""
+    return f'<li class="nav-row"{current_attr}><a href="{href}" title="{title}">{html.escape(rel)}</a></li>'
 
 
 def _project_section(name: str, items: list[str]) -> str:
     return f"<section><h2>{html.escape(name)}</h2><ul>{''.join(items)}</ul></section>"
 
 
-def _badge(oos: bool, held: bool) -> str:
-    if oos and held:
-        return "both"
-    if oos:
-        return "out-of-sync"
-    return "held"
-
-
 def _detail_html(
     projects: dict[str, ConfigProject],
     trees: BaselineTrees,
-    token: str,
-    selection: tuple[str, str, str],
+    selection: tuple[str, str],
 ) -> str:
-    project_name, rel, replica_raw = selection
+    project_name, rel = selection
     if not project_name or not rel:
         return ""
     project = _project_named(projects, project_name)
@@ -240,7 +401,7 @@ def _detail_html(
         return ""
     parts: list[str] = []
     if oos:
-        parts.append(_copy_view_html(project, trees, token=token, rel=rel, replica_raw=replica_raw))
+        parts.append(_copy_view_html(project, trees, rel))
     if held:
         clauses = [copy.clause for copy in list_held_copies(project.managed_project_path) if copy.path == rel]
         held_rows = "".join(f"<p>{html.escape(clause)}</p>" for clause in clauses)
@@ -248,72 +409,95 @@ def _detail_html(
     return "".join(parts)
 
 
-def _copy_view_html(
-    project: ConfigProject,
-    trees: BaselineTrees,
-    *,
-    token: str,
-    rel: str,
-    replica_raw: str,
-) -> str:
-    replicas = _replicas_for(project, rel)
-    selected = _selected_replica(replicas, trees, rel, replica_raw)
-    hub_text = html.escape(_live_text(project.managed_project_path, rel))
-    replica_text = html.escape(_live_text(selected, rel)) if selected is not None else ""
-    clause = ""
-    if selected is not None:
-        clause = str(get_state(trees, selected, rel).get("clause") or "")
-    clause_html = f'<p class="clause">{html.escape(clause)}</p>' if clause else ""
-    switcher = _switcher_html(
-        project,
-        token=token,
-        rel=rel,
-        replicas=replicas,
-        selected=selected,
-    )
-    return (
-        f'{clause_html}<div class="panes">'
-        f'<section class="pane" id="hub-now"><h2>hub-now</h2><pre>{hub_text}</pre></section>'
-        '<section class="pane" id="result"></section>'
-        f'<section class="pane" id="replica-now"><h2>replica-now</h2><pre>{replica_text}</pre></section>'
-        f'<nav class="switcher">{switcher}</nav>'
-        "</div>"
-    )
+def _copy_view_html(project: ConfigProject, trees: BaselineTrees, rel: str) -> str:
+    """Return the mount point and embedded state for the client-driven sequential merge (ADR 0025)."""
+    state = _resolve_state(project, trees, rel)
+    return f'<div id="resolve-app"></div>{_json_script(state)}'
 
 
-def _switcher_html(
-    project: ConfigProject,
-    *,
-    token: str,
-    rel: str,
-    replicas: list[Path],
-    selected: Path | None,
-) -> str:
+def _resolve_state(project: ConfigProject, trees: BaselineTrees, rel: str) -> dict:
     hub = project.managed_project_path
-    items: list[str] = []
-    for replica in replicas:
-        href = html.escape(_detail_href(token, project.managed_project_name, rel, replica.as_posix()), quote=True)
-        classes = []
-        if selected is not None and _same_path(replica, selected):
-            classes.append("selected")
-        same = _same_as_hub(hub, replica, rel)
-        if same:
-            classes.append("same-as-hub")
-        class_attr = f' class="{" ".join(classes)}"' if classes else ""
-        label = html.escape(replica.as_posix())
-        extra = " same as hub" if same else ""
-        items.append(f'<li{class_attr}><a href="{href}">{label}</a>{extra}</li>')
-    return f"<ul>{''.join(items)}</ul>"
+    replicas = _replicas_for(project, rel)
+    hub_bytes = _live_bytes(hub, rel)
+    binary = is_binary(hub_bytes)
+    prefix = _common_prefix(replicas)
+    ctx = _ReplicaCtx(hub=hub, trees=trees, rel=rel, prefix=prefix, binary=binary)
+    state: dict[str, object] = {
+        "binary": binary,
+        "common_prefix": prefix,
+        "replicas": [_replica_state(ctx, replica) for replica in replicas],
+    }
+    if binary:
+        state["hub_hash"] = hashlib.sha256(hub_bytes).hexdigest()
+        state["hub_size"] = len(hub_bytes)
+    else:
+        state["hub_now"] = _bytes_as_text(hub_bytes)
+    return state
 
 
-def _selected_replica(replicas: list[Path], trees: BaselineTrees, rel: str, replica_raw: str) -> Path | None:
-    matched = _match_replica(replicas, replica_raw)
-    if matched is not None:
-        return matched
-    for replica in replicas:
-        if is_out_of_sync(get_state(trees, replica, rel)):
-            return replica
-    return replicas[0] if replicas else None
+@dataclass(frozen=True)
+class _ReplicaCtx:
+    """Fields shared by every replica entry of one path's resolve state."""
+
+    hub: Path
+    trees: BaselineTrees
+    rel: str
+    prefix: str
+    binary: bool
+
+
+def _replica_state(ctx: _ReplicaCtx, replica: Path) -> dict[str, object]:
+    replica_bytes = _live_bytes(replica, ctx.rel)
+    same = _same_as_hub(ctx.hub, replica, ctx.rel)
+    replica_state = get_state(ctx.trees, replica, ctx.rel)
+    clause = str(replica_state.get("clause") or "") if is_out_of_sync(replica_state) else ""
+    posix = replica.as_posix()
+    label = posix[len(ctx.prefix) :] if ctx.prefix and posix.startswith(ctx.prefix) else posix
+    entry: dict[str, object] = {"path": posix, "label": label, "same_as_hub": same, "clause": clause}
+    if ctx.binary:
+        entry["hash"] = hashlib.sha256(replica_bytes).hexdigest()
+        entry["size"] = len(replica_bytes)
+    else:
+        entry["text"] = _bytes_as_text(replica_bytes)
+    return entry
+
+
+def _common_prefix(paths: list[Path]) -> str:
+    """Return the longest shared leading directory path across *paths*, or "" when not worth it."""
+    if len(paths) < _MIN_SHARED_PATH_PARTS:
+        return ""
+    parts_lists = [path.as_posix().split("/") for path in paths]
+    common: list[str] = []
+    for parts in zip(*parts_lists, strict=False):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+    if len(common) < _MIN_SHARED_PATH_PARTS:
+        return ""
+    return "/".join(common) + "/"
+
+
+def _resolve_post(config_path: Path, payload: dict) -> dict:
+    action = str(payload.get("action") or "")
+    if action != "submit":
+        return {"ok": False, "error": "unknown action"}
+    del config_path
+    # TODO(ticket 5, Resolve apply): write a new hub generation and force-overwrite every
+    # replica of this path, then clear its out-of-sync rows. For now submit is a stub: it
+    # acknowledges the payload and writes nothing, so "no write until apply" still holds.
+    return {"ok": True, "applied": False, "note": "submit is wired but apply is not implemented yet"}
+
+
+def _bytes_as_text(data: bytes) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
+def _json_script(state: dict) -> str:
+    dumped = json.dumps(state, separators=(",", ":")).replace("<", "\\u003c")
+    return f'<script type="application/json" id="resolve-state">{dumped}</script>'
 
 
 def _replicas_for(project: ConfigProject, rel: str) -> list[Path]:
@@ -325,21 +509,6 @@ def _replicas_for(project: ConfigProject, rel: str) -> list[Path]:
             resolved = target.resolve()
             found[resolved.as_posix()] = resolved
     return [found[key] for key in sorted(found)]
-
-
-def _match_replica(replicas: list[Path], raw: str) -> Path | None:
-    if not raw:
-        return None
-    wanted = Path(raw)
-    for replica in replicas:
-        if replica == wanted or replica.as_posix() == wanted.as_posix():
-            return replica
-        try:
-            if replica.resolve() == wanted.resolve():
-                return replica
-        except OSError:
-            continue
-    return None
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -359,11 +528,11 @@ def _same_as_hub(hub: Path, replica: Path, rel: str) -> bool:
     return left.read_bytes() == right.read_bytes()
 
 
-def _live_text(root: Path, rel: str) -> str:
+def _live_bytes(root: Path, rel: str) -> bytes:
     path = root / rel
     if path.is_file() and not path.is_symlink():
-        return path.read_bytes().decode("latin-1")
-    return ""
+        return path.read_bytes()
+    return b""
 
 
 def _mapping_has_rel(mapping: Mapping, rel: str) -> bool:
@@ -395,10 +564,8 @@ def _row_flags(trees: BaselineTrees, project: ConfigProject, rel: str) -> tuple[
     return oos, held
 
 
-def _detail_href(token: str, project: str, rel: str, replica: str | None = None) -> str:
+def _detail_href(token: str, project: str, rel: str) -> str:
     query = {"token": token, "project": project, "path": rel}
-    if replica:
-        query["replica"] = replica
     return "/?" + urlencode(query)
 
 

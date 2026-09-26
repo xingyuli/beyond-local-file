@@ -141,8 +141,12 @@ Applying the confirmed fact for a path: write those bytes as a new hub generatio
 _Avoid_: Force-overwrite, sync, pick winner, merge
 
 **Resolve UI**:
-The localhost HTML the daemon serves while it is ready. Left nav lists each out-of-sync or held path, keyed by managed project and relative path, grouped by managed project name. Out-of-sync detail is a 3-way merge: hub-now, result, replica-now with a replica switcher. A replica whose live bytes match hub-now is labeled ``same as hub``. Held-only detail shows hold-reason clauses until a later slice. On a TTY, ``daemon status`` opens it with a key. A later desktop notification may open the same URLs.
-_Avoid_: Desktop app, isolation page, status screen, shell screen, source badge
+The localhost HTML the daemon serves while it is ready. Left nav lists each out-of-sync or held path, keyed by managed project and relative path, grouped by managed project name; out-of-sync and held are top tab panes rather than a per-row label, and the open row is a background highlight, not text. A GET with no path selected opens the first row, same as clicking it. Out-of-sync detail merges replicas one at a time (see Sequential replica merge): one toolbar row above the stage holds the common leading path segments (collapsed to one label), a two-line chip (label, then status) per target, and ``submit``; a replica whose live bytes match hub-now is labeled ``same as hub`` and is not opened. Held-only detail shows hold-reason clauses until a later slice. On a TTY, ``daemon status`` opens it with a key. A later desktop notification may open the same URLs.
+_Avoid_: Desktop app, isolation page, status screen, shell screen, source badge, replica switcher, 3-way ancestor merge
+
+**Sequential replica merge**:
+The resolve UI's merge editor (ADR 0025). Hub-now vs. one replica at a time in a two-way `CodeMirror` diff, seeded from the current left side (hub-now for the first replica, the prior round's result after that); no ancestor pane. `Mark as merged` freezes the middle pane as the new left side and advances to the next replica whose live bytes differ from hub; a binary path picks a whole winner per round instead of diffing. `Submit` is enabled once every differing replica is merged. Driven client-side; the daemon only serves hub-now and every replica's content/hash-size once per page load, and receives the confirmed result on submit.
+_Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict
 
 **Mapping change**:
 A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove.

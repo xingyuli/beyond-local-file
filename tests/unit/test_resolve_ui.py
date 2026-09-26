@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import socket
@@ -14,7 +16,7 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import HTTPErrorProcessor, Request, build_opener, urlopen
 
 import pytest
 
@@ -75,7 +77,6 @@ def _resolve_url(
     token: str | None = None,
     project: str | None = None,
     path: str | None = None,
-    replica: str | None = None,
 ) -> str:
     port = _read_int_file(_resolve_port_path(config_path))
     assert port is not None
@@ -86,8 +87,6 @@ def _resolve_url(
         query["project"] = project
     if path is not None:
         query["path"] = path
-    if replica is not None:
-        query["replica"] = replica
     return f"http://127.0.0.1:{port}/?{urlencode(query)}"
 
 
@@ -97,6 +96,48 @@ def _get(url: str) -> tuple[int, str]:
             return response.status, response.read().decode("utf-8")
     except HTTPError as error:
         return error.code, error.read().decode("utf-8")
+
+
+class _NoRedirect(HTTPErrorProcessor):
+    """An error processor that returns 3xx responses as-is instead of following them."""
+
+    def http_response(self, request: Request, response: object) -> object:
+        return response
+
+    https_response = http_response
+
+
+def _get_no_redirect(url: str) -> tuple[int, str]:
+    opener = build_opener(_NoRedirect)
+    with opener.open(url, timeout=3) as response:
+        return response.status, response.headers.get("Location", "")
+
+
+def _post(url: str, payload: dict) -> tuple[int, str]:
+    data = json.dumps(payload).encode("utf-8")
+    request = Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(request, timeout=3) as response:
+            return response.status, response.read().decode("utf-8")
+    except HTTPError as error:
+        return error.code, error.read().decode("utf-8")
+
+
+def _resolve_state(body: str) -> dict:
+    match = re.search(r'<script type="application/json" id="resolve-state">(.*?)</script>', body, re.DOTALL)
+    assert match is not None, "missing resolve-state JSON"
+    return json.loads(match.group(1))
+
+
+def _replica_by_path(state: dict, path: Path) -> dict:
+    for replica in state["replicas"]:
+        if replica["path"] == path.as_posix():
+            return replica
+    raise AssertionError(f"{path.as_posix()} not in replicas: {state['replicas']}")
+
+
+def _file_snapshot(paths: list[Path]) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for path in paths}
 
 
 def _prepare_isolation(tmp_path: Path) -> tuple[LiveSync, Path, Path, Path, Path, Path]:
@@ -205,10 +246,26 @@ def _prepare_held_only(tmp_path: Path) -> tuple[Path, Path]:
     return config_path, target_b
 
 
+def _prepare_oos_text(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    """Two-target race: hub from-a, first out-of-sync replica from-b."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    _mark_loser_out_of_sync(live, target_a, target_b)
+    _persist(config_path, live)
+    return config_path, managed, target_a, target_b
+
+
 def _project_section(body: str, name: str) -> str:
     """Return the nav section HTML grouped under *name*."""
     match = re.search(rf"<h2>{re.escape(name)}</h2>(.*?)</section>", body, re.DOTALL)
     assert match is not None, f"missing managed project group {name!r}"
+    return match.group(1)
+
+
+def _nav_pane_html(body: str, pane: str) -> str:
+    """Return the HTML inside the ``out-of-sync`` or ``held`` top nav pane (``pane`` is ``oos``/``held``)."""
+    match = re.search(rf'<div class="nav-pane" id="nav-pane-{pane}">(.*?)</div>', body, re.DOTALL)
+    assert match is not None, f"missing nav pane {pane!r}"
     return match.group(1)
 
 
@@ -227,7 +284,9 @@ def test_ready_daemon_serves_resolve_ui_with_token_and_rejects_without(
         assert status == HTTPStatus.OK
         assert "shared.txt" in body
         assert "proj" in body
-        assert "both" in _project_section(body, "proj")
+        # shared.txt is both out-of-sync and held, so it is listed in both top nav panes.
+        assert "shared.txt" in _project_section(_nav_pane_html(body, "oos"), "proj")
+        assert "shared.txt" in _project_section(_nav_pane_html(body, "held"), "proj")
         ipc_port = _read_int_file(port_path(config_path))
         resolve_port = _read_int_file(_resolve_port_path(config_path))
         assert ipc_port is not None and resolve_port is not None
@@ -379,82 +438,78 @@ def test_two_managed_projects_same_rel_are_two_nav_rows_grouped_by_name(
     assert "token=" in alpha
 
 
-def test_several_out_of_sync_replicas_are_one_nav_row_with_switcher(
+def test_several_out_of_sync_replicas_are_one_nav_row_and_the_state_lists_every_target(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """Several out-of-sync replicas of one path are one nav row; the switcher lists every target."""
+    """Several out-of-sync replicas of one path are one nav row; the state lists every target."""
     config_path, target_a, target_b, target_c = _prepare_three_target_out_of_sync(tmp_path)
     with _ready_resolve_ui(config_path, isolated_home):
         status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
     assert status == HTTPStatus.OK
     assert body.count('class="nav-row"') == 1
     assert "shared.txt" in _project_section(body, "proj")
-    switcher = body[body.index('class="switcher"') :]
-    assert target_a.as_posix() in switcher
-    assert target_b.as_posix() in switcher
-    assert target_c.as_posix() in switcher
-    assert "same as hub" in switcher
+    state = _resolve_state(body)
+    paths = {replica["path"] for replica in state["replicas"]}
+    assert {target_a.as_posix(), target_b.as_posix(), target_c.as_posix()} == paths
+    assert _replica_by_path(state, target_a)["same_as_hub"] is True
 
 
-def test_right_pane_opens_on_first_out_of_sync_replica_and_labels_same_as_hub(
+def test_state_hub_now_and_pending_replicas_exclude_same_as_hub(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """Right pane starts on the first out-of-sync replica; live matches are same as hub; no source badge."""
-    config_path, target_a, target_b, _target_c = _prepare_three_target_out_of_sync(tmp_path)
+    """hub_now is from the winner; replicas that live-match hub are flagged same_as_hub."""
+    config_path, target_a, target_b, target_c = _prepare_three_target_out_of_sync(tmp_path)
     with _ready_resolve_ui(config_path, isolated_home):
         status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
     assert status == HTTPStatus.OK
-    hub_now = body[body.index("hub-now") : body.index("replica-now")]
-    replica_now = body[body.index("replica-now") :]
-    assert "from-a" in hub_now
-    assert "from-b" in replica_now
-    assert "from-c" not in replica_now
-    assert target_b.as_posix() in body[body.index('class="switcher"') :]
-    assert "same as hub" in body
-    assert target_a.as_posix() in body
-    assert "#c8e6c9" in body
+    state = _resolve_state(body)
+    assert "from-a" in state["hub_now"]
+    a = _replica_by_path(state, target_a)
+    b = _replica_by_path(state, target_b)
+    c = _replica_by_path(state, target_c)
+    assert a["same_as_hub"] is True
+    assert "from-a" in a["text"]
+    assert b["same_as_hub"] is False
+    assert "from-b" in b["text"]
+    assert c["same_as_hub"] is False
+    assert "from-c" in c["text"]
     assert "source" not in body.lower()
 
 
-def test_reason_clause_follows_the_selected_right_replica(
+def test_reason_clause_is_carried_per_replica(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """Following a switcher link updates the out-of-sync reason clause to that replica."""
+    """Each out-of-sync replica carries its own reason clause in the state, not just the first."""
     config_path, target_a, target_b, target_c = _prepare_three_target_out_of_sync(tmp_path)
     clause_b = _stale_base_clause(target_b, target_a)
     clause_c = _stale_base_clause(target_c, target_a)
     with _ready_resolve_ui(config_path, isolated_home):
-        _status, default_body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
-        _status, selected_body = _get(
-            _resolve_url(config_path, project="proj", path="shared.txt", replica=target_c.as_posix())
-        )
-    assert clause_b in default_body
-    assert clause_c not in default_body
-    assert "from-b" in default_body
-    assert clause_c in selected_body
-    assert clause_b not in selected_body
-    assert "from-c" in selected_body
-    assert "from-b" not in selected_body
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    state = _resolve_state(body)
+    assert _replica_by_path(state, target_b)["clause"] == clause_b
+    assert _replica_by_path(state, target_c)["clause"] == clause_c
+    assert _replica_by_path(state, target_a)["clause"] == ""
 
 
 def test_held_only_path_shows_hold_reason_and_no_copy_view(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """A held-only path shows its hold-reason clause(s) and no hub-now/replica-now panes."""
+    """A held-only path shows its hold-reason clause(s) and no resolve app mount."""
     config_path, _target_b = _prepare_held_only(tmp_path)
     with _ready_resolve_ui(config_path, isolated_home):
         index_status, index_body = _get(_resolve_url(config_path))
         status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
     assert index_status == HTTPStatus.OK
-    assert "held" in _project_section(index_body, "proj")
+    assert "shared.txt" in _project_section(_nav_pane_html(index_body, "held"), "proj")
     assert status == HTTPStatus.OK
     assert "delete applied past the generation window" in body
-    assert "hub-now" not in body
-    assert "replica-now" not in body
+    assert 'id="resolve-app"' not in body
+    assert 'id="resolve-state"' not in body
     assert "from-a" not in body
     assert "from-b" not in body
 
@@ -469,19 +524,341 @@ def test_path_both_out_of_sync_and_held_shows_copy_view_and_hold_clauses(
         index_status, index_body = _get(_resolve_url(config_path))
         status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
     assert index_status == HTTPStatus.OK
-    assert "both" in _project_section(index_body, "proj")
+    assert "shared.txt" in _project_section(_nav_pane_html(index_body, "oos"), "proj")
+    assert "shared.txt" in _project_section(_nav_pane_html(index_body, "held"), "proj")
     assert status == HTTPStatus.OK
-    assert "hub-now" in body
-    assert "replica-now" in body
-    assert "from-a" in body
-    assert "from-b" in body
+    assert 'id="resolve-app"' in body
+    state = _resolve_state(body)
+    assert "from-a" in state["hub_now"]
+    assert "from-b" in _replica_by_path(state, target_b)["text"]
     assert _stale_base_clause(target_b, target_a) in body
     assert "delete applied past the generation window" in body
 
 
-def test_cli_reference_describes_nav_switcher_and_same_as_hub() -> None:
-    """docs/cli-reference.md describes the nav, the replica switcher, and same as hub."""
+def test_selected_path_is_highlighted_not_labeled_and_survives_reload(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """The open nav row carries a data-current marker for CSS; unselected rows do not."""
+    config_path = _prepare_two_managed_out_of_sync(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="alpha", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    lab = _project_section(body, "lab-app")
+    alpha = _project_section(body, "alpha")
+    assert 'data-current="true"' not in lab
+    assert 'data-current="true"' in alpha
+
+
+def test_nav_tab_switcher_is_left_out_when_only_one_category_has_items(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """No tab switcher renders when every row is out-of-sync (or every row is held) — nothing to pick."""
+    oos_root = tmp_path / "oos-only"
+    held_root = tmp_path / "held-only"
+    oos_root.mkdir()
+    held_root.mkdir()
+    oos_only_config, _managed, _target_a, _target_b = _prepare_oos_text(oos_root)
+    held_only_config, _target_b2 = _prepare_held_only(held_root)
+    with _ready_resolve_ui(oos_only_config, isolated_home):
+        oos_status, oos_body = _get(_resolve_url(oos_only_config))
+    with _ready_resolve_ui(held_only_config, isolated_home):
+        held_status, held_body = _get(_resolve_url(held_only_config))
+    assert oos_status == HTTPStatus.OK
+    assert held_status == HTTPStatus.OK
+    assert 'class="nav-tabs"' not in oos_body
+    assert 'class="nav-tabs"' not in held_body
+    assert "shared.txt" in _nav_pane_html(oos_body, "oos")
+    assert "shared.txt" in _nav_pane_html(held_body, "held")
+
+
+def test_index_without_selection_redirects_to_the_first_out_of_sync_row(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """GET with no project/path redirects to the first out-of-sync row, as if it had been clicked."""
+    config_path = _prepare_two_managed_out_of_sync(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        token = _read_token(config_path)
+        status, location = _get_no_redirect(_resolve_url(config_path, token=token))
+    assert status == HTTPStatus.FOUND
+    # "alpha" sorts before "lab-app"; both have shared.txt out-of-sync.
+    assert "project=alpha" in location
+    assert "path=shared.txt" in location
+    assert f"token={token}" in location
+
+
+def test_index_without_selection_redirects_to_a_held_row_when_nothing_is_out_of_sync(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """GET with no project/path falls back to a held row when there is no out-of-sync row at all."""
+    config_path, _target_b = _prepare_held_only(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        token = _read_token(config_path)
+        status, location = _get_no_redirect(_resolve_url(config_path, token=token))
+    assert status == HTTPStatus.FOUND
+    assert "project=proj" in location
+    assert "path=shared.txt" in location
+
+
+def test_nav_tab_switcher_shown_and_defaults_to_the_selected_path_s_category(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """When both categories have rows, the switcher shows and opens on the selected path's tab."""
+    config_path, _managed, _target_a, _target_b, _slot = _prepare_isolation(tmp_path)[1:]
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    assert 'class="nav-tabs"' in body
+    assert 'id="nav-tab-oos" class="nav-tab-radio" checked' in body
+
+
+def test_nav_includes_a_collapse_control(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Every resolve page has a sidebar collapse control at the top of the left nav."""
+    config_path, _managed, _target_a, _target_b = _prepare_oos_text(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    assert 'id="nav-toggle"' in body
+    assert 'id="nav-toggle-keys"' in body
+    assert 'id="nav-body"' in body
+    assert 'aria-controls="nav-body"' in body
+
+
+def test_cli_reference_describes_nav_toolbar_row_and_same_as_hub() -> None:
+    """docs/cli-reference.md describes the nav, the toolbar row of replica chips, and same as hub."""
     text = (_REPO_ROOT / "docs" / "cli-reference.md").read_text(encoding="utf-8")
     assert "grouped by managed project name" in text
-    assert "replica switcher" in text
+    assert "toolbar row" in text
     assert "same as hub" in text
+
+
+def test_opening_oos_text_path_embeds_hub_and_first_pending_replica_text(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Opening an out-of-sync text path embeds hub-now and every replica's live text; no server hunks."""
+    config_path, _managed, _target_a, _target_b = _prepare_oos_text(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    state = _resolve_state(body)
+    assert state["binary"] is False
+    assert "from-a" in state["hub_now"]
+    pending = [replica for replica in state["replicas"] if not replica["same_as_hub"]]
+    assert pending
+    assert "from-b" in pending[0]["text"]
+    assert "hunks" not in state
+    assert "middle" not in state
+    assert "ancestor" not in state
+
+
+def test_text_detail_references_vendored_assets_and_resolve_app_no_cdn(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """An out-of-sync text path mounts #resolve-app and references vendored + app static assets, not a CDN."""
+    config_path, _managed, _target_a, _target_b = _prepare_oos_text(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    assert '<script src="/static/vendor/codemirror.js">' in body
+    assert '<script src="/static/vendor/diff_match_patch.js">' in body
+    assert '<script src="/static/vendor/merge.js">' in body
+    assert '<script src="/static/app.js">' in body
+    assert '<link rel="stylesheet" href="/static/vendor/codemirror.css">' in body
+    assert '<link rel="stylesheet" href="/static/vendor/merge.css">' in body
+    assert '<link rel="stylesheet" href="/static/app.css">' in body
+    assert "cdn." not in body.lower()
+    assert "unpkg.com" not in body
+    assert "jsdelivr" not in body
+    assert 'id="resolve-app"' in body
+    # The interactive markup (mark as merged, submit, CodeMirror.MergeView call) is built by
+    # app.js at runtime in the browser; a plain HTTP fetch never executes it, so it correctly
+    # does not appear in the server-rendered body.
+    assert "CodeMirror.MergeView" not in body
+
+
+def test_source_is_shown_as_plain_text_not_rendered_markdown(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Source bytes are embedded as plain text for the client editor, not rendered Markdown."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    (managed / "shared.txt").write_text("# Heading\n\nv0\n")
+    live = _live_sync(config_path)
+    (target_a / "shared.txt").write_text("# Heading\n\nfrom-a\n")
+    (target_b / "shared.txt").write_text("# Heading\n\nfrom-b\n")
+    live.tick()
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    assert "<h1>" not in body
+    assert "<strong>" not in body
+    state = _resolve_state(body)
+    assert "# Heading" in state["hub_now"]
+    pending = [replica for replica in state["replicas"] if not replica["same_as_hub"]]
+    assert any("# Heading" in replica["text"] for replica in pending)
+
+
+def test_common_path_prefix_is_collapsed_across_replicas(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Replica paths sharing a leading directory are collapsed to a common_prefix plus short labels."""
+    config_path, target_a, target_b, target_c = _prepare_three_target_out_of_sync(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    state = _resolve_state(body)
+    prefix = state["common_prefix"]
+    assert prefix
+    assert target_a.as_posix().startswith(prefix)
+    assert target_b.as_posix().startswith(prefix)
+    assert target_c.as_posix().startswith(prefix)
+    for replica in state["replicas"]:
+        assert replica["label"] == replica["path"][len(prefix) :]
+        assert prefix not in replica["label"]
+
+
+def test_static_vendor_and_app_assets_are_served_with_content_type(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Vendored and app static assets are served with the right content type; unknown names 404."""
+    config_path, _managed, _target_a, _target_b = _write_two_target_workspace(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        port = _read_int_file(_resolve_port_path(config_path))
+        assert port is not None
+        js_status, js_body = _get(f"http://127.0.0.1:{port}/static/vendor/codemirror.js")
+        css_status, css_body = _get(f"http://127.0.0.1:{port}/static/vendor/merge.css")
+        app_js_status, app_js_body = _get(f"http://127.0.0.1:{port}/static/app.js")
+        app_css_status, app_css_body = _get(f"http://127.0.0.1:{port}/static/app.css")
+        missing_status, _missing_body = _get(f"http://127.0.0.1:{port}/static/vendor/does-not-exist.js")
+        traversal_status, _traversal_body = _get(f"http://127.0.0.1:{port}/static/vendor/..%2F..%2Fpyproject.toml")
+    assert js_status == HTTPStatus.OK
+    assert "CodeMirror" in js_body
+    assert css_status == HTTPStatus.OK
+    assert len(css_body) > 0
+    assert app_js_status == HTTPStatus.OK
+    assert "resolve-state" in app_js_body
+    assert app_css_status == HTTPStatus.OK
+    assert len(app_css_body) > 0
+    assert missing_status == HTTPStatus.NOT_FOUND
+    assert traversal_status == HTTPStatus.NOT_FOUND
+
+
+def test_static_assets_require_no_token(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Static assets are public (no token needed); the page and JSON API still are."""
+    config_path, _managed, _target_a, _target_b = _write_two_target_workspace(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        port = _read_int_file(_resolve_port_path(config_path))
+        assert port is not None
+        status, body = _get(f"http://127.0.0.1:{port}/static/vendor/diff_match_patch.js")
+    assert status == HTTPStatus.OK
+    assert len(body) > 0
+
+
+def test_utf8_source_is_shown_as_characters(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """UTF-8 hub-now and replica text are shown as characters, not latin-1 mojibake."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    (managed / "shared.txt").write_text("祖先\n", encoding="utf-8")
+    live = _live_sync(config_path)
+    (target_a / "shared.txt").write_text("从甲\n", encoding="utf-8")
+    (target_b / "shared.txt").write_text("从乙\n", encoding="utf-8")
+    live.tick()
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    state = _resolve_state(body)
+    assert "从甲" in state["hub_now"]
+    assert "从乙" in _replica_by_path(state, target_b)["text"]
+
+
+def test_binary_path_shows_hash_and_size_for_hub_and_every_replica(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A binary path's state carries hash and size for hub and every replica; no text field."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    (managed / "shared.txt").write_bytes(b"v0\x00")
+    live = _live_sync(config_path)
+    (target_a / "shared.txt").write_bytes(b"from-a\x00")
+    (target_b / "shared.txt").write_bytes(b"from-b\x00")
+    live.tick()
+    _persist(config_path, live)
+    hub_bytes = (managed / "shared.txt").read_bytes()
+    replica_bytes = (target_b / "shared.txt").read_bytes()
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    state = _resolve_state(body)
+    assert state["binary"] is True
+    assert state["hub_hash"] == hashlib.sha256(hub_bytes).hexdigest()
+    assert state["hub_size"] == len(hub_bytes)
+    replica_b = _replica_by_path(state, target_b)
+    assert replica_b["hash"] == hashlib.sha256(replica_bytes).hexdigest()
+    assert replica_b["size"] == len(replica_bytes)
+    assert "text" not in replica_b
+
+
+def test_submit_is_a_stub_that_does_not_write_hub_or_replica_files(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """POST submit acknowledges the payload but does not write files (ticket 5 lands the real apply)."""
+    config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
+    paths = [managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"]
+    before = _file_snapshot(paths)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+    assert status == HTTPStatus.OK
+    data = json.loads(raw)
+    assert data["ok"] is True
+    assert data["applied"] is False
+    assert _file_snapshot(paths) == before
+
+
+def test_get_and_post_do_not_write_hub_or_replica_files(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """GET/POST of the resolve UI does not change hub or replica files on disk."""
+    config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
+    paths = [managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"]
+    before = _file_snapshot(paths)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        _get(url)
+        _post(url, {"action": "submit", "middle": "edited", "binary": False})
+        _post(url, {"action": "unknown"})
+    assert _file_snapshot(paths) == before
+
+
+def test_cli_reference_describes_the_sequential_merge_editor() -> None:
+    """docs/cli-reference.md describes the sequential, client-driven merge editor and its vendoring."""
+    text = (_REPO_ROOT / "docs" / "cli-reference.md").read_text(encoding="utf-8")
+    assert "middle pane is empty until merge lands" not in text
+    assert "CodeMirror" in text
+    assert "mark as merged" in text
+    assert "same as hub" in text
+    assert "common leading path segments collapsed" in text or "collapsed to one line" in text
+    assert "submit" in text
+    assert "ADR 0025" in text
+    assert "vendored" in text
+    assert "CDN" in text

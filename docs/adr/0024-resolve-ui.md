@@ -6,6 +6,8 @@
 
 accepted
 
+The 3-way merge, ancestor-stash-as-hunk-base, and replica-switcher sentences in the decision below are superseded by 0025 (sequential two-way merge, driven client-side). Everything else below stands.
+
 ## Decision
 
 - The daemon binds a second localhost port for HTTP, for as long as it is ready. A token in the set run directory authenticates the URLs. Stdlib HTTP only. JSON IPC stays on the existing port.
