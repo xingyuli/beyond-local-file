@@ -155,7 +155,7 @@ def _load_oos_from_new_process(config_path: Path, replica: Path, env: dict[str, 
         "from beyond_local_file.daemon.store import load_baseline\n"
         f"trees = load_baseline(Path({str(config_path)!r})) or {{}}\n"
         f"state = trees[{str(replica)!r}][{rel!r}]\n"
-        "sys.stdout.write(json.dumps({k: state.get(k) for k in ('oos', 'reason', 'clause', 'ancestor')}))\n"
+        "sys.stdout.write(json.dumps({k: state.get(k) for k in ('oos', 'reason', 'clause')}))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -200,27 +200,27 @@ def test_two_targets_same_path_first_apply_wins_other_listed_out_of_sync(
     assert (target_a, "shared.txt") not in live.out_of_sync
 
 
-def test_two_targets_same_path_loser_is_stale_base_with_clause_and_ancestor(
+def test_two_targets_same_path_loser_is_stale_base_with_clause(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
 ) -> None:
-    """A lost compare-and-swap stores stale-base, the winning replica, and hub bytes from before the winner applied."""
+    """A lost compare-and-swap stores stale-base and the winning replica; no hub-byte stash."""
     live, _config_path, managed, target_a, target_b = live_workspace
     _mark_loser_out_of_sync(live, target_a, target_b)
 
     state = _oos_state(live, target_b)
     assert state["reason"] == "stale-base"
-    assert state["ancestor"] == "v0"
+    assert "ancestor" not in state
     assert state["clause"] == _stale_base_clause(target_b, target_a)
     assert str(target_a) in state["clause"]
     assert str(managed) not in state["clause"]
     assert list_held_copies(managed) == ()
 
 
-def test_fan_out_mismatch_marks_replica_with_clause_and_ancestor(
+def test_fan_out_mismatch_marks_replica_with_clause(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
     isolated_home: dict[str, str],
 ) -> None:
-    """Fan-out skip for unexpected disk bytes is fan-out-mismatch with the pre-apply hub bytes."""
+    """Fan-out skip for unexpected disk bytes is fan-out-mismatch with a clause; no hub-byte stash."""
     live, config_path, managed, target_a, target_b = live_workspace
     _mark_fan_out_mismatch(live, target_a, target_b)
 
@@ -229,14 +229,14 @@ def test_fan_out_mismatch_marks_replica_with_clause_and_ancestor(
     assert (target_b, "shared.txt") in live.out_of_sync
     state = _oos_state(live, target_b)
     assert state["reason"] == "fan-out-mismatch"
-    assert state["ancestor"] == "v0"
+    assert "ancestor" not in state
     assert state["clause"] == _fan_out_mismatch_clause(target_b)
     assert str(target_a) not in state["clause"]
     assert list_held_copies(managed) == ()
     _persist(config_path, live)
     spawned = _load_oos_from_new_process(config_path, target_b, isolated_home)
     assert spawned["reason"] == "fan-out-mismatch"
-    assert spawned["ancestor"] == "v0"
+    assert spawned.get("ancestor") is None
     assert spawned["clause"] == _fan_out_mismatch_clause(target_b)
 
 
@@ -457,11 +457,11 @@ def test_reload_warns_and_acks_without_blocking(
     assert _stale_base_clause(target_b, target_a) in status.output
 
 
-def test_out_of_sync_reason_and_ancestor_survive_save_load_and_spawned_status(
+def test_out_of_sync_reason_survives_save_load_and_spawned_status(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
     isolated_home: dict[str, str],
 ) -> None:
-    """Ancestor bytes and the out-of-sync reason survive persist, a new process, and daemon start."""
+    """Out-of-sync reason and clause survive persist, a new process, and daemon start; ancestor bytes do not."""
     live, config_path, managed, target_a, target_b = live_workspace
     _mark_loser_out_of_sync(live, target_a, target_b)
     clause = _stale_base_clause(target_b, target_a)
@@ -471,13 +471,13 @@ def test_out_of_sync_reason_and_ancestor_survive_save_load_and_spawned_status(
     assert loaded is not None
     persisted = loaded[str(target_b)]["shared.txt"]
     assert persisted["reason"] == "stale-base"
-    assert persisted["ancestor"] == "v0"
+    assert "ancestor" not in persisted
     assert persisted["clause"] == clause
     assert list_held_copies(managed) == ()
 
     spawned = _load_oos_from_new_process(config_path, target_b, isolated_home)
     assert spawned["reason"] == "stale-base"
-    assert spawned["ancestor"] == "v0"
+    assert spawned.get("ancestor") is None
     assert spawned["clause"] == clause
 
     start_daemon(config_path, isolated_home)
@@ -486,11 +486,11 @@ def test_out_of_sync_reason_and_ancestor_survive_save_load_and_spawned_status(
         data = yaml.safe_load(document.read_text(encoding="utf-8"))
         row = data["trees"][str(target_b)]["shared.txt"]
         assert row["reason"] == "stale-base"
-        assert row["ancestor"] == "v0"
+        assert "ancestor" not in row
         assert row["clause"] == clause
         after_start = _load_oos_from_new_process(config_path, target_b, isolated_home)
         assert after_start["reason"] == "stale-base"
-        assert after_start["ancestor"] == "v0"
+        assert after_start.get("ancestor") is None
         status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
         assert status.exit_code == 0, status.output
         assert clause in status.output

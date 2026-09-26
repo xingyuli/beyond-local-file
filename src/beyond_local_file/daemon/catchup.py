@@ -192,11 +192,11 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
 
 
 def _copy_oos_metadata(state: PathState, prev: PathState) -> None:
-    """Copy out-of-sync reason, clause, and ancestor bytes from a previous row."""
+    """Copy out-of-sync reason and clause from a previous row."""
     if not prev.get("oos"):
         return
     state["oos"] = True
-    for key in ("reason", "clause", "ancestor"):
+    for key in ("reason", "clause"):
         if key in prev:
             state[key] = prev[key]
 

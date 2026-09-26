@@ -6,20 +6,21 @@
 
 accepted
 
-The 3-way merge, ancestor-stash-as-hunk-base, and replica-switcher sentences are superseded by 0025 (sequential two-way merge, driven client-side). They are listed under **Superseded by 0025** below. Everything in **Decision** still stands.
+The 3-way merge, ancestor-stash-as-hunk-base, replica-switcher, and hub-byte stash sentences are superseded by 0025 (sequential two-way merge, driven client-side). They are listed under **Superseded by 0025** below. Everything in **Decision** still stands.
 
 ## Decision
 
 - The daemon binds a second localhost port for HTTP, for as long as it is ready. A token in the set run directory authenticates the URLs. Stdlib HTTP only. JSON IPC stays on the existing port.
 - On a TTY, `daemon status` keeps the listing and the shell screen (0023). `o` opens the resolve UI and closes the screen. Non-TTY prints the URL when out-of-sync or held copies exist. A later desktop notification may open the same URLs; this decision does not send notifications.
 - Left nav is one row per managed project + relative path, grouped by managed project name, covering out-of-sync and held copies. A replica whose live bytes match hub-now is labeled `same as hub`. The program does not badge a source replica. Held-only rows show hold-reason clauses; held inspect and restore stay later (0009).
-- At mark time the daemon stashes the hub bytes from just before the isolating apply with the out-of-sync row (not a held copy) and an **out-of-sync reason** (`stale-base` or `fan-out-mismatch`). That stash is not a pane.
+- At mark time the daemon records an **out-of-sync reason** (`stale-base` or `fan-out-mismatch`) and clause on the out-of-sync row (not a held copy).
 - **Resolve** applies the confirmed fact: a new hub generation, then overwrite every replica that has the item, including out-of-sync ones, and clear out-of-sync for that path. Isolated bytes that did not enter the result are not held. Live fan-out still skips out-of-sync replicas.
 
 ## Superseded by 0025
 
 - Out-of-sync detail is a 3-way merge: hub-now, result, replica-now with a replica switcher.
 - The stashed hub bytes are the ancestor for hunks. Hunks use the selected right replica’s stash.
+- At mark time the daemon stashes the hub bytes from just before the isolating apply with the out-of-sync row.
 
 ## Considered Options
 
@@ -31,4 +32,4 @@ The 3-way merge, ancestor-stash-as-hunk-base, and replica-switcher sentences are
 
 ## Consequences
 
-0010’s out-of-sync rules (CAS, skip out-of-sync on fan-out, loser’s bytes stay until resolve) still hold. Its “no resolve shell / later desktop UI” does not. 0009’s held restore/discard is still later; held copies only appear in the resolve UI’s nav. 0023 gains a status-screen key. Baseline grows reason, clause, and ancestor bytes. `docs/cli-reference.md` moves with the code that makes this true.
+0010’s out-of-sync rules (CAS, skip out-of-sync on fan-out, loser’s bytes stay until resolve) still hold. Its “no resolve shell / later desktop UI” does not. 0009’s held restore/discard is still later; held copies only appear in the resolve UI’s nav. 0023 gains a status-screen key. Baseline grows reason and clause. `docs/cli-reference.md` moves with the code that makes this true.

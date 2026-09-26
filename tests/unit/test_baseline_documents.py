@@ -39,6 +39,32 @@ def test_save_uses_managed_project_name_when_projects_are_keyed_by_hub_path(tmp_
     assert "shared.txt" in data["trees"][str(managed)]
 
 
+def test_save_omits_ancestor_bytes_from_path_rows(tmp_path: Path) -> None:
+    """A leftover ancestor key is not written to the item document."""
+    managed = tmp_path / "alpha"
+    target = tmp_path / "lab-app"
+    managed.mkdir()
+    target.mkdir()
+    (managed / "shared.txt").write_text("hello")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"alpha: {target}\n")
+    projects = {
+        "alpha": ConfigProject(
+            managed_project_name="alpha",
+            managed_project_path=managed,
+            mappings=[Mapping(targets=[target], subpaths=None)],
+        )
+    }
+    trees = record_baseline(projects)
+    trees[str(managed)]["shared.txt"]["ancestor"] = "v0"
+
+    save_baseline(config_path, trees, projects)
+
+    document = state_dir(config_path) / "baseline" / "alpha" / "files"
+    data = yaml.safe_load(document.read_text(encoding="utf-8"))
+    assert "ancestor" not in data["trees"][str(managed)]["shared.txt"]
+
+
 def test_save_writes_file_items_under_managed_project_files_document(tmp_path: Path) -> None:
     """FILE items persist in baseline/<managed-project>/files, not baseline.yml."""
     managed = tmp_path / "alpha"

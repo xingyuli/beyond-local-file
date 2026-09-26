@@ -231,6 +231,7 @@ def save_baseline(
         changed_rels: Relative paths whose documents should be rewritten. None
             rewrites every item document.
     """
+    _drop_ancestor_bytes(trees)
     if projects is None:
         _save_baseline_yaml(config_path, trees)
         _remember_baseline(config_path, trees, replace=True)
@@ -242,6 +243,13 @@ def save_baseline(
 
 def _copy_trees(trees: BaselineTrees) -> BaselineTrees:
     return {root: dict(paths) for root, paths in trees.items()}
+
+
+def _drop_ancestor_bytes(trees: BaselineTrees) -> None:
+    """Omit leftover 3-way-merge ancestor bytes from path rows before persist."""
+    for paths in trees.values():
+        for state in paths.values():
+            state.pop("ancestor", None)
 
 
 def _remember_baseline(config_path: Path, trees: BaselineTrees, *, replace: bool) -> None:
