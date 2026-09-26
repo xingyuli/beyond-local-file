@@ -491,7 +491,7 @@ The managed project is the hub. A mailbox holds at most one not-yet-applied path
 
 ### Out-of-sync replicas
 
-If two replicas edit the same path, the first apply wins. The loser is out-of-sync for that path: fan-out skips it, and further path changes from it are discarded. The hub and in-sync replicas keep moving. `blf daemon status` lists these; `start` and `reload` warn and continue. Out-of-sync also clears when the replica's bytes later match the hub, or when resolve overwrites that path from the resolve UI (opened with `o` on a TTY status screen). There is no resolve shell.
+If two replicas edit the same path, the first apply wins. The loser is out-of-sync for that path: fan-out skips it, and further path changes from it are discarded. The hub and in-sync replicas keep moving. `blf daemon status` lists these; `reload` warns and continues. Out-of-sync also clears when the replica's bytes later match the hub, or when resolve overwrites that path from the resolve UI (opened with `o` on a TTY status screen). There is no resolve shell.
 
 ### Held copies
 

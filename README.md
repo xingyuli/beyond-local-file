@@ -256,7 +256,7 @@ The managed project is the hub. After a successful hub apply, the daemon fans th
 
 If two target projects edit the same path, the first apply wins. The loser is **out-of-sync** for that path: later fan-out skips it, and further edits from it are discarded. The live path on the hub and on in-sync replicas keeps moving.
 
-A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `start` and `reload` warn and ask you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path.
+A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path.
 
 ### Mapping edits
 

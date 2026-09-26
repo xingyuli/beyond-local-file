@@ -901,102 +901,12 @@ def test_tty_reload_declined_removal_does_not_send(
         assert (target_b / "b.txt").is_file()
 
 
-def _isolation_ack_open(_text: str, frame: str) -> bool:
-    return (
-        "WARNING:" in frame
-        and "Continue without resolving held copies and out-of-sync paths?" in frame
-        and _hint(frame) == _HINT_ASK_ACK
-        and not _above_hint(frame).startswith("> ")
-    )
-
-
 @pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_tty_reload_asks_isolation_ack_on_the_shell_screen(
+def test_tty_start_with_isolation_reaches_ready_without_ack(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """A TTY reload asks the held-copy ack on the screen before it would send a request."""
-    config_path, target_a, _target_b = _two_projects(tmp_path)
-    sidecar = tmp_path / "hub-bytes.txt"
-    sidecar.write_text("kept-hub-bytes")
-    with daemon_running(config_path, isolated_home):
-        store_held_copy(
-            tmp_path / "alpha",
-            rel_path=Path("a.txt"),
-            source=sidecar,
-            replica=target_a,
-            reason=REASON_DELETE_GAP,
-        )
-        with _pty_cli(
-            ["--config", str(config_path), "daemon", "reload"],
-            isolated_home,
-            tmp_path,
-        ) as (proc, master, chunks):
-            text = _wait(master, chunks, proc, _isolation_ack_open)
-            assert proc.poll() is None
-            assert _ALT_ON in text
-            os.write(master, b"\r")
-            _wait(
-                master,
-                chunks,
-                proc,
-                lambda _text, frame: _hint(frame) == _HINT_DONE and "Mappings already match the snapshot" in frame,
-            )
-            code, text = _close_and_read(master, chunks, proc, b"q")
-        assert code == 0
-        assert "Mappings already match the snapshot" in _after_exit(text)
-
-
-@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_tty_isolation_ack_rejects_y_and_n_until_bare_enter(
-    tmp_path: Path,
-    isolated_home: dict[str, str],
-) -> None:
-    """Isolation ack continues only on a bare Enter, not y or n."""
-    config_path, target_a, _target_b = _two_projects(tmp_path)
-    sidecar = tmp_path / "hub-bytes.txt"
-    sidecar.write_text("kept-hub-bytes")
-    with daemon_running(config_path, isolated_home):
-        store_held_copy(
-            tmp_path / "alpha",
-            rel_path=Path("a.txt"),
-            source=sidecar,
-            replica=target_a,
-            reason=REASON_DELETE_GAP,
-        )
-        with _pty_cli(
-            ["--config", str(config_path), "daemon", "reload"],
-            isolated_home,
-            tmp_path,
-        ) as (proc, master, chunks):
-            _wait(master, chunks, proc, _isolation_ack_open)
-            os.write(master, b"y\r")
-            text = _wait(master, chunks, proc, _isolation_ack_invalid)
-            assert "Press Enter to continue." in _last_frame(text)
-            os.write(master, b"n\r")
-            _wait(master, chunks, proc, _isolation_ack_invalid)
-            os.write(master, b"\r")
-            _wait(
-                master,
-                chunks,
-                proc,
-                lambda _text, frame: _hint(frame) == _HINT_DONE and "Mappings already match the snapshot" in frame,
-            )
-            code, text = _close_and_read(master, chunks, proc, b"q")
-        assert code == 0
-        assert "Mappings already match the snapshot" in _after_exit(text)
-
-
-def _isolation_ack_invalid(_text: str, frame: str) -> bool:
-    return _isolation_ack_open(_text, frame) and "Press Enter to continue." in frame
-
-
-@pytest.mark.skipif(os.name == "nt", reason="pty is POSIX-only")
-def test_tty_start_asks_isolation_ack_on_the_shell_screen(
-    tmp_path: Path,
-    isolated_home: dict[str, str],
-) -> None:
-    """A TTY start asks the held-copy ack on the screen before the daemon is spawned."""
+    """A TTY start with held copies spawns without an isolation ack."""
     config_path, target_a, _target_b = _two_projects(tmp_path)
     sidecar = tmp_path / "hub-bytes.txt"
     sidecar.write_text("kept-hub-bytes")
@@ -1013,17 +923,14 @@ def test_tty_start_asks_isolation_ack_on_the_shell_screen(
             isolated_home,
             tmp_path,
         ) as (proc, master, chunks):
-            text = _wait(master, chunks, proc, _isolation_ack_open)
-            assert proc.poll() is None
-            assert _placed(_last_frame(text)).get(1, "") == "daemon start  all projects"
-            assert _ALT_ON in text
-            os.write(master, b"\r")
-            _wait(
+            text = _wait(
                 master,
                 chunks,
                 proc,
                 lambda _text, frame: "Daemon started (pid " in frame and _hint(frame) == _HINT_DONE,
             )
+            assert proc.poll() is None
+            assert "Continue without resolving" not in text
             code, text = _close_and_read(master, chunks, proc, b"q")
         assert code == 0
         assert "Daemon started (pid " in _after_exit(text)

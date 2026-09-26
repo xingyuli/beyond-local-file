@@ -19,7 +19,6 @@ from beyond_local_file.daemon.ingest import (
     format_removal_plan,
     ingest_before_start,
     prepare_ingest,
-    stdin_is_tty,
 )
 from beyond_local_file.daemon.ipc import RequestSession
 from beyond_local_file.daemon.process import (
@@ -36,7 +35,6 @@ from beyond_local_file.daemon.resolve_ui import resolve_ui_url
 from beyond_local_file.daemon.runtime import run_worker
 from beyond_local_file.daemon.screen import (
     ScreenSkip,
-    isolation_ack_question,
     removal_confirm_question,
     run_shell_screen,
 )
@@ -76,11 +74,11 @@ def start_daemon(config: str | None, *, worker: bool) -> int:
 
 
 def _start_off_screen(config_path: Path) -> int:
-    """Confirm ingest and isolation on stdin, then spawn without a shell screen."""
+    """Confirm ingest on stdin, print isolation WARNINGs, then spawn without a shell screen."""
     ingest_code = ingest_before_start(config_path)
     if ingest_code != 0:
         return ingest_code
-    _warn_and_ack_isolation(config_path)
+    _echo_isolation(config_path, warning=True)
     return spawn_and_wait(config_path)
 
 
@@ -89,12 +87,9 @@ def _start_on_screen(config_path: Path) -> int:
     code, file_projects, snapshot_projects, diff = prepare_ingest(config_path, confirm=False)
     if code != 0:
         return code
-    iso_lines = _isolation_lines(config_path, warning=True)
     questions = []
     if diff is not None and diff.removals:
         questions.append(removal_confirm_question(format_removal_plan(diff.removals)))
-    if iso_lines:
-        questions.append(isolation_ack_question(iso_lines))
     if not questions:
         if commit_ingest(config_path, file_projects, snapshot_projects, diff) != 0:
             return 1
@@ -137,15 +132,11 @@ def reload_daemon(config: str | None) -> int:
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
         return 1
-    iso_lines = _isolation_lines(result.config_file, warning=True)
-    if not on_screen:
-        _ack_isolation(iso_lines)
+    _echo_isolation(result.config_file, warning=True)
     no_diff = diff is None or file_projects is None or snapshot_projects is None
     questions = []
     if on_screen and diff is not None and diff.removals:
         questions.append(removal_confirm_question(format_removal_plan(diff.removals)))
-    if on_screen and iso_lines:
-        questions.append(isolation_ack_question(iso_lines))
     if no_diff and not questions:
         click.echo("Mappings already match the snapshot")
         return 0
@@ -250,24 +241,6 @@ def follow_blf_logs(config: str | None, record: str | None = None) -> int:
     if result is None:
         return 1
     return follow_logs(result.config_file, record)
-
-
-def _warn_and_ack_isolation(config_path: Path) -> None:
-    """Print held/out-of-sync WARNINGs and require ack without aborting."""
-    _ack_isolation(_isolation_lines(config_path, warning=True))
-
-
-def _ack_isolation(lines: list[str]) -> None:
-    """Print *lines* and, on a TTY, require ack without aborting."""
-    if not lines:
-        return
-    for line in lines:
-        click.echo(line)
-    if stdin_is_tty():
-        click.confirm(
-            "Continue without resolving held copies and out-of-sync paths?",
-            default=True,
-        )
 
 
 def _echo_isolation(config_path: Path, *, warning: bool) -> bool:

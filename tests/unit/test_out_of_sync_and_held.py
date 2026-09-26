@@ -381,12 +381,11 @@ def test_status_lists_out_of_sync_and_held_copies(
     assert str(slot) in result.output
 
 
-def test_start_warns_and_acks_without_blocking(
+def test_start_warns_without_blocking(
     live_workspace: tuple[LiveSync, Path, Path, Path, Path],
     isolated_home: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """start prints isolation WARNINGs, requires ack, and still backgrounds on no."""
+    """start prints isolation WARNINGs and backgrounds with no ack."""
     live, config_path, managed, target_a, target_b = live_workspace
     _mark_loser_out_of_sync(live, target_a, target_b)
     sidecar = config_path.parent / "hub-bytes.txt"
@@ -399,9 +398,8 @@ def test_start_warns_and_acks_without_blocking(
         reason=REASON_DELETE_GAP,
     )
     _persist(config_path, live)
-    monkeypatch.setattr("beyond_local_file.operations.daemon.stdin_is_tty", lambda: True)
 
-    result = _invoke_start(config_path, isolated_home, input_text="n\n")
+    result = _invoke_start(config_path, isolated_home)
 
     assert result.exit_code == 0, result.output
     assert "WARNING" in result.output
@@ -410,7 +408,7 @@ def test_start_warns_and_acks_without_blocking(
     assert _stale_base_clause(target_b, target_a) in result.output
     assert _DELETE_GAP_CLAUSE in result.output
     assert str(slot) in result.output
-    assert "without resolving" in result.output.lower() or "continue" in result.output.lower()
+    assert "without resolving" not in result.output.lower()
     status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
     assert "running" in status.output.lower()
     stop_daemon(config_path, isolated_home)
@@ -421,7 +419,7 @@ def test_reload_warns_and_acks_without_blocking(
     isolated_home: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """reload prints isolation WARNINGs, requires ack, and does not stop the daemon."""
+    """reload prints isolation WARNINGs and continues without blocking."""
     config_path, managed, target_a, target_b = daemon_workspace
     env = {**isolated_home, "BLF_IDLE_OBSERVE_S": "0.2"}
     start_daemon(config_path, env)
@@ -439,9 +437,8 @@ def test_reload_warns_and_acks_without_blocking(
         replica=target_b,
         reason=REASON_DELETE_GAP,
     )
-    monkeypatch.setattr("beyond_local_file.operations.daemon.stdin_is_tty", lambda: True)
 
-    result = _invoke_reload(config_path, isolated_home, input_text="n\n")
+    result = _invoke_reload(config_path, isolated_home)
 
     assert result.exit_code == 0, result.output
     assert "WARNING" in result.output
@@ -450,7 +447,8 @@ def test_reload_warns_and_acks_without_blocking(
     assert _stale_base_clause(target_b, target_a) in result.output
     assert _DELETE_GAP_CLAUSE in result.output
     assert str(slot) in result.output
-    assert "without resolving" in result.output.lower() or "continue" in result.output.lower()
+    # Reload no longer asks for ack — just prints warnings
+    assert "without resolving" not in result.output.lower()
     status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=isolated_home)
     assert "running" in status.output.lower()
     assert "not running" not in status.output.lower()
