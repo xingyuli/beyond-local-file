@@ -177,6 +177,30 @@ class LiveSync:
             applied.append(change.rel)
         return tuple(applied)
 
+    def resolve(self, rel: str, content: bytes) -> None:
+        """Write the confirmed fact as a new hub generation and overwrite every replica of that path.
+
+        Resolve is the exception to live fan-out: out-of-sync replicas of *rel* are
+        overwritten too, then out-of-sync is cleared for that path only. Isolated
+        replica bytes that did not enter the confirmed fact are not held.
+
+        Args:
+            rel: Path relative to the managed project.
+            content: Confirmed-fact bytes to write.
+        """
+        hub = self._hub_for(rel)
+        if hub is None:
+            raise ValueError(f"no managed project owns {rel}")
+        old_hub_gen = get_generation(self._baseline, hub, rel)
+        self._write_file(hub / rel, content)
+        new_gen = old_hub_gen + 1
+        new_hub = scan_path_state(hub, rel)
+        self._record(hub, rel, new_hub, new_gen)
+        self._last_source[(str(hub), rel)] = hub
+        print(f"live: resolve {rel} gen {new_gen}", flush=True)
+        self._overwrite_replicas(hub, rel, new_gen)
+        self._drop_mailbox(rel)
+
     def reload(self, projects: dict[str, ConfigProject], baseline: BaselineTrees) -> None:
         """Replace mappings and treat current disks as already seen.
 
@@ -311,6 +335,42 @@ class LiveSync:
             else:
                 remove_path(destination)
             self._record(watch.root, change.rel, scan_path_state(watch.root, change.rel), new_gen)
+
+    def _hub_for(self, rel: str) -> Path | None:
+        for watch in self._watch_roots:
+            if watch.is_hub and rel_in_items(rel, watch.item_names):
+                return watch.root
+        return None
+
+    def _overwrite_replicas(self, hub: Path, rel: str, new_gen: int) -> None:
+        source = hub / rel
+        for watch in self._watch_roots:
+            if watch.is_hub or watch.root == hub:
+                continue
+            if not rel_in_items(rel, watch.item_names):
+                continue
+            if _owner_hub(watch, rel) != hub:
+                continue
+            destination = watch.root / rel
+            if source.exists() or source.is_symlink():
+                replace_with_copy(source, destination)
+            else:
+                remove_path(destination)
+            self._oos.discard((str(watch.root), rel))
+            self._record(watch.root, rel, scan_path_state(watch.root, rel), new_gen)
+        for replica_str, oos_rel in list(self._oos):
+            if oos_rel == rel:
+                self._clear_oos(Path(replica_str), rel, hub)
+
+    def _drop_mailbox(self, rel: str) -> None:
+        for key in [item for item in self._mailbox if item[0] == rel]:
+            del self._mailbox[key]
+
+    def _write_file(self, path: Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and not path.is_file() and not path.is_symlink():
+            remove_path(path)
+        path.write_bytes(content)
 
     def _record(self, root: Path, rel: str, state: PathState, gen: int) -> None:
         present = bool(state.get("present"))

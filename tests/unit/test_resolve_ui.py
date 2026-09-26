@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPErrorProcessor, Request, build_opener, urlopen
 
@@ -23,7 +24,7 @@ import pytest
 from beyond_local_file.daemon.live import LiveSync
 from beyond_local_file.daemon.process import port_path, state_dir
 from beyond_local_file.daemon.screen import _ShellScreen
-from beyond_local_file.held import REASON_DELETE_GAP, store_held_copy
+from beyond_local_file.held import REASON_DELETE_GAP, list_held_copies, store_held_copy
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
 from tests.unit.test_out_of_sync_and_held import (
     _live_sync,
@@ -117,7 +118,7 @@ def _post(url: str, payload: dict) -> tuple[int, str]:
     data = json.dumps(payload).encode("utf-8")
     request = Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
     try:
-        with urlopen(request, timeout=3) as response:
+        with urlopen(request, timeout=15) as response:
             return response.status, response.read().decode("utf-8")
     except HTTPError as error:
         return error.code, error.read().decode("utf-8")
@@ -158,14 +159,19 @@ def _prepare_isolation(tmp_path: Path) -> tuple[LiveSync, Path, Path, Path, Path
 
 
 @contextmanager
-def _ready_resolve_ui(config_path: Path, isolated_home: dict[str, str]) -> Iterator[None]:
+def _ready_resolve_ui(
+    config_path: Path,
+    isolated_home: dict[str, str],
+    extra_env: dict[str, str] | None = None,
+) -> Iterator[None]:
     """Start a ready daemon that serves the resolve UI, then stop it."""
-    start_daemon(config_path, isolated_home)
+    env = {**isolated_home, **(extra_env or {})}
+    start_daemon(config_path, env)
     try:
         _wait_until(lambda: _resolve_port_path(config_path).is_file())
         yield
     finally:
-        stop_daemon(config_path, isolated_home)
+        stop_daemon(config_path, env)
 
 
 def _write_two_managed_workspace(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
@@ -251,6 +257,19 @@ def _prepare_oos_text(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
     live = _live_sync(config_path)
     _mark_loser_out_of_sync(live, target_a, target_b)
+    _persist(config_path, live)
+    return config_path, managed, target_a, target_b
+
+
+def _prepare_two_oos_paths(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    """Two items each isolated on target-b after a lost compare-and-swap."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    (managed / "other.txt").write_text("other-v0")
+    live = _live_sync(config_path)
+    _mark_loser_out_of_sync(live, target_a, target_b)
+    (target_a / "other.txt").write_text("other-a")
+    (target_b / "other.txt").write_text("other-b")
+    live.tick()
     _persist(config_path, live)
     return config_path, managed, target_a, target_b
 
@@ -816,38 +835,198 @@ def test_binary_path_shows_hash_and_size_for_hub_and_every_replica(
     assert "text" not in replica_b
 
 
-def test_submit_is_a_stub_that_does_not_write_hub_or_replica_files(
+def test_submit_writes_confirmed_fact_as_hub_generation_and_every_replica(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """POST submit acknowledges the payload but does not write files (ticket 5 lands the real apply)."""
+    """POST submit writes the confirmed fact to the hub and every replica of that item."""
     config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
-    paths = [managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"]
-    before = _file_snapshot(paths)
     with _ready_resolve_ui(config_path, isolated_home):
         url = _resolve_url(config_path, project="proj", path="shared.txt")
         status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
     assert status == HTTPStatus.OK
     data = json.loads(raw)
     assert data["ok"] is True
-    assert data["applied"] is False
-    assert _file_snapshot(paths) == before
+    assert data["applied"] is True
+    assert (managed / "shared.txt").read_text() == "confirmed fact"
+    assert (target_a / "shared.txt").read_text() == "confirmed fact"
+    assert (target_b / "shared.txt").read_text() == "confirmed fact"
 
 
-def test_get_and_post_do_not_write_hub_or_replica_files(
+def test_submit_clears_out_of_sync_for_that_path_only(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """GET/POST of the resolve UI does not change hub or replica files on disk."""
+    """Resolve clears out-of-sync for the submitted path and leaves other paths isolated."""
+    config_path, managed, target_a, target_b = _prepare_two_oos_paths(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+        assert status == HTTPStatus.OK
+        assert json.loads(raw)["applied"] is True
+        body_status, body = _get(_resolve_url(config_path))
+    assert (managed / "shared.txt").read_text() == "confirmed fact"
+    assert (target_a / "shared.txt").read_text() == "confirmed fact"
+    assert (target_b / "shared.txt").read_text() == "confirmed fact"
+    assert (target_b / "other.txt").read_text() == "other-b"
+    assert (managed / "other.txt").read_text() == "other-a"
+    assert body_status == HTTPStatus.OK
+    oos_pane = _nav_pane_html(body, "oos")
+    assert "other.txt" in oos_pane
+    assert "shared.txt" not in oos_pane
+
+
+def test_submit_does_not_hold_discarded_isolated_bytes(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Isolated replica bytes that did not enter the confirmed fact are gone and not held."""
+    config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
+    isolated = (target_b / "shared.txt").read_bytes()
+    assert isolated == b"from-b"
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+    assert status == HTTPStatus.OK
+    assert json.loads(raw)["applied"] is True
+    assert (target_b / "shared.txt").read_text() == "confirmed fact"
+    assert list_held_copies(managed) == ()
+    held_root = tmp_path / "home" / ".blf" / "held"
+    if held_root.is_dir():
+        leftover = [path.read_bytes() for path in held_root.rglob("content") if path.is_file()]
+        assert isolated not in leftover
+    assert (target_a / "shared.txt").read_text() == "confirmed fact"
+
+
+def test_later_hub_edit_skips_remaining_out_of_sync_replicas_on_other_paths(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A later live hub edit still skips remaining out-of-sync replicas on other paths."""
+    config_path, managed, target_a, target_b = _prepare_two_oos_paths(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home, extra_env={"BLF_IDLE_OBSERVE_S": "0.2"}):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+        assert status == HTTPStatus.OK
+        assert json.loads(raw)["applied"] is True
+        (managed / "other.txt").write_text("hub-later")
+        _wait_until(lambda: (target_a / "other.txt").read_text() == "hub-later")
+        assert (target_b / "other.txt").read_text() == "other-b"
+    assert (managed / "shared.txt").read_text() == "confirmed fact"
+    assert (target_b / "shared.txt").read_text() == "confirmed fact"
+
+
+def test_submit_fails_clearly_when_worker_unit_cannot_take_the_op(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """POST submit returns an error JSON and writes nothing when no worker unit owns the project."""
+    config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
+    paths = [managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"]
+    before = _file_snapshot(paths)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(
+            url,
+            {
+                "action": "submit",
+                "project": "no-such-project",
+                "path": "shared.txt",
+                "middle": "confirmed fact",
+                "binary": False,
+            },
+        )
+    assert status == HTTPStatus.OK
+    data = json.loads(raw)
+    assert data["ok"] is False
+    assert "worker unit" in data["error"]
+    assert _file_snapshot(paths) == before
+
+
+def test_submit_fails_when_daemon_is_down(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """POST submit fails at the HTTP seam when the daemon is not serving."""
+    config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
+    paths = [managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"]
+    before = _file_snapshot(paths)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+    with pytest.raises(URLError):
+        _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+    assert _file_snapshot(paths) == before
+
+
+def test_nav_leaves_once_the_path_is_resolved(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """After resolve, the path is gone from the nav; landing shows remaining work or none."""
+    config_path, _managed, _target_a, _target_b = _prepare_oos_text(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+        assert status == HTTPStatus.OK
+        assert json.loads(raw)["applied"] is True
+        land_status, body = _get(_resolve_url(config_path))
+    assert land_status == HTTPStatus.OK
+    assert "<p>None</p>" in body
+    assert "shared.txt" not in body
+
+
+def test_submit_writes_binary_confirmed_fact_without_rereading_replicas(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Binary submit sends the pick's bytes; the daemon writes those exact bytes to every replica."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    (managed / "shared.txt").write_bytes(b"v0\x00")
+    live = _live_sync(config_path)
+    (target_a / "shared.txt").write_bytes(b"from-a\x00")
+    (target_b / "shared.txt").write_bytes(b"from-b\x00")
+    live.tick()
+    _persist(config_path, live)
+    confirmed = b"pick-b\x00"
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(
+            url,
+            {
+                "action": "submit",
+                "binary": True,
+                "content": base64.b64encode(confirmed).decode("ascii"),
+            },
+        )
+    assert status == HTTPStatus.OK
+    data = json.loads(raw)
+    assert data["ok"] is True
+    assert data["applied"] is True
+    assert (managed / "shared.txt").read_bytes() == confirmed
+    assert (target_a / "shared.txt").read_bytes() == confirmed
+    assert (target_b / "shared.txt").read_bytes() == confirmed
+    assert list_held_copies(managed) == ()
+
+
+def test_get_and_unknown_action_post_do_not_write_hub_or_replica_files(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """GET and unknown-action POST do not change hub or replica files; submit does write."""
     config_path, managed, target_a, target_b = _prepare_oos_text(tmp_path)
     paths = [managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"]
     before = _file_snapshot(paths)
     with _ready_resolve_ui(config_path, isolated_home):
         url = _resolve_url(config_path, project="proj", path="shared.txt")
         _get(url)
-        _post(url, {"action": "submit", "middle": "edited", "binary": False})
         _post(url, {"action": "unknown"})
-    assert _file_snapshot(paths) == before
+        assert _file_snapshot(paths) == before
+        status, raw = _post(url, {"action": "submit", "middle": "edited", "binary": False})
+    assert status == HTTPStatus.OK
+    assert json.loads(raw)["applied"] is True
+    assert (managed / "shared.txt").read_text() == "edited"
+    assert (target_a / "shared.txt").read_text() == "edited"
+    assert (target_b / "shared.txt").read_text() == "edited"
 
 
 def test_cli_reference_describes_the_sequential_merge_editor() -> None:
@@ -862,3 +1041,8 @@ def test_cli_reference_describes_the_sequential_merge_editor() -> None:
     assert "ADR 0025" in text
     assert "vendored" in text
     assert "CDN" in text
+    assert "confirmed fact" in text
+    assert "new hub generation" in text
+    assert "every replica" in text
+    assert "not held" in text
+    assert "nav row leaves" in text or "row leaves" in text

@@ -524,21 +524,37 @@
       binary: !!state.binary,
     };
     if (state.binary) {
-      payload.winner_source = winnerSource;
+      var winner = replicaByPath(winnerSource);
+      payload.content = winner ? winner.content : state.hub_content;
     } else {
       payload.middle = leftText;
     }
     post(payload)
       .then(function (data) {
-        submitted = true;
+        if (data && data.ok && data.applied) {
+          submitted = true;
+          leaveConfirmed = true;
+          var next = new URLSearchParams();
+          next.set("token", params.get("token") || "");
+          window.location.href = window.location.pathname + "?" + next.toString();
+          return;
+        }
+        if (submitButton) {
+          submitButton.disabled = false;
+        }
         var stage = document.querySelector(".resolve-stage");
         if (stage) {
-          stage.appendChild(el("p", "submit-result", (data && data.note) || "Submitted."));
+          var message = (data && data.error) || (data && data.note) || "Resolve failed.";
+          stage.appendChild(el("p", "submit-result", message));
         }
       })
       .catch(function () {
         if (submitButton) {
           submitButton.disabled = false;
+        }
+        var stage = document.querySelector(".resolve-stage");
+        if (stage) {
+          stage.appendChild(el("p", "submit-result", "Resolve failed: daemon is down or the worker unit cannot take the op."));
         }
       });
   }

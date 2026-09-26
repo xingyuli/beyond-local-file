@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html
 import json
 import secrets
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -73,17 +75,22 @@ def resolve_ui_url(config_path: Path) -> str | None:
     return f"http://127.0.0.1:{port}/?token={token}"
 
 
-def start_resolve_ui(config_path: Path) -> ResolveHttp:
+type ResolveApply = Callable[[str, str, bytes], dict]
+
+
+def start_resolve_ui(config_path: Path, apply_resolve: ResolveApply | None = None) -> ResolveHttp:
     """Bind a localhost HTTP port, write port and token files, and serve.
 
     Args:
         config_path: Path to the loaded config file.
+        apply_resolve: Callback that enqueues resolve on the worker unit for
+            that managed project. The HTTP thread must not write the hub.
 
     Returns:
         A handle that stops the server and unlinks the files.
     """
     token = secrets.token_urlsafe(_TOKEN_BYTES)
-    handler = _handler_for(config_path, token)
+    handler = _handler_for(config_path, token, apply_resolve)
     server = HTTPServer((_HOST, 0), handler)
     port = int(server.server_address[1])
     token_file = resolve_token_path(config_path)
@@ -135,7 +142,11 @@ def _read_text(path: Path) -> str:
         return ""
 
 
-def _handler_for(config_path: Path, token: str) -> type[BaseHTTPRequestHandler]:
+def _handler_for(
+    config_path: Path,
+    token: str,
+    apply_resolve: ResolveApply | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed_path = urlparse(self.path).path
@@ -166,7 +177,11 @@ def _handler_for(config_path: Path, token: str) -> type[BaseHTTPRequestHandler]:
             rel = str(payload.get("path") or (query.get("path") or [""])[0])
             action = str(payload.get("action") or "")
             body = json.dumps(
-                _resolve_post(config_path, {**payload, "project": project, "path": rel, "action": action})
+                _resolve_post(
+                    config_path,
+                    {**payload, "project": project, "path": rel, "action": action},
+                    apply_resolve,
+                )
             ).encode("utf-8")
             _send(self, HTTPStatus.OK, body, "application/json; charset=utf-8")
 
@@ -430,6 +445,7 @@ def _resolve_state(project: ConfigProject, trees: BaselineTrees, rel: str) -> di
     if binary:
         state["hub_hash"] = hashlib.sha256(hub_bytes).hexdigest()
         state["hub_size"] = len(hub_bytes)
+        state["hub_content"] = base64.b64encode(hub_bytes).decode("ascii")
     else:
         state["hub_now"] = _bytes_as_text(hub_bytes)
     return state
@@ -457,6 +473,7 @@ def _replica_state(ctx: _ReplicaCtx, replica: Path) -> dict[str, object]:
     if ctx.binary:
         entry["hash"] = hashlib.sha256(replica_bytes).hexdigest()
         entry["size"] = len(replica_bytes)
+        entry["content"] = base64.b64encode(replica_bytes).decode("ascii")
     else:
         entry["text"] = _bytes_as_text(replica_bytes)
     return entry
@@ -477,15 +494,36 @@ def _common_prefix(paths: list[Path]) -> str:
     return "/".join(common) + "/"
 
 
-def _resolve_post(config_path: Path, payload: dict) -> dict:
+def _resolve_post(config_path: Path, payload: dict, apply_resolve: ResolveApply | None) -> dict:
+    del config_path
     action = str(payload.get("action") or "")
     if action != "submit":
         return {"ok": False, "error": "unknown action"}
-    del config_path
-    # TODO(ticket 5, Resolve apply): write a new hub generation and force-overwrite every
-    # replica of this path, then clear its out-of-sync rows. For now submit is a stub: it
-    # acknowledges the payload and writes nothing, so "no write until apply" still holds.
-    return {"ok": True, "applied": False, "note": "submit is wired but apply is not implemented yet"}
+    project = str(payload.get("project") or "")
+    rel = str(payload.get("path") or "")
+    content = _confirmed_bytes(payload)
+    if not project or not rel:
+        return {"ok": False, "error": "missing project or path"}
+    if content is None:
+        return {"ok": False, "error": "missing confirmed fact"}
+    if apply_resolve is None:
+        return {"ok": False, "error": "worker unit cannot take the op"}
+    return apply_resolve(project, rel, content)
+
+
+def _confirmed_bytes(payload: dict) -> bytes | None:
+    if payload.get("binary"):
+        content = payload.get("content")
+        if not isinstance(content, str):
+            return None
+        try:
+            return base64.b64decode(content, validate=True)
+        except ValueError:
+            return None
+    middle = payload.get("middle")
+    if not isinstance(middle, str):
+        return None
+    return middle.encode("utf-8")
 
 
 def _bytes_as_text(data: bytes) -> str:

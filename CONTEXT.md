@@ -145,7 +145,7 @@ The localhost HTML the daemon serves while it is ready. Left nav lists each out-
 _Avoid_: Desktop app, isolation page, status screen, shell screen, source badge, replica switcher, 3-way ancestor merge
 
 **Sequential replica merge**:
-The resolve UI's merge editor (ADR 0025). Hub-now vs. one replica at a time in a two-way `CodeMirror` diff, seeded from the current left side (hub-now for the first replica, the prior round's result after that); no ancestor pane. `Mark as merged` freezes the middle pane as the new left side and advances to the next replica whose live bytes differ from hub; a binary path picks a whole winner per round instead of diffing. `Submit` is enabled once every differing replica is merged. Driven client-side; the daemon only serves hub-now and every replica's content/hash-size once per page load, and receives the confirmed result on submit.
+The resolve UI's merge editor (ADR 0025). Hub-now vs. one replica at a time in a two-way `CodeMirror` diff, seeded from the current left side (hub-now for the first replica, the prior round's result after that); no ancestor pane. `Mark as merged` freezes the middle pane as the new left side and advances to the next replica whose live bytes differ from hub; a binary path picks a whole winner per round instead of diffing. `Submit` is enabled once every differing replica is merged. Driven client-side; the daemon only serves hub-now and every replica's live text (or hash, size, and bytes for a binary path) once per page load, and receives the confirmed fact on submit.
 _Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict
 
 **Mapping change**:

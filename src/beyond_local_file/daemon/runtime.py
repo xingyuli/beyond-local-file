@@ -550,7 +550,7 @@ def _catch_up_worker(runtime: _LiveRuntime) -> None:
     for unit in runtime.units.values():
         unit.start()
     try:
-        runtime.resolve_http = start_resolve_ui(runtime.config_path)
+        runtime.resolve_http = start_resolve_ui(runtime.config_path, apply_resolve=_enqueue_resolve(runtime))
     except OSError as error:
         print(f"resolve UI: failed to bind: {error}", flush=True)
     write_ready(runtime.config_path)
@@ -602,6 +602,27 @@ def _catch_up_and_persist(
     save_baseline(config_path, trees, projects)
     _await_test_hold()
     return projects, trees
+
+
+def _enqueue_resolve(runtime: _LiveRuntime) -> Callable[[str, str, bytes], dict]:
+    """Return a callback that runs resolve as a job on the owning worker unit."""
+
+    def apply_resolve(project: str, rel: str, content: bytes) -> dict:
+        unit = runtime.units.get(project)
+        if unit is None:
+            return {"ok": False, "error": "worker unit cannot take the op"}
+        try:
+            unit.submit(lambda: _run_resolve(runtime.config_path, unit, rel, content))
+        except Exception as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, "applied": True}
+
+    return apply_resolve
+
+
+def _run_resolve(config_path: Path, unit: WorkerUnit, rel: str, content: bytes) -> None:
+    unit.live.resolve(rel, content)
+    save_baseline(config_path, unit.live.baseline, unit.live.projects, changed_rels=[rel])
 
 
 def _await_test_hold() -> None:
