@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-26
+
+### Added
+- **Browser-based conflict resolution** — The daemon now serves a localhost web interface for inspecting and resolving out-of-sync paths and held copies. Access the UI from `blf daemon status` (press `o` in TTY mode or use the printed URL). The interface shows hub-now and every replica of each out-of-sync path, displays detailed reason clauses explaining why replicas diverged, and provides a sequential two-way merge editor using CodeMirror 5 for visual text diffs. Users step through each differing replica in sequence, with the result editor preserving edits across replica switches. Resolve apply writes the confirmed result to the hub and force-overwrites all replicas atomically, clearing isolation for that path. Binary files show hash and size with pick-hub or pick-replica choice.
+
+### Changed
+- **Shell screen keyboard actions clarified** — Each key now has one purpose: `Ctrl+C` interrupts in-flight work, `Enter` confirms prompts, `Esc` resumes after interrupt confirmation, `q` closes finished screens, and `o` opens the resolve UI from status when isolation exists. Removal and hub choice prompts explicitly show `y/n` or numbered options. Interrupt confirmation is a separate screen with `Enter: interrupt` or `Esc: resume`.
+
+[0.7.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.7.0
+
 ## [0.6.0] - 2026-09-22
 
 v0.6.0 is a breaking release: the daemon execution model has been fundamentally redesigned to eliminate the shared performance corridor that made every shell operation wait for a full configuration-set scan and baseline rewrite. The daemon now schedules work per managed project with independent worker units, achieving 25ms response times for simple operations that previously took 26+ seconds.
