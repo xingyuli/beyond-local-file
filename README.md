@@ -37,6 +37,7 @@ A few concrete things it handles that are hard to do with a shell script:
 - Projecting an entire directory subtree (e.g., `.kiro/hooks/`) into multiple projects at once
 - Keeping each target project's copies live while a daemon observes the hub and fans updates out
 - Isolating a replica that loses an update (out-of-sync) instead of overwriting it
+- Resolving an out-of-sync path from the browser so the confirmed fact lands on the hub and every replica
 - Checking status across all managed projects at a glance (`blf link check`)
 
 ## 🎬 Quick Demo
@@ -255,7 +256,7 @@ The managed project is the hub. After a successful hub apply, the daemon fans th
 
 If two target projects edit the same path, the first apply wins. The loser is **out-of-sync** for that path: later fan-out skips it, and further edits from it are discarded. The live path on the hub and on in-sync replicas keeps moving.
 
-A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `start` and `reload` warn and ask you to continue; 0.5.0 does not interview you to pick winners.
+A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `start` and `reload` warn and ask you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path.
 
 ### Mapping edits
 

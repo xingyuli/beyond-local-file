@@ -1,6 +1,6 @@
 # Daemon is the sole runtime and sole internal mapping writer
 
-Copy, catch-up, fan-out, and every mapping edit that originates from blf run inside the daemon. `revlink create`, `revlink restore`, and `remove` are shells: they send a request and do not themselves copy, delete, or write `config.yml`. That makes the daemon the single point that maintains blf-caused config changes.
+Copy, catch-up, fan-out, resolve, and every mapping edit that originates from blf run inside the daemon. `revlink create`, `revlink restore`, and `remove` are shells: they send a request and do not themselves copy, delete, or write `config.yml`. The resolve UI is not a second writer: Submit enqueues on the worker unit. That makes the daemon the single point that maintains blf-caused config changes.
 
 The mapping snapshot is persisted on disk. After a crash or kill, start can still diff the config file against the last committed snapshot and see external mapping edits. A snapshot that lived only in memory could not.
 

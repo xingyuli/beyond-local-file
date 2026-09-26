@@ -53,7 +53,7 @@ One OS process per configuration set. It catch-up's, then observes each managed 
 _Avoid_: Coordinator, watcher, syncer, service, one process per mapping file
 
 **Worker unit**:
-The threading grain: one queue for **one managed project** (hub and every target). Idle observe, mailbox apply, catch-up, and mutating shells for that hub run as jobs on that queue. At most one job per worker unit. Distinct worker units run in parallel.
+The threading grain: one queue for **one managed project** (hub and every target). Idle observe, mailbox apply, catch-up, mutating shells, and resolve apply for that hub run as jobs on that queue. At most one job per worker unit. Distinct worker units run in parallel.
 _Avoid_: Processing unit, thread per target, set-wide lock
 
 **Mapping unit**:
@@ -121,7 +121,7 @@ A per-path counter on the hub, incremented once per successful hub apply. A dele
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
-Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live path can change without losing the previous file. That tree is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command in 0.5.0. A leftover ``.blf-held/`` inside a managed project is still skipped by discovery; new holds are not written there.
+Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live path can change without losing the previous file. That tree is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `start` and `reload` warn and ack. There is no restore/discard command. A leftover ``.blf-held/`` inside a managed project is still skipped by discovery; new holds are not written there.
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
@@ -129,24 +129,28 @@ A stable clause naming why a held copy exists. WARNINGs and the resolve UI show 
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
-A replica is excluded from a path after a lost compare-and-swap, or after fan-out skipped it because its disk bytes were not the expected base. Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, or when a **resolve** force-overwrites that path. `status` lists these; `start` and `reload` warn and ack. Each mark has an **out-of-sync reason**.
+A replica is excluded from a path after a lost compare-and-swap, or after fan-out skipped it because its disk bytes were not the expected base. Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, or when **resolve** overwrites that path. `status` lists these; `start` and `reload` warn and ack. Each mark has an **out-of-sync reason**.
 _Avoid_: Freeze, conflict, diverge, partition
 
 **Out-of-sync reason**:
 A stable clause naming why a replica is out-of-sync for a path. Status, WARNINGs, and the resolve UI show it. Reasons: `stale-base` (target update lost compare-and-swap), `fan-out-mismatch` (fan-out skipped because disk was not the expected base). The clause names the replica, path, hub generation, and the winning replica when the mark was a lost compare-and-swap.
 _Avoid_: Conflict type, error code, note, isolation reason
 
+**Confirmed fact**:
+The bytes chosen for a path in the resolve UI. Resolve writes them as the next hub generation.
+_Avoid_: Merge result, winner, resolved content
+
 **Resolve**:
-Applying the confirmed fact for a path: write those bytes as a new hub generation, force-overwrite every replica that has that item (including out-of-sync replicas), and clear out-of-sync for that path. The daemon is the writer. Isolated replica bytes that did not enter the confirmed fact are not held.
+A daemon write of the confirmed fact for one path: a new hub generation, every replica of that item overwritten (including out-of-sync replicas), and out-of-sync cleared for that path only. Discarded isolated bytes are not a held copy.
 _Avoid_: Force-overwrite, sync, pick winner, merge
 
 **Resolve UI**:
-The localhost HTML the daemon serves while it is ready. Left nav lists each out-of-sync or held path, keyed by managed project and relative path, grouped by managed project name; out-of-sync and held are top tab panes rather than a per-row label, and the open row is a background highlight, not text. A GET with no path selected opens the first row, same as clicking it. Out-of-sync detail merges replicas one at a time (see Sequential replica merge): one toolbar row above the stage holds the common leading path segments (collapsed to one label), a two-line chip (label, then status) per target, and ``submit``; a replica whose live bytes match hub-now is labeled ``same as hub`` and is not opened. Held-only detail shows hold-reason clauses until a later slice. On a TTY, ``daemon status`` opens it with a key. A later desktop notification may open the same URLs.
+The localhost page the daemon serves while ready, opened from ``daemon status`` on a TTY (a later notification may use the same URLs). It lists out-of-sync and held paths by managed project; out-of-sync detail produces a confirmed fact (see Sequential replica merge) and Submit is **resolve**; held rows show the hold reason only.
 _Avoid_: Desktop app, isolation page, status screen, shell screen, source badge, replica switcher, 3-way ancestor merge
 
 **Sequential replica merge**:
-The resolve UI's merge editor (ADR 0025). Hub-now vs. one replica at a time in a two-way `CodeMirror` diff, seeded from the current left side (hub-now for the first replica, the prior round's result after that); no ancestor pane. `Mark as merged` freezes the middle pane as the new left side and advances to the next replica whose live bytes differ from hub; a binary path picks a whole winner per round instead of diffing. `Submit` is enabled once every differing replica is merged. Driven client-side; the daemon only serves hub-now and every replica's live text (or hash, size, and bytes for a binary path) once per page load, and receives the confirmed fact on submit.
-_Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict
+Producing a confirmed fact by folding one differing replica at a time into the current left side, starting from hub-now. Replicas already matching hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**.
+_Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict, replica switcher
 
 **Mapping change**:
 A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove.
@@ -194,4 +198,4 @@ A yaml file already loaded by a running set is served by that process (``-c`` is
 
 Idle observe is recorded in the idle log. A shell request and every step it caused are recorded in the request log. Process start, the catch-up that belongs to start, ready, and stop are recorded in the daemon log. Stamps are written at millisecond resolution. ``blf logs`` follows the merge and prefixes each line with its record. Request stdout captured for the CLI is not a substitute. See 0015, 0020, 0021, and 0022.
 
-The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating shells routed by mapping snapshot / contribution source. A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. On a terminal the shell screen stays up for the request. The hint names the keys for the current state: interrupt before send or while running, Enter to confirm an interrupt or Esc to resume, close after it finishes. Isolation ack is Enter to continue. A confirmed interrupt cancels a running request. Closing a finished screen prints the plain result. Ctrl+C also closes a finished screen and is not listed. On status, ``o`` opens the resolve UI and closes. Non-TTY: result only, no screen. See 0023. After persist, live observation continues from the new baseline without a reload scan. ``daemon reload`` catch-up jobs run only for worker units whose mappings changed. Two worker units splicing the same mapping yaml or ``.git/info/exclude`` take a lock per file so both writes survive.
+The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating work on that queue (shells routed by mapping snapshot / contribution source; resolve from the resolve UI). A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. On a terminal the shell screen stays up for the request. The hint names the keys for the current state: interrupt before send or while running, Enter to confirm an interrupt or Esc to resume, close after it finishes. Out-of-sync ack is Enter to continue. A confirmed interrupt cancels a running request. Closing a finished screen prints the plain result. Ctrl+C also closes a finished screen and is not listed. On status, ``o`` opens the resolve UI and closes. Non-TTY: result only, no screen. See 0023. After persist, live observation continues from the new baseline without a reload scan. ``daemon reload`` catch-up jobs run only for worker units whose mappings changed. Two worker units splicing the same mapping yaml or ``.git/info/exclude`` take a lock per file so both writes survive.

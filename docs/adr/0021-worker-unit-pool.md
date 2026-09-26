@@ -22,6 +22,7 @@ A ConfigProject with several mappings/targets is not several threads. The thread
 - `link check` with no project name enqueues on every worker unit and merges the table; with a project name, that one unit. Progress is `Checking i/n … item`, filled as mapping units finish.
 - `daemon reload` catch-up jobs run only for worker units whose mappings changed (start new units, stop removed ones).
 - Mutating shells apply the mailbox (no scan), then the op. They do not start an observe. TTY: `Waiting …` if that unit is busy, then Creating/Restoring/Removing, then `Writing baseline …`. Non-TTY has no status line.
+- Resolve apply from the resolve UI enqueues on the worker unit for that managed project. The HTTP accept thread does not write the hub.
 - Splices of a mapping yaml or `.git/info/exclude` take a process-wide lock per file so two worker units cannot lose each other's writes.
 - `status` never joins a worker-unit queue.
 
