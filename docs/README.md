@@ -21,9 +21,11 @@ New to beyond-local-file? Start here:
 - **[Shell Completion](shell-completion.md)** - Tab completion setup for bash, zsh, and fish
 - **[Config Format Clarification](config-format-clarification.md)** - Understanding configuration vs architecture
 - **[Design Overview](design-overview.md)** - Architecture overview and design principles
+- **[Daemon design](design-daemon.html)** - High-level daemon runtime (flowcharts)
 
 ### Design Documentation
 
+- **[Daemon design](design-daemon.html)** - Process, live path, mappings, and resolve UI
 - **[Design: Model Separation](design-model-separation.md)** - Two-model architecture (config vs processing)
 - **[Design: Divide-and-Conquer](design-divide-and-conquer.md)** - Strategy management and protocol-based design
 
@@ -46,6 +48,7 @@ New to beyond-local-file? Start here:
 - **Understand configuration** → [Configuration Reference](configuration-reference.md)
 - **Learn all commands** → [CLI Reference](cli-reference.md)
 - **Use on Windows** → [Windows Support](windows-support.md)
+- **Understand the daemon** → [Daemon design](design-daemon.html)
 - **Understand the architecture** → [Design Overview](design-overview.md)
 - **Contribute code** → [Development Guide](development.md)
 

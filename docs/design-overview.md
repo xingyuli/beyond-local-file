@@ -223,6 +223,7 @@ When creating a new operation:
 ## Further Reading
 
 ### Design Documentation
+- **[design-daemon.html](design-daemon.html)** - Daemon runtime: process, live path, mappings, resolve UI
 - **[design-model-separation.md](design-model-separation.md)** - Two-model architecture details
 - **[design-divide-and-conquer.md](design-divide-and-conquer.md)** - Strategy management details
 
