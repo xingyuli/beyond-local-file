@@ -258,6 +258,8 @@ If two target projects edit the same path, the first apply wins. The loser is **
 
 A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path.
 
+When an out-of-sync mark or held copy is first persisted, the daemon shows a desktop notice naming the kind, the managed project, and the path. It does not open the resolve UI. `BLF_NOTIFY=0` turns notices off.
+
 ### Mapping edits
 
 Edit a mapping file by hand, then run `blf daemon start` (if the daemon is down) or `blf daemon reload` (if it is already up). Adds apply automatically. Removals print one plan and require confirmation; decline commits nothing. The daemon does not watch mapping files.

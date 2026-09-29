@@ -79,6 +79,8 @@ def call_daemon(
     if not is_running(config_path):
         click.echo(DAEMON_DOWN_HINT)
         return 1
+    if "tty" not in request and request.get("op") in {"create", "restore", "remove", "reload"}:
+        request["tty"] = shell_wants_screen()
     if _wants_shell_screen(request) and shell_wants_screen():
         return _call_on_shell_screen(
             config_path,

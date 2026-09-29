@@ -42,6 +42,7 @@ from .log import (
     open_worker_logs,
     reset_persist_samples,
 )
+from .notice import emit_isolation_notices, snapshot_isolation
 from .process import state_dir, write_ready
 from .resolve_ui import ResolveHttp, start_resolve_ui, stop_resolve_ui
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
@@ -439,6 +440,8 @@ def _execute_unit_request(
     if _is_cancelled(request):
         return {"exit_code": 1, "stdout": "Stopped\n"}
     op = request.get("op")
+    skip_notice = bool(request.get("tty"))
+    before = snapshot_isolation(unit.live) if op in {"create", "restore", "remove", "reload"} else None
     if op in {"create", "restore", "remove"} and on_progress is not None:
         verbs = {"create": "Creating", "restore": "Restoring", "remove": "Removing"}
         item = str(request.get("path") or "").strip()
@@ -457,6 +460,13 @@ def _execute_unit_request(
             if subset:
                 project = next(iter(subset.values()))
                 unit.live.reload(subset, trees_for_project(project, baseline))
+    if before is not None:
+        emit_isolation_notices(
+            project=unit.name,
+            before=before,
+            after=snapshot_isolation(unit.live),
+            skip=skip_notice,
+        )
     return response
 
 

@@ -145,8 +145,12 @@ A daemon write of the confirmed fact for one path: a new hub generation, every r
 _Avoid_: Force-overwrite, sync, pick winner, merge
 
 **Resolve UI**:
-The localhost page the daemon serves while ready, opened from ``daemon status`` on a TTY (a later notification may use the same URLs). It lists out-of-sync and held paths by managed project; out-of-sync detail produces a confirmed fact (see Sequential replica merge) and Submit is **resolve**; held rows show the hold reason only.
+The localhost page the daemon serves while ready, opened from ``daemon status`` on a TTY. A **desktop notice** does not open it. It lists out-of-sync and held paths by managed project; out-of-sync detail produces a confirmed fact (see Sequential replica merge) and Submit is **resolve**; held rows show the hold reason only.
 _Avoid_: Desktop app, isolation page, status screen, shell screen, source badge, replica switcher, 3-way ancestor merge
+
+**Desktop notice**:
+The daemon's OS banner when an out-of-sync mark or held copy is first persisted in this process. It names the kind, the managed project, and the path, not a replica basename, a reason clause, or a URL. ``status`` is still the door to the resolve UI.
+_Avoid_: Notification, alert, warning, desktop app
 
 **Sequential replica merge**:
 Producing a confirmed fact by folding one differing replica at a time into the current left side, starting from hub-now. Replicas already matching hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**.

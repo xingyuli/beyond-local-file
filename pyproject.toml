@@ -27,6 +27,7 @@ dependencies = [
     "click>=8.0",
     "rich>=14.3.3",
     "ruamel-yaml>=0.18",
+    "desktop-notifier>=6.2.0",
 ]
 
 [project.urls]

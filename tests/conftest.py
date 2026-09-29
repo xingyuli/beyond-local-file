@@ -39,6 +39,18 @@ def isolated_home(tmp_path, monkeypatch):
     return {"BLF_HOME": str(home_dir)}
 
 
+@pytest.fixture(autouse=True)
+def silent_desktop_notices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not show OS banners from daemon tests.
+
+    Individual notice tests replace ``send_banner`` when they need to capture it.
+    """
+    monkeypatch.setattr(
+        "beyond_local_file.daemon.notice.send_banner",
+        lambda title, body: None,
+    )
+
+
 @pytest.fixture
 def sample_config_content():
     """Provide sample YAML configuration content.

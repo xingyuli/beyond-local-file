@@ -491,11 +491,11 @@ The managed project is the hub. A mailbox holds at most one not-yet-applied path
 
 ### Out-of-sync replicas
 
-If two replicas edit the same path, the first apply wins. The loser is out-of-sync for that path: fan-out skips it, and further path changes from it are discarded. The hub and in-sync replicas keep moving. `blf daemon status` lists these; `reload` warns and continues. Out-of-sync also clears when the replica's bytes later match the hub, or when resolve overwrites that path from the resolve UI (opened with `o` on a TTY status screen). There is no resolve shell.
+If two replicas edit the same path, the first apply wins. The loser is out-of-sync for that path: fan-out skips it, and further path changes from it are discarded. The hub and in-sync replicas keep moving. `blf daemon status` lists these; `reload` warns and continues. Out-of-sync also clears when the replica's bytes later match the hub, or when resolve overwrites that path from the resolve UI (opened with `o` on a TTY status screen). There is no resolve shell. The first persist of a new out-of-sync mark in this process also shows a desktop notice; `BLF_NOTIFY=0` opts out.
 
 ### Held copies
 
-A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. That tree is not an item and is never projected. `status` lists held copies; there is no restore/discard command.
+A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. That tree is not an item and is never projected. `status` lists held copies; there is no restore/discard command. A new held slot also shows a desktop notice (same `BLF_NOTIFY` opt-out).
 
 ---
 

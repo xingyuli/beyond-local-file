@@ -157,6 +157,8 @@ On a terminal, a running daemon opens a shell screen and leaves it up until you 
 
 The ready daemon owns a second localhost HTTP port for the resolve UI (`127.0.0.1` only), authenticated by a token in the set run directory. JSON IPC stays on `daemon.port`. If the daemon is not running, status prints `Daemon is not running` and does not open a screen. Without a terminal, status prints the same text and does not wait for a key. When out-of-sync or held copies exist, non-TTY status also prints the resolve UI URL and does not open a browser.
 
+The first time this process persists a **new** out-of-sync mark or held copy, the daemon shows a **desktop notice** (OS banner): title `blf: out-of-sync` or `blf: held copy`, body `{rel} in {managed-project}` or `{n} paths in {managed-project}`. It does not open the resolve UI. Use `blf daemon status` (TTY `o`) for that. Restart/reload of leftover rows is silent. Isolation from a TTY shell is silent (the shell already shows it). Default on; `BLF_NOTIFY=0` opts out. A refused OS permission does not fail persist.
+
 ### Output
 
 ```
