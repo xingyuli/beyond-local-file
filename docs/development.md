@@ -83,7 +83,7 @@ uv tool uninstall beyond-local-file
 ## Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (parallel execution is default)
 uv run pytest
 
 # Run specific test categories
@@ -95,9 +95,14 @@ uv run pytest --cov=beyond_local_file
 
 # Run with verbose output
 uv run pytest -v
+
+# Override parallel execution (run sequentially)
+uv run pytest -n 0
 ```
 
 The suite is intended to pass on macOS, Linux, and Windows 10. Property tests share filters in `tests/path_strategies.py` so Hypothesis does not generate Windows-reserved names (`NUL`, `CON`, `COM1`, …). Ordinary copy projections do not need Developer Mode. On Windows, enable Developer Mode (or use an elevated shell) when a directory item contains nested symlink nodes, and before running leftover tests that still create symlink fixtures.
+
+**Performance:** Tests run in parallel by default using `pytest-xdist` (`-n auto`), typically completing the full suite in ~60 seconds. To run sequentially, use `uv run pytest -n 0`.
 
 ## Code Quality
 

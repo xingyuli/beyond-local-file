@@ -51,6 +51,7 @@ dev = [
     "pytest>=8.0",
     "hypothesis>=6.0",
     "pre-commit>=4.5.1",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.ruff]
@@ -88,3 +89,10 @@ fixable = ["ALL"]   # Or specify ["F401", "I", "UP", "SIM"], etc.
 [tool.ruff.lint.per-file-ignores]
 "cli.py" = ["ANN001"] # missing-type-function-argument
 "tests/**/*.py" = ["ANN001"] # missing-type-function-argument
+
+[tool.pytest.ini_options]
+addopts = [
+    "-n", "auto",  # Run tests in parallel using all available CPU cores
+    "--tb=short",  # Shorter traceback format
+]
+testpaths = ["tests"]

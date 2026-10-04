@@ -11,7 +11,7 @@ All Python development must use `uv` exclusively. No `pip`, `venv`, `poetry`, `c
 Common commands:
 - `uv add <package>` / `uv add --dev <package>`
 - `uv run ruff check --fix .` / `uv run ruff format .`
-- `uv run pytest`
+- `uv run pytest` (runs in parallel by default with `-n auto`)
 - `uv run python script.py`
 
 ## 2. Code Quality

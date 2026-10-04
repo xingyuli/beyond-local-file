@@ -110,10 +110,11 @@ Internally, relative item paths written to `config.yml` subpath lists and `.git/
 The project includes comprehensive tests:
 
 ```bash
-# Run tests
+# Run tests (parallel execution is default)
 uv run pytest
 
 # Full suite has been run on macOS, Linux, and Windows 10
+# Typical execution time: ~60 seconds (parallel) vs ~3+ minutes (sequential)
 ```
 
 **Windows Testing Status:** The full pytest suite (including Hypothesis property tests) has been run successfully on Windows 10. Property-test path generators filter Windows reserved device names (`NUL`, `CON`, `COM1`, …) so the suite stays portable. Automated CI still runs on the publish workflow only — local or contributor runs on Windows remain useful. Enable Developer Mode before running leftover symlink fixture tests, and when projecting directory items that contain nested links.

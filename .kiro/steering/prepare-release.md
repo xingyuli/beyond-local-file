@@ -15,7 +15,7 @@ You are preparing a new release for the `beyond-local-file` project. Follow thes
 
 ## Step 2: Validate All Tests Pass
 
-1. Run the full test suite: `uv run pytest`
+1. Run the full test suite: `uv run pytest` (runs in parallel by default)
 2. If any tests fail:
    - Report the failures to the user
    - STOP the release preparation process immediately
