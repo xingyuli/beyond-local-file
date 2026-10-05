@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -12,7 +13,11 @@ import pytest
 from beyond_local_file.config import Config
 from beyond_local_file.daemon.catchup import record_baseline, run_catch_up
 from beyond_local_file.daemon.live import DELETE_WINDOW, LiveSync
-from beyond_local_file.daemon.store import get_generation
+from beyond_local_file.daemon.runtime import _execute_unit_request
+from beyond_local_file.daemon.store import get_generation, save_baseline, save_snapshot
+from beyond_local_file.daemon.workers import WorkerUnit
+from beyond_local_file.model.config import ConfigProject, Mapping
+from beyond_local_file.operations.revlink import CreateOperation
 from tests.daemon_support import daemon_running
 
 _READY_WAIT_S = 15.0
@@ -500,3 +505,219 @@ def test_fan_out_does_not_write_another_hubs_replica_with_the_same_item_name(tmp
     assert (hub_b / "local-file" / "note.txt").read_text() == "b-0"
     assert (target_b / "local-file" / "note.txt").read_text() == "b-0"
     assert (target_b, "local-file/note.txt") not in live.out_of_sync
+
+
+def _write_lab_workspace(tmp_path: Path, items: tuple[str, ...] = ("shared.txt",)) -> tuple[Path, Path, Path, Path]:
+    """Managed project lab-app with selective replicas alpha and example."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for path in (hub, alpha, example):
+        path.mkdir()
+    for item in items:
+        (hub / item).write_text("v0")
+    listed = "".join(f"      - {item}\n" for item in items)
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"lab-app:\n  - target: {alpha}\n    subpath:\n{listed}  - target: {example}\n    subpath:\n{listed}"
+    )
+    return config_path, hub.resolve(), alpha.resolve(), example.resolve()
+
+
+def _with_items(projects: dict[str, ConfigProject], items: list[str]) -> dict[str, ConfigProject]:
+    """Return a copy of *projects* whose selective mappings declare *items*."""
+    updated: dict[str, ConfigProject] = {}
+    for key, project in projects.items():
+        mappings = [Mapping(targets=list(mapping.targets), subpaths=list(items)) for mapping in project.mappings]
+        updated[key] = ConfigProject(
+            managed_project_name=project.managed_project_name,
+            managed_project_path=project.managed_project_path,
+            mappings=mappings,
+        )
+    return updated
+
+
+def _committed_live(config_path: Path) -> LiveSync:
+    """Catch-up mappings, persist snapshot/baseline, and return a live observer."""
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, config_path.parent, None)
+    save_snapshot(config_path, projects)
+    save_baseline(config_path, baseline, projects)
+    return LiveSync(projects, baseline)
+
+
+def _worker_unit(live: LiveSync, config_path: Path) -> WorkerUnit:
+    """Return an unstarted worker unit wrapping *live*."""
+    return WorkerUnit(
+        name=next(iter(live.projects.values())).managed_project_name,
+        live=live,
+        config_path=config_path,
+        shutdown=threading.Event(),
+        offset=0.0,
+    )
+
+
+def test_replace_projects_keeps_a_queued_path_change(tmp_path: Path) -> None:
+    """replace_projects rebuilds watch roots without dropping a queued PathChange."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path)
+    live = _live_sync(config_path)
+    (alpha / "shared.txt").write_text("from-alpha")
+    live.observe()
+
+    live.replace_projects(_with_items(live.projects, ["shared.txt", "notes.md"]))
+    live.apply()
+
+    assert (hub / "shared.txt").read_text() == "from-alpha"
+    assert (example / "shared.txt").read_text() == "from-alpha"
+
+
+def test_replace_projects_watches_a_newly_added_item(tmp_path: Path) -> None:
+    """Watch roots after replace_projects include a newly declared item."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path)
+    live = _live_sync(config_path)
+    (hub / "notes.md").write_text("from-hub")
+
+    live.replace_projects(_with_items(live.projects, ["shared.txt", "notes.md"]))
+    live.tick()
+
+    assert (alpha / "notes.md").read_text() == "from-hub"
+    assert (example / "notes.md").read_text() == "from-hub"
+
+
+def test_replace_projects_drops_a_removed_item_from_watch_roots(tmp_path: Path) -> None:
+    """Watch roots after replace_projects no longer apply a dropped item."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path, items=("shared.txt", "notes.md"))
+    live = _live_sync(config_path)
+
+    live.replace_projects(_with_items(live.projects, ["shared.txt"]))
+    (alpha / "notes.md").write_text("from-alpha")
+    live.tick()
+
+    assert (hub / "notes.md").read_text() == "v0"
+    assert (example / "notes.md").read_text() == "v0"
+
+
+def test_replace_projects_keeps_out_of_sync_for_an_unrelated_path(tmp_path: Path) -> None:
+    """Out-of-sync on one path survives a mapping splice of another item."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path)
+    live = _live_sync(config_path)
+    (alpha / "shared.txt").write_text("from-alpha")
+    live.observe()
+    (example / "shared.txt").write_text("divergent")
+    live.apply()
+    assert (example, "shared.txt") in live.out_of_sync
+
+    live.replace_projects(_with_items(live.projects, ["shared.txt", "notes.md"]))
+
+    assert (example, "shared.txt") in live.out_of_sync
+    assert (hub / "shared.txt").read_text() == "from-alpha"
+
+
+def test_create_keeps_unrelated_mailbox_and_does_not_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mutating create updates watch roots without reload or forgetting last-seen."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path)
+    live = _committed_live(config_path)
+    (alpha / "shared.txt").write_text("from-alpha")
+    live.tick()
+    shared_gen = get_generation(live.baseline, hub, "shared.txt")
+    assert shared_gen == 1
+    (alpha / "notes.md").write_text("adopt me")
+    unit = _worker_unit(live, config_path)
+    original_run = CreateOperation.run
+
+    def run_and_queue(self: CreateOperation) -> int:
+        (alpha / "shared.txt").write_text("queued")
+        live.observe()
+        return original_run(self)
+
+    monkeypatch.setattr(CreateOperation, "run", run_and_queue)
+    monkeypatch.setattr(LiveSync, "reload", lambda *_args, **_kwargs: pytest.fail("reload"))
+
+    response = _execute_unit_request(
+        config_path,
+        {"op": "create", "cwd": str(alpha), "path": "notes.md"},
+        on_progress=None,
+        unit=unit,
+    )
+
+    assert response["exit_code"] == 0, response["stdout"]
+    live.apply()
+    assert (hub / "shared.txt").read_text() == "queued"
+    assert (example / "shared.txt").read_text() == "queued"
+    assert get_generation(live.baseline, hub, "shared.txt") == shared_gen + 1
+    assert (hub / "notes.md").read_text() == "adopt me"
+    assert (example / "notes.md").read_text() == "adopt me"
+    assert get_generation(live.baseline, hub, "notes.md") == 0
+    live.tick()
+    assert get_generation(live.baseline, hub, "notes.md") == 0
+    (alpha / "notes.md").write_text("edited")
+    live.tick()
+    assert (hub / "notes.md").read_text() == "edited"
+    assert (example / "notes.md").read_text() == "edited"
+
+
+def test_restore_drops_the_removed_item_from_watch_roots_without_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mutating restore drops watch roots for the item and does not call reload."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path, items=("shared.txt", "notes.md"))
+    live = _committed_live(config_path)
+    unit = _worker_unit(live, config_path)
+    monkeypatch.setattr(LiveSync, "reload", lambda *_args, **_kwargs: pytest.fail("reload"))
+
+    response = _execute_unit_request(
+        config_path,
+        {"op": "restore", "cwd": str(alpha), "path": "notes.md"},
+        on_progress=None,
+        unit=unit,
+    )
+
+    assert response["exit_code"] == 0, response["stdout"]
+    assert not (hub / "notes.md").exists()
+    assert not (example / "notes.md").exists()
+    assert (alpha / "notes.md").read_text() == "v0"
+    (alpha / "notes.md").write_text("from-alpha")
+    live.tick()
+    assert not (hub / "notes.md").exists()
+    assert not (example / "notes.md").exists()
+    (alpha / "shared.txt").write_text("from-alpha")
+    live.tick()
+    assert (hub / "shared.txt").read_text() == "from-alpha"
+    assert (example / "shared.txt").read_text() == "from-alpha"
+
+
+def test_remove_drops_the_removed_item_from_watch_roots_without_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mutating remove drops watch roots for the item and does not call reload."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path, items=("shared.txt", "notes.md"))
+    live = _committed_live(config_path)
+    unit = _worker_unit(live, config_path)
+    monkeypatch.setattr(LiveSync, "reload", lambda *_args, **_kwargs: pytest.fail("reload"))
+
+    response = _execute_unit_request(
+        config_path,
+        {"op": "remove", "cwd": str(alpha), "path": "notes.md"},
+        on_progress=None,
+        unit=unit,
+    )
+
+    assert response["exit_code"] == 0, response["stdout"]
+    assert not (hub / "notes.md").exists()
+    assert not (alpha / "notes.md").exists()
+    assert not (example / "notes.md").exists()
+    (alpha / "notes.md").write_text("from-alpha")
+    live.tick()
+    assert not (hub / "notes.md").exists()
+    assert not (example / "notes.md").exists()
+    (alpha / "shared.txt").write_text("from-alpha")
+    live.tick()
+    assert (hub / "shared.txt").read_text() == "from-alpha"
+    assert (example / "shared.txt").read_text() == "from-alpha"

@@ -282,6 +282,43 @@ class LiveSync:
         self._last_seen = _last_seen_from_baseline(baseline)
         self._mailbox.clear()
 
+    def replace_projects(self, projects: dict[str, ConfigProject]) -> None:
+        """Rebuild watch roots from new mappings without forgetting last-seen.
+
+        Mailbox, last-seen, last-source, and out-of-sync for paths still
+        covered by the new mappings stay. Paths that are no longer watched
+        are dropped so a later observe does not treat them as deletes.
+
+        Args:
+            projects: Newly committed mappings.
+        """
+        self._projects = projects
+        self._watch_roots = _build_watch_roots(projects)
+        allowed = {str(watch.root): watch.item_names for watch in self._watch_roots}
+        self._prune_unwatched(allowed)
+
+    def merge_item_from_trees(self, item_name: str, trees: BaselineTrees) -> None:
+        """Fill last-seen and baseline gaps for *item_name* from *trees*.
+
+        Existing live rows are kept. After a mutating shell that wrote disks
+        outside LiveSync, persist may scan that item; this records those
+        paths only when live does not already have them.
+
+        Args:
+            item_name: Declared item relative to the managed project.
+            trees: Recorded trees that include a scan of *item_name*.
+        """
+        for root, paths in trees.items():
+            seen = self._last_seen.setdefault(root, {})
+            slot = self._baseline.setdefault(root, {})
+            for rel, state in paths.items():
+                if not rel_in_items(rel, (item_name,)):
+                    continue
+                if rel not in slot:
+                    slot[rel] = dict(state)
+                if rel not in seen and state.get("present"):
+                    seen[rel] = path_state(True, state.get("hash"))
+
     def _scan_all(self, reason: str) -> BaselineTrees:
         stats = ScanStats()
         trees: BaselineTrees = {}
@@ -418,6 +455,37 @@ class LiveSync:
     def _drop_mailbox(self, rel: str) -> None:
         for key in [item for item in self._mailbox if item[0] == rel]:
             del self._mailbox[key]
+
+    def _prune_unwatched(self, allowed: dict[str, tuple[str, ...]]) -> None:
+        """Drop last-seen, baseline, mailbox, last-source, and out-of-sync for unwatched paths.
+
+        Args:
+            allowed: Item names still watched, keyed by replica root.
+        """
+        for store in (self._last_seen, self._baseline):
+            for root in list(store):
+                names = allowed.get(root)
+                if names is None:
+                    del store[root]
+                    continue
+                slot = store[root]
+                for rel in [path for path in slot if not rel_in_items(path, names)]:
+                    del slot[rel]
+        for key in list(self._mailbox):
+            rel, replica = key
+            names = allowed.get(replica)
+            if names is None or not rel_in_items(rel, names):
+                del self._mailbox[key]
+        for key in list(self._last_source):
+            hub, rel = key
+            names = allowed.get(hub)
+            if names is None or not rel_in_items(rel, names):
+                del self._last_source[key]
+        for item in list(self._oos):
+            replica, rel = item
+            names = allowed.get(replica)
+            if names is None or not rel_in_items(rel, names):
+                self._oos.discard(item)
 
     def _write_file(self, path: Path, content: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

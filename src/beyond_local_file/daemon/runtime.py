@@ -450,16 +450,25 @@ def _execute_unit_request(
         applied = unit.live.apply()
         if applied:
             save_baseline(request_config, unit.live.baseline, unit.live.projects, changed_rels=applied)
-    response = handle_request(request_config, request, on_progress=on_progress)
-    mutating = op in {"create", "restore", "remove", "reload"} and not request.get("dry_run")
+    mutating_shell = op in {"create", "restore", "remove"}
+    response = handle_request(
+        request_config,
+        request,
+        on_progress=on_progress,
+        previous_trees=unit.live.baseline if mutating_shell else None,
+    )
+    mutating = mutating_shell and not request.get("dry_run")
     if mutating and response.get("exit_code") == 0:
         snapshot = load_snapshot(request_config)
-        baseline = load_baseline(request_config)
-        if snapshot is not None and baseline is not None:
+        if snapshot is not None:
             subset = {key: project for key, project in snapshot.items() if project.managed_project_name == unit.name}
             if subset:
-                project = next(iter(subset.values()))
-                unit.live.reload(subset, trees_for_project(project, baseline))
+                unit.live.replace_projects(subset)
+                changed_rel = str(request.get("path") or "").strip()
+                recorded = load_baseline(request_config)
+                if changed_rel and recorded is not None:
+                    project = next(iter(subset.values()))
+                    unit.live.merge_item_from_trees(changed_rel, trees_for_project(project, recorded))
     if before is not None:
         emit_isolation_notices(
             project=unit.name,

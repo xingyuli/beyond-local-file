@@ -34,7 +34,7 @@ from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
 from .log import log_duration, note_persist_ms
 from .process import state_dir
-from .store import load_baseline, load_snapshot, save_baseline, save_snapshot
+from .store import BaselineTrees, load_baseline, load_snapshot, save_baseline, save_snapshot
 
 type Handler = Callable[[Path, Request], int]
 
@@ -43,6 +43,7 @@ def handle_request(
     config_path: Path,
     request: Request,
     on_progress: ProgressCallback | None = None,
+    previous_trees: BaselineTrees | None = None,
 ) -> Response:
     """Run one daemon request and capture its stdout.
 
@@ -50,6 +51,8 @@ def handle_request(
         config_path: Path to the loaded config file.
         request: JSON request from a shell.
         on_progress: Optional callback for streamed status lines.
+        previous_trees: In-memory baseline to keep when persisting a mutating
+            shell. When omitted, persist loads the on-disk baseline.
 
     Returns:
         ``exit_code`` and captured ``stdout``.
@@ -77,6 +80,7 @@ def handle_request(
                 _persist_committed_state(
                     config_path,
                     changed_rel=str(changed_rel) if changed_rel else None,
+                    previous=previous_trees,
                 )
             except Exception as error:
                 click.echo(f"Warning: could not persist mapping snapshot: {error}")
@@ -294,11 +298,16 @@ def _resolve_context(
     return result
 
 
-def _persist_committed_state(config_path: Path, changed_rel: str | None = None) -> None:
+def _persist_committed_state(
+    config_path: Path,
+    changed_rel: str | None = None,
+    previous: BaselineTrees | None = None,
+) -> None:
     with log_duration("persist: done") as fields:
         projects = load_set_projects(config_path)
         save_snapshot(config_path, projects)
-        previous = load_baseline(config_path)
+        if previous is None:
+            previous = load_baseline(config_path)
         if changed_rel:
             trees = record_item_baseline(projects, previous, changed_rel)
             save_baseline(config_path, trees, projects, changed_rels=[changed_rel])
