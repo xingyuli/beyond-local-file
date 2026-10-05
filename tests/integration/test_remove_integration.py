@@ -469,3 +469,43 @@ def test_remove_dry_run_prefixes_config_resolution_errors(isolated_home: dict[st
 
     assert result.exit_code == 1
     assert "Config file not found" in result.output
+
+
+def test_remove_refuses_drifted_copy_projection_without_mutation(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str], capsys
+) -> None:
+    """A copy whose bytes differ from the hub is refused; nothing is deleted."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    hub_item = hub / "item.txt"
+    alpha_item = alpha / "item.txt"
+    hub_item.write_text("hub bytes")
+    alpha_item.write_text("drifted bytes")
+    exclude_file = _make_git_repository(alpha, "item.txt")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: {alpha}
+  subpath:
+    - item.txt
+"""
+    )
+    before = {
+        "config": config_path.read_bytes(),
+        "exclude": exclude_file.read_bytes(),
+        "hub": hub_item.read_bytes(),
+        "alpha": alpha_item.read_bytes(),
+    }
+
+    monkeypatch.chdir(alpha)
+    exit_code = _run_remove_operation(config_path, alpha_item, Path("item.txt"))
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "does not match managed copy" in captured.out
+    assert config_path.read_bytes() == before["config"]
+    assert exclude_file.read_bytes() == before["exclude"]
+    assert hub_item.read_bytes() == before["hub"]
+    assert alpha_item.read_bytes() == before["alpha"]

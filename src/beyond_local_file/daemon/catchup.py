@@ -317,7 +317,7 @@ def _install_projection(unit: MappingUnit, item: ManagedProjectItem) -> None:
     destination = unit.target_project_path / item.name
     source_ready = item.path.exists() or item.path.is_symlink()
     dest_ready = destination.exists() or destination.is_symlink()
-    if dest_ready and source_ready and _item_matches(unit.managed_project_path, unit.target_project_path, item.name):
+    if dest_ready and source_ready and item_matches(unit.managed_project_path, unit.target_project_path, item.name):
         return
     if dest_ready and source_ready:
         replica = unit.target_project_path
@@ -338,7 +338,17 @@ def _install_projection(unit: MappingUnit, item: ManagedProjectItem) -> None:
     copy_projection(item.path, destination)
 
 
-def _item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
+def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
+    """Return whether *item_name* has the same per-file SHA-256 tree on both roots.
+
+    Args:
+        hub_root: Managed-project directory.
+        replica_root: Target-project directory.
+        item_name: Item path relative to each root.
+
+    Returns:
+        True when both trees contain the same relative paths with equal state.
+    """
     hub_tree = scan_items(hub_root, [item_name])
     replica_tree = scan_items(replica_root, [item_name])
     if set(hub_tree) != set(replica_tree):

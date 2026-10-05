@@ -525,7 +525,7 @@ Both require a running daemon.
 
 Convert an existing file or directory in the current working directory into a managed copy
 projection. The original stays a regular file or directory. The daemon copies it into the
-managed project (the hub), verifies MD5, records Git exclude and config, then fans the hub
+managed project (the hub), records Git exclude and config, then fans the hub
 bytes out to other in-sync replicas of that managed project.
 
 ### Syntax
@@ -552,16 +552,15 @@ blf revlink create [OPTIONS] PATH
 1. Resolves the configuration set (`--config` → `~/.blf/config` → CWD `config.yml`).
 2. Chooses the hub. One managed project targeting CWD: no prompt. PATH already covered by an item: that contribution source, no prompt (then the existing already-covered error). Several hubs targeting CWD and PATH a new item: the same command asks for a 1-based managed project name on the shell screen before the request is sent. No TTY lists the names and exits 1. Ctrl+C on that question closes the screen and sends nothing.
 3. Validates the source path (must exist, must not already be a symlink).
-4. Copies the source to `<managed_project_path>/<relative-path>`. Nested symlink nodes inside a directory are copied as symlinks.
-5. Verifies the copy via MD5 checksum; aborts and deletes the copy on mismatch.
-6. Leaves the original as a regular file or directory.
-7. Adds the item name to `.git/info/exclude` if the current directory is a Git repository.
-8. If the matched mapping uses selective projection (`subpath` list), appends the item name to that list in the mapping file so that the daemon and `link check` will manage it going forward. Mappings that project everything (no `subpath`) are unaffected.
-9. Fans the hub copy out to other in-sync replicas of that managed project. If a replica already had different bytes, those bytes are stored under `~/.blf/held/<sha256 of the managed project path>/` (`create-overwrite`) and the hub overwrites the live path.
+4. Copies the source to `<managed_project_path>/<relative-path>`. Nested symlink nodes inside a directory are copied as symlinks. Copy I/O failure is an error.
+5. Leaves the original as a regular file or directory.
+6. Adds the item name to `.git/info/exclude` if the current directory is a Git repository.
+7. If the matched mapping uses selective projection (`subpath` list), appends the item name to that list in the mapping file so that the daemon and `link check` will manage it going forward. Mappings that project everything (no `subpath`) are unaffected.
+8. Fans the hub copy out to other in-sync replicas of that managed project. If a replica already had different bytes, those bytes are stored under `~/.blf/held/<sha256 of the managed project path>/` (`create-overwrite`) and the hub overwrites the live path.
 
 #### Terminal
 
-On a terminal, `revlink create` opens a shell screen and leaves it up until you close it, including a fast create. When several hubs target CWD and PATH is new, the numbered hub choice is asked on that screen before the request is sent. The header names `revlink create` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Computing checksum of …`, `Copying …`, and the rest, or the error text).
+On a terminal, `revlink create` opens a shell screen and leaves it up until you close it, including a fast create. When several hubs target CWD and PATH is new, the numbered hub choice is asked on that screen before the request is sent. The header names `revlink create` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Copying …`, `Target path left in place: …`, and the rest, or the error text).
 
 The input line is hidden except while a typed answer is required. It sits directly above the hint.
 
@@ -597,8 +596,6 @@ When several managed projects contribute to CWD and PATH is new, those lines are
 
 ```
 Copying /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
-Computing checksum of /Users/user/project/myfile.txt
-✓ MD5 checksum verified
 ✓ Target path left in place: /Users/user/project/myfile.txt
 Added 'myfile.txt' to .git/info/exclude
 ```
@@ -607,8 +604,6 @@ With `--dry-run`:
 
 ```
 [dry-run] Copying /Users/user/project/myfile.txt -> /Users/user/my-files/project/myfile.txt
-[dry-run] Computing checksum of /Users/user/project/myfile.txt
-[dry-run] ✓ MD5 checksum verified
 [dry-run] ✓ Target path left in place: /Users/user/project/myfile.txt
 [dry-run] Added 'myfile.txt' to .git/info/exclude
 ```
@@ -624,7 +619,6 @@ With `--dry-run`:
 | Several hubs target CWD, PATH is new | Numbered prompt, then `Choose a managed project:` |
 | Several hubs target CWD, PATH is new, no TTY | `Error: more than one managed project contributes to this directory: <names>` |
 | PATH already covered by an item | Uses that contribution source (no prompt); then the existing already-covered error |
-| MD5 checksum mismatch | `Error: Checksum mismatch — copy may be corrupt. Destination deleted.` |
 | Daemon is down | `Error: daemon is not running. Start it with: blf daemon start` |
 
 ---
@@ -727,7 +721,6 @@ With `--dry-run`:
 | PATH is not a managed item | `'{path}' is not a managed item` |
 | Managed copy missing (leftover dangling symlink) | `Error: Dangling symlink: managed copy does not exist at <managed>` |
 | Managed copy missing (regular path) | `Error: Managed copy does not exist at <managed>` |
-| MD5 checksum mismatch (leftover symlink restore) | `Error: Checksum mismatch — restored copy deleted. Managed copy preserved.` |
 | No managed project targets CWD | `No managed project found for current directory: <cwd>` |
 | Daemon is down | `Error: daemon is not running. Start it with: blf daemon start` |
 

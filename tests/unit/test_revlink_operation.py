@@ -192,15 +192,6 @@ class TestCreateFormatterNoDryRun:
         """Create a formatter with dry_run=False for each test."""
         self.formatter = CreateFormatter(dry_run=False)
 
-    def test_computing_checksum(self) -> None:
-        """computing_checksum emits the expected message without prefix.
-
-        Requirements: 7.1
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.computing_checksum(Path("/some/path"))
-        mock_echo.assert_called_once_with("Computing checksum of /some/path")
-
     def test_copying(self) -> None:
         """copying emits the expected message without prefix.
 
@@ -209,15 +200,6 @@ class TestCreateFormatterNoDryRun:
         with patch("click.echo") as mock_echo:
             self.formatter.copying(Path("/src"), Path("/dst"))
         mock_echo.assert_called_once_with("Copying /src -> /dst")
-
-    def test_checksum_ok(self) -> None:
-        """checksum_ok emits the expected message without prefix.
-
-        Requirements: 7.3
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.checksum_ok()
-        mock_echo.assert_called_once_with("✓ MD5 checksum verified")
 
     def test_target_left_in_place(self) -> None:
         """target_left_in_place emits the expected message without prefix.
@@ -275,15 +257,6 @@ class TestCreateFormatterDryRun:
         """Create a formatter with dry_run=True for each test."""
         self.formatter = CreateFormatter(dry_run=True)
 
-    def test_computing_checksum_dry_run(self) -> None:
-        """computing_checksum emits [dry-run] prefix when dry_run=True.
-
-        Requirements: 7.1, 7.6
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.computing_checksum(Path("/some/path"))
-        mock_echo.assert_called_once_with("[dry-run] Computing checksum of /some/path")
-
     def test_copying_dry_run(self) -> None:
         """copying emits [dry-run] prefix when dry_run=True.
 
@@ -292,15 +265,6 @@ class TestCreateFormatterDryRun:
         with patch("click.echo") as mock_echo:
             self.formatter.copying(Path("/src"), Path("/dst"))
         mock_echo.assert_called_once_with("[dry-run] Copying /src -> /dst")
-
-    def test_checksum_ok_dry_run(self) -> None:
-        """checksum_ok emits [dry-run] prefix when dry_run=True.
-
-        Requirements: 7.3, 7.6
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.checksum_ok()
-        mock_echo.assert_called_once_with("[dry-run] ✓ MD5 checksum verified")
 
     def test_target_left_in_place_dry_run(self) -> None:
         """target_left_in_place emits [dry-run] prefix when dry_run=True.

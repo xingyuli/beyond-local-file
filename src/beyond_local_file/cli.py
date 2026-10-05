@@ -193,9 +193,9 @@ def revlink():
 def revlink_create(ctx, path, dry_run, force):
     """Adopt an existing file or directory as a copy projection.
 
-    Copies PATH to the managed project, verifies the copy via MD5 checksum,
-    leaves the original as a regular file or directory, and records the item in
-    .git/info/exclude if the target directory is a Git repository.
+    Copies PATH to the managed project, leaves the original as a regular file
+    or directory, and records the item in .git/info/exclude if the target
+    directory is a Git repository.
     """
     cwd = _cwd_containing(ctx, path, resolve_source=True)
     project_name, ask_names = _choose_create_project(ctx, cwd, path)

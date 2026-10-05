@@ -43,24 +43,6 @@ class TestRestoreFormatterNoDryRun:
             self.formatter.copying_back(Path("/managed/file.txt"), Path("/cwd/file.txt"))
         mock_echo.assert_called_once_with("Copying /managed/file.txt -> /cwd/file.txt")
 
-    def test_computing_checksum(self) -> None:
-        """computing_checksum emits the expected message without prefix.
-
-        Requirements: 7.3
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.computing_checksum(Path("/managed/file.txt"))
-        mock_echo.assert_called_once_with("Computing checksum of /managed/file.txt")
-
-    def test_checksum_ok(self) -> None:
-        """checksum_ok emits the expected message without prefix.
-
-        Requirements: 7.4
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.checksum_ok()
-        mock_echo.assert_called_once_with("✓ MD5 checksum verified")
-
     def test_managed_copy_deleted(self) -> None:
         """managed_copy_deleted emits the expected message without prefix.
 
@@ -155,24 +137,6 @@ class TestRestoreFormatterDryRun:
         with patch("click.echo") as mock_echo:
             self.formatter.copying_back(Path("/managed/file.txt"), Path("/cwd/file.txt"))
         mock_echo.assert_called_once_with("[dry-run] Copying /managed/file.txt -> /cwd/file.txt")
-
-    def test_computing_checksum_dry_run(self) -> None:
-        """computing_checksum emits [dry-run] prefix when dry_run=True.
-
-        Requirements: 7.3, 7.10
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.computing_checksum(Path("/managed/file.txt"))
-        mock_echo.assert_called_once_with("[dry-run] Computing checksum of /managed/file.txt")
-
-    def test_checksum_ok_dry_run(self) -> None:
-        """checksum_ok emits [dry-run] prefix when dry_run=True.
-
-        Requirements: 7.4, 7.10
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.checksum_ok()
-        mock_echo.assert_called_once_with("[dry-run] ✓ MD5 checksum verified")
 
     def test_managed_copy_deleted_dry_run(self) -> None:
         """managed_copy_deleted emits [dry-run] prefix when dry_run=True.

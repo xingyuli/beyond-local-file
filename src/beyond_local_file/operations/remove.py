@@ -10,10 +10,11 @@ from pathlib import Path
 import click
 
 from beyond_local_file.config import ConfigUpdater
+from beyond_local_file.daemon.catchup import item_matches
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.operations.revlink import ChecksumVerifier, RevlinkContext
+from beyond_local_file.operations.revlink import RevlinkContext
 
 
 class RemoveFormatter:
@@ -315,8 +316,13 @@ class RemoveOperation:
         if artifact.is_symlink() or not same_kind:
             self.formatter.error(f"{label} must be a regular file or directory matching managed copy: {artifact}")
             return False
-        if ChecksumVerifier.compute(artifact) != ChecksumVerifier.compute(managed_copy):
-            self.formatter.error(f"Checksum mismatch for {label}: {artifact}")
+        hub_root = managed_copy
+        replica_root = artifact
+        for _ in self.rel_path.parts:
+            hub_root = hub_root.parent
+            replica_root = replica_root.parent
+        if not item_matches(hub_root, replica_root, self.rel_path.as_posix()):
+            self.formatter.error(f"{label} does not match managed copy: {artifact}")
             return False
         return True
 

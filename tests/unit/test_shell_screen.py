@@ -196,7 +196,7 @@ def _hold_until_entered(hold: Path) -> None:
 @pytest.mark.parametrize(
     ("args", "header", "transcript"),
     [
-        (["revlink", "create", "item.txt"], "revlink create  item.txt", "Computing checksum"),
+        (["revlink", "create", "item.txt"], "revlink create  item.txt", "Target path left in place"),
         (["revlink", "restore", "shared.txt"], "revlink restore  shared.txt", "Leaving target file in place"),
         (["remove", "shared.txt"], "remove  shared.txt", "Deleted managed copy"),
     ],
@@ -243,12 +243,14 @@ def test_q_is_not_required_when_ctrl_c_closes_finished_screen(
             target,
         ) as (proc, master, chunks),
     ):
-        _wait(master, chunks, proc, _finished("revlink create  item.txt", "Computing checksum"))
+        _wait(master, chunks, proc, _finished("revlink create  item.txt", "Target path left in place"))
         assert proc.poll() is None
         code, text = _close_and_read(master, chunks, proc, b"\x03")
     assert code == 0
     assert _STOP_QUESTION not in text
-    assert "Computing checksum" in _after_exit(text)
+    assert "Target path left in place" in _after_exit(text)
+    assert "Computing checksum" not in text
+    assert "MD5" not in text
     assert (managed / "item.txt").read_text() == "adopt me"
 
 
@@ -315,10 +317,12 @@ def test_esc_resumes_a_running_command(
             os.write(master, b"\x1b")
             _wait(master, chunks, proc, _running_again)
             hold.unlink(missing_ok=True)
-            _wait(master, chunks, proc, _finished("revlink create  item.txt", "Computing checksum"))
+            _wait(master, chunks, proc, _finished("revlink create  item.txt", "Target path left in place"))
             code, text = _close_and_read(master, chunks, proc, b"q")
         assert code == 0
-        assert "Computing checksum" in _after_exit(text)
+        assert "Target path left in place" in _after_exit(text)
+        assert "Computing checksum" not in text
+        assert "MD5" not in text
         assert (managed / "item.txt").read_text() == "adopt me"
     finally:
         hold.unlink(missing_ok=True)
@@ -368,7 +372,7 @@ def test_second_ctrl_c_does_not_confirm_interrupt(
 @pytest.mark.parametrize(
     ("args", "transcript"),
     [
-        (["revlink", "create", "item.txt"], "Computing checksum"),
+        (["revlink", "create", "item.txt"], "Target path left in place"),
         (["revlink", "restore", "shared.txt"], "Leaving target file in place"),
         (["remove", "shared.txt"], "Deleted managed copy"),
     ],
@@ -732,7 +736,7 @@ def _hub_create_finished(_text: str, frame: str) -> bool:
         and " done " in f" {row} "
         and "Writing baseline" in row
         and _hint(frame) == _HINT_DONE
-        and "Computing checksum" in _text
+        and "Target path left in place" in _text
         and not _above_hint(frame).startswith("> ")
     )
 
@@ -771,7 +775,9 @@ def test_tty_create_asks_hub_choice_on_the_shell_screen(
             assert proc.poll() is None
             code, text = _close_and_read(master, chunks, proc, b"q")
         assert code == 0
-        assert "Computing checksum" in _after_exit(text)
+        assert "Target path left in place" in _after_exit(text)
+        assert "Computing checksum" not in text
+        assert "MD5" not in text
         assert (hub_a / ".env").read_text() == "secret=1\n"
         assert not (hub_b / ".env").exists()
 

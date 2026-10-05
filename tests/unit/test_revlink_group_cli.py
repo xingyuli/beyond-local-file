@@ -119,6 +119,7 @@ class TestRevlinkCreateHelp:
         """
         _, output = _invoke_help("revlink", "create")
         assert any(keyword in output.lower() for keyword in ("symlink", "managed", "convert", "copies"))
+        assert "MD5" not in output
 
 
 # ===========================================================================

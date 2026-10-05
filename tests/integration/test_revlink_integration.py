@@ -256,8 +256,7 @@ class TestRevlinkForce:
         --force end-to-end: existing destination overwritten, symlink created.
 
         Requirement 4.5: WHEN --force is set and the destination already exists,
-        THE Revlink_Command SHALL overwrite it before copying, then apply MD5
-        verification as normal.
+        THE Revlink_Command SHALL overwrite it before copying.
         """
         # Arrange
         target_dir = tmp_path / "target"

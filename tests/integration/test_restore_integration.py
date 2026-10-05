@@ -4,12 +4,9 @@ Covers Requirements 3.2, 3.3, 4.3, 4.5, 4.6, 5.1, 5.3, 5.6.
 """
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
-from beyond_local_file.operations.revlink import ChecksumVerifier, RestoreFormatter, RestoreOperation
-from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
 from tests.daemon_support import invoke_with_daemon
 
 # ---------------------------------------------------------------------------
@@ -113,6 +110,8 @@ class TestRestoreHappyPathFile:
 
         # .git/info/exclude no longer contains the filename
         assert "myfile.txt" not in exclude_file.read_text()
+        assert "Computing checksum" not in result.output
+        assert "MD5" not in result.output
 
     def test_restore_exit_code_is_zero_on_success(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
@@ -120,7 +119,7 @@ class TestRestoreHappyPathFile:
         """Test that a successful restore exits with code 0.
 
         Requirement 4.5: THE RestoreOperation SHALL proceed to delete the
-        Managed_Copy when MD5 checksums match.
+        Managed_Copy after a successful restore.
         """
         target_dir = tmp_path / "target"
         target_dir.mkdir()
@@ -231,8 +230,8 @@ class TestRestoreHappyPathFile:
     ) -> None:
         """Test that the managed copy is deleted after a successful restore.
 
-        Requirement 5.1: WHEN the MD5 checksums match, THE RestoreOperation
-        SHALL attempt to delete the Managed_Copy.
+        Requirement 5.1: THE RestoreOperation SHALL attempt to delete the
+        Managed_Copy after a successful restore.
         """
         target_dir = tmp_path / "target"
         target_dir.mkdir()
@@ -376,8 +375,8 @@ class TestRestoreHappyPathDirectory:
     ) -> None:
         """Test that the managed directory is deleted after a successful restore.
 
-        Requirement 5.1: WHEN the MD5 checksums match, THE RestoreOperation
-        SHALL attempt to delete the Managed_Copy.
+        Requirement 5.1: THE RestoreOperation SHALL attempt to delete the
+        Managed_Copy after a successful restore.
         """
         target_dir = tmp_path / "target"
         target_dir.mkdir()
@@ -599,78 +598,6 @@ class TestRestoreMissingHubCopy:
         assert real_file.exists()
         assert not real_file.is_symlink()
         assert real_file.read_text() == original_content
-
-
-class TestRestoreMd5Mismatch:
-    """Integration tests for the MD5 mismatch error path.
-
-    Requirements: 4.6
-    """
-
-    def test_md5_mismatch_deletes_restored_copy_preserves_managed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_home: dict
-    ) -> None:
-        """MD5 mismatch: restored copy deleted, managed copy preserved, error reported.
-
-        Set up a valid symlink, patch ChecksumVerifier.compute to return
-        different digests for the two calls, then run restore.
-
-        After the test:
-        - exit code is 1
-        - "mismatch" appears in output
-        - the restored copy at source path is deleted
-        - the managed copy is preserved
-
-        Requirements 4.6.
-        """
-        # Arrange
-        target_dir = tmp_path / "target"
-        target_dir.mkdir()
-
-        managed_dir = tmp_path / "my-project"
-        managed_dir.mkdir()
-
-        config_path = tmp_path / "config.yml"
-        _write_config(config_path, "my-project", target_dir)
-
-        managed_copy = managed_dir / "myfile.txt"
-        managed_copy.write_text("hello world")
-
-        symlink_path = target_dir / "myfile.txt"
-        symlink_path.symlink_to(managed_copy)
-
-        monkeypatch.chdir(target_dir)
-
-        # Patch ChecksumVerifier.compute to return different digests on successive calls
-        call_count = {"n": 0}
-
-        def fake_compute(path: Path) -> str:
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-        context = resolve_revlink_context(str(config_path), target_dir)
-        assert not isinstance(context, RevlinkResolveError)
-        with patch.object(ChecksumVerifier, "compute", staticmethod(fake_compute)):
-            exit_code = RestoreOperation(
-                source=symlink_path,
-                dest_root=managed_dir,
-                rel_path=Path("myfile.txt"),
-                dry_run=False,
-                formatter=RestoreFormatter(dry_run=False),
-                context=context,
-            ).run()
-
-        # Assert
-        assert exit_code == 1
-
-        # Restored copy at source path should be deleted
-        assert not symlink_path.exists(), "restored copy at source path should have been deleted after mismatch"
-
-        # Managed copy must still exist
-        assert managed_copy.exists(), "managed copy must be preserved after mismatch"
-        assert managed_copy.read_text() == "hello world"
 
 
 class TestRestoreConfigSubpathRemoval:

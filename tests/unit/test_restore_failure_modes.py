@@ -1,17 +1,17 @@
 """Unit tests for RestoreOperation failure modes.
 
-Covers task 8.2:
-- MD5 mismatch: restored copy deleted, managed copy preserved, exit code 1
+Covers:
+- Leftover-symlink copy I/O failure is OSError; managed copy preserved
 - Permission error on symlink unlink: error message, no copy attempted, exit code 1
 - Permission error deleting managed copy: warning emitted, exit code 0
-
-Requirements: 4.2, 4.6, 5.2
 """
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from beyond_local_file.operations.revlink import ChecksumVerifier, RestoreFormatter, RestoreOperation
+import pytest
+
+from beyond_local_file.operations.revlink import RestoreFormatter, RestoreOperation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,119 +53,49 @@ def _make_symlink(link: Path, target: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Requirement 4.6 — MD5 mismatch recovery
+# Leftover-symlink copy I/O failure is OSError
 # ---------------------------------------------------------------------------
 
 
-class TestMd5MismatchRecovery:
-    """Tests for _verify() when checksums do not match after restore."""
+class TestRestoreCopyIoFailure:
+    """Leftover-symlink restore trusts copy_projection; I/O failure is OSError."""
 
-    def test_mismatch_deletes_restored_copy_and_returns_1(self, tmp_path: Path) -> None:
-        """Restored copy is deleted and exit code 1 is returned on checksum mismatch.
-
-        Requirements: 4.6
-        """
-        managed = tmp_path / "managed" / "data.txt"
-        managed.parent.mkdir()
-        managed.write_text("managed content")
-
-        # source is the restored copy location (not a symlink at this point —
-        # _verify is called after _replace has already written the file back)
-        source = tmp_path / "data.txt"
-        source.write_text("restored content")
-
-        op, _formatter = _make_operation(source, tmp_path / "managed")
-
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            result = op._verify(managed)
-
-        assert result == 1
-        assert not source.exists(), "restored copy must be deleted on mismatch"
-
-    def test_mismatch_preserves_managed_copy(self, tmp_path: Path) -> None:
-        """Managed copy is left untouched when checksum mismatch is detected.
-
-        Requirements: 4.6
-        """
-        managed = tmp_path / "managed" / "data.txt"
-        managed.parent.mkdir()
-        managed.write_text("managed content")
-
-        source = tmp_path / "data.txt"
-        source.write_text("restored content")
-
-        op, _ = _make_operation(source, tmp_path / "managed")
-
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            op._verify(managed)
-
-        assert managed.exists(), "managed copy must still exist after mismatch"
-        assert managed.read_text() == "managed content", "managed copy content must be unchanged"
-
-    def test_mismatch_emits_error_message(self, tmp_path: Path) -> None:
-        """formatter.error is called with a checksum-mismatch message.
-
-        Requirements: 4.6
-        """
-        managed = tmp_path / "managed" / "data.txt"
-        managed.parent.mkdir()
-        managed.write_text("managed content")
-
-        source = tmp_path / "data.txt"
-        source.write_text("restored content")
-
-        op, formatter = _make_operation(source, tmp_path / "managed")
-
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            op._verify(managed)
-
-        formatter.error.assert_called_once()
-        error_msg = formatter.error.call_args[0][0]
-        assert "mismatch" in error_msg.lower() or "checksum" in error_msg.lower()
-
-    def test_mismatch_on_directory_deletes_restored_tree(self, tmp_path: Path) -> None:
-        """A restored directory tree is removed on checksum mismatch.
-
-        Requirements: 4.6
-        """
-        managed = tmp_path / "managed" / "srcdir"
-        managed.parent.mkdir()
-        managed.mkdir()
-        (managed / "file.txt").write_text("data")
-
-        source = tmp_path / "srcdir"
-        source.mkdir()
-        (source / "file.txt").write_text("data")
-
-        op, _ = _make_operation(source, tmp_path / "managed")
-
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            result = op._verify(managed)
-
-        assert result == 1
-        assert not source.exists(), "restored directory must be deleted on mismatch"
-
-    def test_mismatch_via_run_leaves_managed_copy_intact(self, tmp_path: Path) -> None:
-        """Full run() with MD5 mismatch: managed copy preserved, exit code 1.
-
-        Requirements: 4.6
-        """
+    def test_copy_oserror_propagates_and_preserves_managed(self, tmp_path: Path) -> None:
+        """copy_projection OSError propagates; managed copy is unchanged."""
         managed_root = tmp_path / "managed"
         managed_root.mkdir()
         managed = managed_root / "data.txt"
         managed.write_text("managed content")
-
-        # Create a symlink at source pointing to managed
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
+        op, _formatter = _make_operation(source, managed_root)
 
-        op, _ = _make_operation(source, managed_root)
+        with (
+            patch("beyond_local_file.operations.revlink.copy_projection", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            op.run()
 
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            result = op.run()
+        assert managed.exists()
+        assert managed.read_text() == "managed content"
 
-        assert result == 1
-        assert managed.exists(), "managed copy must be preserved on mismatch"
+    def test_leftover_symlink_restore_does_not_emit_checksum_steps(self, tmp_path: Path) -> None:
+        """Leftover-symlink restore does not MD5-verify after copy."""
+        managed_root = tmp_path / "managed"
+        managed_root.mkdir()
+        managed = managed_root / "data.txt"
+        managed.write_text("managed content")
+        source = tmp_path / "data.txt"
+        _make_symlink(source, managed)
+        op, formatter = _make_operation(source, managed_root)
+
+        result = op.run()
+
+        assert result == 0
+        names = [call[0] for call in formatter.method_calls]
+        assert "computing_checksum" not in names
+        assert "checksum_ok" not in names
+        formatter.copying_back.assert_called()
 
 
 # ---------------------------------------------------------------------------

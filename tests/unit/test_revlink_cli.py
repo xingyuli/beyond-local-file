@@ -104,6 +104,7 @@ def test_revlink_help_shows_description() -> None:
     assert result.exit_code == 0
     # The docstring mentions converting to a managed symlink
     assert "symlink" in result.output.lower() or "managed" in result.output.lower()
+    assert "MD5" not in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +241,8 @@ def test_revlink_dry_run_prints_preview_output(tmp_path: Path, monkeypatch, isol
     assert result.exit_code == 0, result.output
     assert "[dry-run]" in result.output
     assert "Copying" in result.output
-    assert "Computing checksum" in result.output
-    assert "MD5 checksum verified" in result.output
+    assert "Computing checksum" not in result.output
+    assert "MD5" not in result.output
     assert "Target path left in place" in result.output
 
 

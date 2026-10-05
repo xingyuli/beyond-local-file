@@ -452,7 +452,7 @@ def _assert_create_request(messages: list[str], target: Path) -> None:
         assert "persist_ms=" in line
     assert "op=create" in done_line
     assert "exit=0" in done_line
-    for step in ("validate", "copy", "checksum", "git-exclude", "config", "fan-out"):
+    for step in ("validate", "copy", "git-exclude", "config", "fan-out"):
         step_line = next(line for line in messages if line.startswith(f"create: {step} "))
         assert _DURATION.search(step_line)
         assert "unit=managed" in step_line

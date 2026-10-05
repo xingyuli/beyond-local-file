@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,79 +19,6 @@ from beyond_local_file.held import (
 from beyond_local_file.model.config import Mapping
 from beyond_local_file.projection import copy_projection
 from beyond_local_file.sync_state import compute_item_hash
-
-# ---------------------------------------------------------------------------
-# ChecksumVerifier
-# ---------------------------------------------------------------------------
-
-
-class ChecksumVerifier:
-    """Computes deterministic MD5 digests for files and directory trees.
-
-    For a single file the digest covers the file's raw bytes. For a directory
-    the digest covers the concatenation of each file's relative path string
-    and its raw bytes, with files visited in sorted order so the result is
-    independent of filesystem traversal order.
-    """
-
-    @staticmethod
-    def compute(path: Path) -> str:
-        """Compute the MD5 digest for a file or directory tree.
-
-        For a file: MD5 of the file's raw bytes.
-        For a directory: MD5 of the sorted ``(relative_path_str + file_bytes)``
-        concatenation, visiting all files under the tree via ``rglob("*")``.
-
-        Args:
-            path: Absolute or relative path to a file or directory.
-
-        Returns:
-            Hex-encoded MD5 digest string (32 lowercase hex characters).
-
-        Raises:
-            FileNotFoundError: If ``path`` does not exist.
-            IsADirectoryError: If a path expected to be a file is a directory
-                (should not occur in normal usage).
-        """
-        if path.is_dir():
-            return ChecksumVerifier._hash_directory(path)
-        return ChecksumVerifier._hash_file(path)
-
-    @staticmethod
-    def _hash_file(path: Path) -> str:
-        """Compute MD5 of a single file's contents.
-
-        Args:
-            path: Path to the file.
-
-        Returns:
-            Hex-encoded MD5 digest string.
-        """
-        md5 = hashlib.md5()
-        md5.update(path.read_bytes())
-        return md5.hexdigest()
-
-    @staticmethod
-    def _hash_directory(path: Path) -> str:
-        """Compute a deterministic MD5 digest for a directory tree.
-
-        Files are visited in sorted order by their path relative to ``path``
-        so the digest is independent of filesystem traversal order.
-
-        Args:
-            path: Root directory to hash.
-
-        Returns:
-            Hex-encoded MD5 digest string.
-        """
-        md5 = hashlib.md5()
-        for file in sorted(path.rglob("*")):
-            if file.is_file():
-                # as_posix() keeps digests identical across Windows and Unix.
-                md5.update(file.relative_to(path).as_posix().encode())
-                md5.update(file.read_bytes())
-        return md5.hexdigest()
-
 
 # ---------------------------------------------------------------------------
 # CreateFormatter
@@ -135,15 +61,6 @@ class CreateFormatter:
     # Public formatter methods
     # ------------------------------------------------------------------
 
-    def computing_checksum(self, source: Path) -> None:
-        """Print a message indicating that the checksum of *source* is being computed.
-
-        Args:
-            source: Path to the file or directory whose checksum is being
-                computed.
-        """
-        self._echo(f"Computing checksum of {source.as_posix()}")
-
     def copying(self, source: Path, dest: Path) -> None:
         """Print a message showing the source and destination paths for the copy.
 
@@ -153,10 +70,6 @@ class CreateFormatter:
             dest: Path to the destination location in the managed project.
         """
         self._echo(f"Copying {source.as_posix()} -> {dest.as_posix()}")
-
-    def checksum_ok(self) -> None:
-        """Print a confirmation that the MD5 checksums of source and copy match."""
-        self._echo("✓ MD5 checksum verified")
 
     def target_left_in_place(self, path: Path) -> None:
         """Print a confirmation that the target path remains a real file or directory.
@@ -308,19 +221,6 @@ class RestoreFormatter:
         """
         self._echo(f"Copying {source.as_posix()} -> {dest.as_posix()}")
 
-    def computing_checksum(self, source: Path) -> None:
-        """Print a message indicating that the checksum of *source* is being computed.
-
-        Args:
-            source: Path to the file or directory whose checksum is being
-                computed.
-        """
-        self._echo(f"Computing checksum of {source.as_posix()}")
-
-    def checksum_ok(self) -> None:
-        """Print a confirmation that the MD5 checksums of the managed copy and restored copy match."""
-        self._echo("✓ MD5 checksum verified")
-
     def managed_copy_deleted(self, path: Path) -> None:
         """Print a confirmation that the managed copy at *path* was deleted successfully.
 
@@ -332,8 +232,8 @@ class RestoreFormatter:
     def managed_copy_delete_failed(self, path: Path) -> None:
         """Print a warning that the managed copy at *path* could not be deleted.
 
-        This is a non-fatal warning — the restore to CWD has already succeeded
-        and been verified.  The managed copy is left in place for manual cleanup.
+        This is a non-fatal warning — the restore to CWD has already succeeded.
+        The managed copy is left in place for manual cleanup.
 
         Args:
             path: Path to the managed copy that could not be deleted.
@@ -438,10 +338,10 @@ class RevlinkContext:
 
 @dataclass
 class CreateOperation:
-    """Orchestrates the copy-verify-register workflow for a single source path.
+    """Orchestrates the copy-register workflow for a single source path.
 
     The operation proceeds through internal steps — ``_validate``,
-    ``_copy``, ``_verify``, and ``_git_exclude`` — each of which returns
+    ``_copy``, and ``_git_exclude`` — each of which returns
     early with exit code 1 on failure.  The public entry point is :meth:`run`.
 
     Attributes:
@@ -455,7 +355,7 @@ class CreateOperation:
         dry_run: When ``True``, perform all validation and report what would
             happen without modifying the filesystem.
         force: When ``True``, overwrite an existing destination in the managed
-            project.  MD5 verification still applies.
+            project.
         formatter: Formatter instance used for all user-facing output.
         context: Config-resolution context used for the post-copy config
             update step.  ``None`` skips the update (useful in tests).
@@ -479,7 +379,7 @@ class CreateOperation:
         Derives ``dest`` as ``dest_root / rel_path``, preserving the full
         directory structure so the managed layout mirrors the target layout
         exactly.  Runs the pre-flight validation step, then proceeds through
-        copy, verify, and git-exclude steps in order when
+        copy and git-exclude steps in order when
         not in dry-run mode.  In dry-run mode, previews all steps via the
         formatter without modifying the filesystem.
 
@@ -498,11 +398,6 @@ class CreateOperation:
         else:
             with log_duration("create: copy"):
                 result = self._copy(dest)
-            if result != 0:
-                return result
-
-            with log_duration("create: checksum"):
-                result = self._verify(dest)
             if result != 0:
                 return result
 
@@ -529,8 +424,6 @@ class CreateOperation:
         if self.force and dest.exists():
             self.formatter.force_warning(dest)
         self.formatter.copying(self.source, dest)
-        self.formatter.computing_checksum(self.source)
-        self.formatter.checksum_ok()
         self.formatter.target_left_in_place(self.source)
         self._git_exclude_preview()
         if self.context is not None and self.context.matched_mapping.subpaths is not None:
@@ -678,38 +571,6 @@ class CreateOperation:
 
         copy_projection(self.source, dest)
 
-        return 0
-
-    def _verify(self, dest: Path) -> int:
-        """Verify the integrity of the copy by comparing MD5 checksums.
-
-        Computes the MD5 digest of both the original source and the newly
-        created copy at ``dest``.  If the digests match, emits a confirmation
-        message and returns 0.  If they differ, deletes the corrupt copy,
-        emits an error message, and returns 1 so the caller can abort.
-
-        Args:
-            dest: Derived destination path (``dest_root / rel_path``)
-                where the copy was placed by :meth:`_copy`.
-
-        Returns:
-            ``0`` if the checksums match, ``1`` if they differ or the copy
-            is otherwise untrustworthy.
-        """
-        self.formatter.computing_checksum(self.source)
-
-        source_checksum = ChecksumVerifier.compute(self.source)
-        dest_checksum = ChecksumVerifier.compute(dest)
-
-        if source_checksum != dest_checksum:
-            if dest.is_dir():
-                shutil.rmtree(dest)
-            else:
-                dest.unlink()
-            self.formatter.error("Checksum mismatch \u2014 copy may be corrupt. Destination deleted.")
-            return 1
-
-        self.formatter.checksum_ok()
         return 0
 
     def _other_replica_roots(self) -> list[Path]:
@@ -864,7 +725,7 @@ class RestoreOperation:
     requesting target's file in place as an unmanaged local file.
 
     The operation proceeds through internal steps — ``_validate``, ``_replace``,
-    ``_verify``, ``_delete_managed``, ``_delete_other_replicas``, ``_git_exclude``,
+    ``_delete_managed``, ``_delete_other_replicas``, ``_git_exclude``,
     and ``_remove_config`` — each of which returns early with exit code 1 on
     failure (except cleanup steps which are non-fatal). The public entry point
     is :meth:`run`.
@@ -901,7 +762,7 @@ class RestoreOperation:
         Derives ``managed`` as ``dest_root / rel_path``, preserving the full
         directory structure so the managed copy location mirrors the target
         layout exactly.  Then runs the pre-flight validation step.  When not
-        in dry-run mode, proceeds through replace, verify, delete-managed,
+        in dry-run mode, proceeds through replace, delete-managed,
         undo-fan-out, git-exclude, and remove-config steps in order.  When in
         dry-run mode, previews all steps via the formatter without modifying
         the filesystem.
@@ -922,11 +783,6 @@ class RestoreOperation:
             if self.source.is_symlink():
                 with log_duration("restore: replace"):
                     result = self._replace(managed)
-                if result != 0:
-                    return result
-
-                with log_duration("restore: checksum"):
-                    result = self._verify(managed)
                 if result != 0:
                     return result
             else:
@@ -956,8 +812,6 @@ class RestoreOperation:
         if self.source.is_symlink():
             self.formatter.removing_symlink(self.source)
             self.formatter.copying_back(managed, self.source)
-            self.formatter.computing_checksum(managed)
-            self.formatter.checksum_ok()
         else:
             self.formatter.leaving_target_file(self.source)
         self.formatter.managed_copy_deleted(managed)
@@ -1041,43 +895,11 @@ class RestoreOperation:
 
         return 0
 
-    def _verify(self, managed: Path) -> int:
-        """Verify the integrity of the restored copy by comparing MD5 checksums.
-
-        Computes the MD5 digest of both the managed copy and the newly
-        restored file at ``source``.  If the digests match, emits a
-        confirmation message and returns 0.  If they differ, deletes the
-        corrupt restored copy, emits an error message, and returns 1 so the
-        caller can abort.
-
-        Args:
-            managed: Derived managed copy path (``dest_root / rel_path``)
-                used as the reference for checksum comparison.
-
-        Returns:
-            ``0`` if the checksums match, ``1`` if they differ.
-        """
-        self.formatter.computing_checksum(managed)
-
-        managed_checksum = ChecksumVerifier.compute(managed)
-        restored_checksum = ChecksumVerifier.compute(self.source)
-
-        if managed_checksum != restored_checksum:
-            if self.source.is_dir():
-                shutil.rmtree(self.source)
-            else:
-                self.source.unlink()
-            self.formatter.error("Checksum mismatch \u2014 restored copy deleted. Managed copy preserved.")
-            return 1
-
-        self.formatter.checksum_ok()
-        return 0
-
     def _delete_managed(self, managed: Path) -> None:
-        """Attempt to delete the managed copy after a successful verified restore.
+        """Attempt to delete the managed copy after a successful restore.
 
         Failure (e.g. permission error) is a warning, not fatal — the restore
-        to CWD has already succeeded and been verified.
+        to CWD has already succeeded.
 
         Args:
             managed: Path to the managed copy to delete.

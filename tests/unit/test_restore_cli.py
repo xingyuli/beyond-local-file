@@ -253,4 +253,6 @@ def test_restore_dry_run_prints_dry_run_prefixed_output(
 
     assert result.exit_code == 0, result.output
     assert "[dry-run]" in result.output
+    assert "Computing checksum" not in result.output
+    assert "MD5" not in result.output
     assert symlink_path.is_symlink()

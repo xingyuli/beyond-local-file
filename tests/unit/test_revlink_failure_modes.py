@@ -1,16 +1,18 @@
 """Unit tests for CreateOperation failure modes.
 
 Covers:
-- MD5 mismatch: failed copy is deleted, source is untouched, exit code 1
+- Copy I/O failure is OSError; source is untouched
 - Copy-only create leaves the target path as a regular file
-
-Requirements: 4.3, 4.4
+- ChecksumVerifier is gone
 """
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from beyond_local_file.operations.revlink import ChecksumVerifier, CreateFormatter, CreateOperation
+import pytest
+
+from beyond_local_file.operations import revlink
+from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,97 +47,53 @@ def _make_operation(
     return op, formatter
 
 
+def test_checksum_verifier_is_gone() -> None:
+    """ChecksumVerifier (whole-tree MD5) is retired."""
+    assert not hasattr(revlink, "ChecksumVerifier")
+
+
 # ---------------------------------------------------------------------------
-# Requirement 4.3, 4.4 — MD5 mismatch recovery
+# Copy I/O failure is OSError
 # ---------------------------------------------------------------------------
 
 
-class TestMd5MismatchRecovery:
-    """Tests for _verify() when checksums do not match."""
+class TestCreateCopyIoFailure:
+    """Create trusts copy_projection; I/O failure is OSError."""
 
-    def test_mismatch_deletes_copy_and_returns_1(self, tmp_path: Path) -> None:
-        """Failed copy is deleted and exit code 1 is returned on checksum mismatch.
-
-        Requirements: 4.3, 4.4
-        """
-        source = tmp_path / "source.txt"
-        source.write_text("original")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "source.txt"
-        dest.write_text("copy")  # dest exists so _verify can delete it
-
-        op, _formatter = _make_operation(source, dest_root)
-
-        # Return different digests to simulate a corrupt copy
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            result = op._verify(dest)
-
-        assert result == 1
-        assert not dest.exists(), "corrupt copy must be deleted on mismatch"
-
-    def test_mismatch_leaves_source_untouched(self, tmp_path: Path) -> None:
-        """Source file is not modified when checksum mismatch is detected.
-
-        Requirements: 4.4
-        """
+    def test_copy_oserror_propagates_and_leaves_source(self, tmp_path: Path) -> None:
+        """copy_projection OSError propagates; source bytes are unchanged."""
         source = tmp_path / "source.txt"
         source.write_text("original content")
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
-        dest = dest_root / "source.txt"
-        dest.write_text("copy")
+        op, _formatter = _make_operation(source, dest_root)
 
-        op, _ = _make_operation(source, dest_root)
+        with (
+            patch("beyond_local_file.operations.revlink.copy_projection", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            op.run()
 
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            op._verify(dest)
+        assert source.exists()
+        assert source.read_text() == "original content"
+        assert not (dest_root / "source.txt").exists()
 
-        assert source.exists(), "source must still exist after mismatch"
-        assert source.read_text() == "original content", "source content must be unchanged"
-
-    def test_mismatch_emits_error_message(self, tmp_path: Path) -> None:
-        """formatter.error is called with the checksum-mismatch message.
-
-        Requirements: 4.3
-        """
+    def test_successful_copy_does_not_emit_checksum_steps(self, tmp_path: Path) -> None:
+        """Create does not MD5-verify after copy."""
         source = tmp_path / "source.txt"
-        source.write_text("original")
+        source.write_text("data")
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
-        dest = dest_root / "source.txt"
-        dest.write_text("copy")
-
         op, formatter = _make_operation(source, dest_root)
 
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            op._verify(dest)
+        result = op.run()
 
-        formatter.error.assert_called_once()
-        error_msg = formatter.error.call_args[0][0]
-        assert "mismatch" in error_msg.lower() or "checksum" in error_msg.lower()
-
-    def test_mismatch_on_directory_deletes_copy_tree(self, tmp_path: Path) -> None:
-        """A directory copy is removed (not just unlinked) on checksum mismatch.
-
-        Requirements: 4.4
-        """
-        source = tmp_path / "srcdir"
-        source.mkdir()
-        (source / "file.txt").write_text("data")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        dest = dest_root / "srcdir"
-        dest.mkdir()
-        (dest / "file.txt").write_text("data")
-
-        op, _ = _make_operation(source, dest_root)
-
-        with patch.object(ChecksumVerifier, "compute", side_effect=["aaa", "bbb"]):
-            result = op._verify(dest)
-
-        assert result == 1
-        assert not dest.exists(), "corrupt directory copy must be deleted on mismatch"
+        assert result == 0
+        names = [call[0] for call in formatter.method_calls]
+        assert "computing_checksum" not in names
+        assert "checksum_ok" not in names
+        formatter.copying.assert_called()
+        formatter.target_left_in_place.assert_called_once_with(source)
 
 
 # ---------------------------------------------------------------------------
