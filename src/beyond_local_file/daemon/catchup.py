@@ -431,6 +431,19 @@ def add_git_exclude(root: Path, rel: str) -> None:
     manager.write_entries({rel})
 
 
+def remove_git_exclude(root: Path, rel: str) -> None:
+    """Remove *rel* from ``.git/info/exclude`` when *root* is a Git repository.
+
+    Args:
+        root: Target-project root that stops projecting *rel*.
+        rel: Item path relative to *root*.
+    """
+    manager = GitExcludeManager(root)
+    if not manager.is_git_repo():
+        return
+    manager.remove_entries({rel})
+
+
 def remove_path(path: Path) -> None:
     """Remove a file or directory if it exists.
 

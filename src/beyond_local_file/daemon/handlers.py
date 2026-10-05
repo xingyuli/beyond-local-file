@@ -56,7 +56,8 @@ def handle_request(
         previous_trees: In-memory baseline to keep when persisting a mutating
             shell. When omitted, persist loads the on-disk baseline.
         live: Worker-unit observer. Create splices yaml then names item-add
-            on this LiveSync. When omitted, create builds a throwaway observer.
+            on this LiveSync. Restore and remove name the disk job then splice
+            the yaml drop. When omitted, mutating shells build a throwaway observer.
 
     Returns:
         ``exit_code`` and captured ``stdout``.
@@ -68,8 +69,8 @@ def handle_request(
     dispatch: dict[str, Handler] = {
         "check": lambda path, req: _handle_check(path, req, on_progress),
         "create": lambda path, req: _handle_create(path, req, created),
-        "restore": _handle_restore,
-        "remove": _handle_remove,
+        "restore": lambda path, req: _handle_restore(path, req, created),
+        "remove": lambda path, req: _handle_remove(path, req, created),
         "reload": _handle_reload,
     }
     handler = dispatch.get(str(op) if op is not None else "")
@@ -86,7 +87,7 @@ def handle_request(
                 changed_rel = request.get("path")
                 rel = str(changed_rel) if changed_rel else None
                 observer = created.get("live")
-                if op == "create" and observer is not None:
+                if observer is not None:
                     _persist_live_state(config_path, observer, changed_rel=rel)
                 else:
                     _persist_committed_state(
@@ -231,20 +232,14 @@ def _handle_create(config_path: Path, request: Request, created: dict[str, LiveS
     ).run()
     if code != 0 or dry_run:
         return code
-    observer = created.get("live")
-    projects = load_set_projects(config_path)
-    subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
-    if observer is None:
-        trees = load_baseline(config_path) or {}
-        observer = LiveSync(subset or projects, trees, last_seen_from_baseline=True)
-        created["live"] = observer
-    elif subset:
+    observer, subset = _observer_for(config_path, created, context)
+    if subset:
         observer.replace_projects(subset)
     observer.install_item(cwd, rel_path.as_posix())
     return 0
 
 
-def _handle_restore(config_path: Path, request: Request) -> int:
+def _handle_restore(config_path: Path, request: Request, created: dict[str, LiveSync]) -> int:
     cwd, path = _cwd_and_path(request)
     source = (cwd / path).absolute()
     rel_path = _rel_path_or_error(source, cwd, path)
@@ -258,17 +253,26 @@ def _handle_restore(config_path: Path, request: Request) -> int:
         click.echo("Error: managed project path is missing")
         return 1
     dry_run = bool(request.get("dry_run"))
-    return RestoreOperation(
+    operation = RestoreOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
         dry_run=dry_run,
         formatter=RestoreFormatter(dry_run=dry_run),
         context=context,
-    ).run()
+    )
+    code = operation.run()
+    if code != 0 or dry_run:
+        return code
+    observer, subset = _observer_for(config_path, created, context)
+    if subset:
+        observer.replace_projects(subset)
+    observer.restore_item(cwd, rel_path.as_posix())
+    operation.drop_mapping()
+    return _replace_after_mapping_drop(config_path, created, context)
 
 
-def _handle_remove(config_path: Path, request: Request) -> int:
+def _handle_remove(config_path: Path, request: Request, created: dict[str, LiveSync]) -> int:
     cwd, path = _cwd_and_path(request)
     candidate = Path(path)
     candidate = candidate if candidate.is_absolute() else cwd / candidate
@@ -280,13 +284,24 @@ def _handle_remove(config_path: Path, request: Request) -> int:
     if isinstance(context, int):
         return context
     dry_run = bool(request.get("dry_run"))
-    return RemoveOperation(
+    operation = RemoveOperation(
         source=source,
         rel_path=rel_path,
         dry_run=dry_run,
         formatter=RemoveFormatter(dry_run=dry_run),
         context=context,
-    ).run()
+    )
+    code = operation.run()
+    if code != 0 or dry_run:
+        return code
+    observer, subset = _observer_for(config_path, created, context)
+    if subset:
+        observer.replace_projects(subset)
+    observer.remove_item(cwd, rel_path.as_posix())
+    code = operation.drop_mapping()
+    if code != 0:
+        return code
+    return _replace_after_mapping_drop(config_path, created, context)
 
 
 def _cwd_and_path(request: Request) -> tuple[Path, str]:
@@ -323,8 +338,58 @@ def _resolve_context(
     return result
 
 
+def _observer_for(
+    config_path: Path,
+    created: dict[str, LiveSync],
+    context: RevlinkContext,
+) -> tuple[LiveSync, dict[str, ConfigProject]]:
+    """Return the worker LiveSync, or a throwaway observer for this project.
+
+    Args:
+        config_path: Path to the loaded config file.
+        created: Handler-scoped LiveSync slot, filled when the worker omitted one.
+        context: Resolved project for this request.
+
+    Returns:
+        Observer and the committed mappings for this managed project.
+    """
+    projects = load_set_projects(config_path)
+    subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
+    observer = created.get("live")
+    if observer is None:
+        trees = load_baseline(config_path) or {}
+        observer = LiveSync(subset or projects, trees, last_seen_from_baseline=True)
+        created["live"] = observer
+    return observer, subset
+
+
+def _replace_after_mapping_drop(
+    config_path: Path,
+    created: dict[str, LiveSync],
+    context: RevlinkContext,
+) -> int:
+    """Rebuild watch roots after restore/remove spliced the mapping yaml drop.
+
+    Args:
+        config_path: Path to the loaded config file.
+        created: Handler-scoped LiveSync slot.
+        context: Resolved project for this request.
+
+    Returns:
+        Zero after watch roots match the new mappings.
+    """
+    observer = created.get("live")
+    if observer is None:
+        return 0
+    projects = load_set_projects(config_path)
+    subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
+    if subset:
+        observer.replace_projects(subset)
+    return 0
+
+
 def _persist_live_state(config_path: Path, live: LiveSync, changed_rel: str | None) -> None:
-    """Persist snapshot and LiveSync baseline after a named create job."""
+    """Persist snapshot and LiveSync baseline after a named mutating job."""
     with log_duration("persist: done") as fields:
         projects = load_set_projects(config_path)
         save_snapshot(config_path, projects)

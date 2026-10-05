@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -140,12 +139,12 @@ class _Artifact:
 
 @dataclass
 class RemoveOperation:
-    """Safely remove one managed item and every validated projection of it.
+    """Validates and formats ``blf remove``; yaml splice stays in this wrapper.
 
-    The operation performs all ownership and target validation before mutating
-    target artifacts, Git-exclude files, the managed copy, or configuration.
-    If configuration persistence fails after managed-copy deletion, it returns
-    a failure so the caller can perform the reported manual repair.
+    Disk writes (delete hub and every projection, git exclude, last-seen) are a
+    LiveSync remove job. Mapping membership is enough for a leftover
+    projection-path symlink; copy artifacts still have to match the hub.
+    ``run`` does not delete, fan out, or git-exclude.
 
     Attributes:
         source: Lexically normalized target-side path supplied by the user.
@@ -162,11 +161,11 @@ class RemoveOperation:
     context: RevlinkContext
 
     def run(self) -> int:
-        """Validate and permanently remove the managed item and its projections.
+        """Validate and format planned deletes. Disk writes are a LiveSync job.
 
         Returns:
-            Zero after every required cleanup and configuration update succeeds;
-            one when validation or any cleanup phase fails.
+            Zero after validation (and dry-run preview) succeeds; one when
+            validation or preview inspection fails.
         """
         managed_copy = self.context.managed_project_path / self.rel_path
         with log_duration("remove: validate"):
@@ -179,21 +178,20 @@ class RemoveOperation:
         if self.dry_run:
             return 0 if self._preview(artifacts, managed_copy) else 1
 
-        with log_duration("remove: cleanup-targets"):
-            cleaned = self._cleanup_targets(artifacts)
-        if not cleaned:
-            self.formatter.cleanup_retained()
+        if not self._format_disk_plan(artifacts, managed_copy):
             return 1
+        return 0
 
-        with log_duration("remove: delete-managed"):
-            deleted = self._delete_managed_copy(managed_copy)
-        if not deleted:
-            return 1
+    def drop_mapping(self) -> int:
+        """Splice the mapping yaml drop after the LiveSync remove job.
 
+        Returns:
+            Zero on success; one if the atomic update fails after item deletion.
+        """
         with log_duration("remove: config"):
             return self._update_config()
 
-    def _validate_invocation(self, managed_copy: Path) -> bool:  # noqa: PLR0911 -- ordered ownership checks stop at the first unsafe condition
+    def _validate_invocation(self, managed_copy: Path) -> bool:
         """Prove that the supplied path is the expected invocation projection.
 
         Args:
@@ -207,10 +205,7 @@ class RemoveOperation:
             return False
         if self._has_symlink_ancestor():
             return False
-        if self.source.is_symlink() and not self.source.exists():
-            self.formatter.error(f"Invocation path is a dangling symlink: {self.source}")
-            return False
-        if not self.source.exists():
+        if not self.source.exists() and not self.source.is_symlink():
             self.formatter.error(f"Invocation path does not exist: {self.source}")
             return False
 
@@ -221,7 +216,7 @@ class RemoveOperation:
             return False
 
         if self.source.is_symlink():
-            return self._validate_symlink_artifact(self.source, managed_copy, "invocation path")
+            return True
         return self._validate_copy_artifact(self.source, managed_copy, "invocation path")
 
     def _has_symlink_ancestor(self) -> bool:
@@ -261,12 +256,9 @@ class RemoveOperation:
                 artifact = target / self.rel_path
                 present = artifact.exists() or artifact.is_symlink()
                 copy_strategy = not artifact.is_symlink()
-                if present:
+                if present and not artifact.is_symlink():
                     label = f"target artifact {artifact}"
-                    if artifact.is_symlink():
-                        valid = self._validate_symlink_artifact(artifact, managed_copy, label) and valid
-                    else:
-                        valid = self._validate_copy_artifact(artifact, managed_copy, label) and valid
+                    valid = self._validate_copy_artifact(artifact, managed_copy, label) and valid
                 artifacts.append(_Artifact(target, artifact, copy_strategy, present))
         return artifacts if valid else None
 
@@ -278,28 +270,6 @@ class RemoveOperation:
         """
         entry = self.rel_path.as_posix()
         return [mapping for mapping in self.context.mappings if mapping.subpaths is None or entry in mapping.subpaths]
-
-    def _validate_symlink_artifact(self, artifact: Path, managed_copy: Path, label: str) -> bool:
-        """Verify that a target artifact is the expected non-dangling symlink.
-
-        Args:
-            artifact: Projection path to validate.
-            managed_copy: Canonical managed item expected as the link target.
-            label: Human-readable location description for diagnostics.
-
-        Returns:
-            True when the artifact is a symlink resolving to the managed copy.
-        """
-        if not artifact.is_symlink():
-            self.formatter.error(f"{label} must be a managed symlink: {artifact}")
-            return False
-        if not artifact.exists():
-            self.formatter.error(f"{label} is a dangling symlink: {artifact}")
-            return False
-        if artifact.resolve() != managed_copy.resolve():
-            self.formatter.error(f"{label} points somewhere other than managed copy {managed_copy}: {artifact}")
-            return False
-        return True
 
     def _validate_copy_artifact(self, artifact: Path, managed_copy: Path, label: str) -> bool:
         """Verify that a target artifact is an identical file or directory copy.
@@ -336,6 +306,24 @@ class RemoveOperation:
         Returns:
             True when all preview inspection succeeds; False after an I/O error.
         """
+        if not self._format_disk_plan(artifacts, managed_copy):
+            return False
+        if self._selective_targets():
+            self.formatter.config_updated(self.rel_path.as_posix(), self.context.config_path)
+        else:
+            self.formatter.config_skipped()
+        return True
+
+    def _format_disk_plan(self, artifacts: list[_Artifact], managed_copy: Path) -> bool:
+        """Print planned target, exclude, and hub deletes without writing.
+
+        Args:
+            artifacts: Fully validated target artifacts.
+            managed_copy: Canonical managed item planned for deletion.
+
+        Returns:
+            True when Git-exclude reads succeed; False after an I/O error.
+        """
         for artifact in artifacts:
             if artifact.present:
                 strategy = "copy" if artifact.copy_strategy else "symlink"
@@ -345,10 +333,6 @@ class RemoveOperation:
         if not self._preview_excludes(artifacts):
             return False
         self.formatter.managed_copy_deleted(managed_copy)
-        if self._selective_targets():
-            self.formatter.config_updated(self.rel_path.as_posix(), self.context.config_path)
-        else:
-            self.formatter.config_skipped()
         return True
 
     def _preview_excludes(self, artifacts: list[_Artifact]) -> bool:
@@ -378,66 +362,6 @@ class RemoveOperation:
                 self.formatter.exclude_absent(entry, manager.exclude_file)
         return succeeded
 
-    def _cleanup_targets(self, artifacts: list[_Artifact]) -> bool:
-        """Remove every validated target artifact and matching Git-exclude entry.
-
-        Args:
-            artifacts: Validated target-side representations to clean up.
-
-        Returns:
-            True when every artifact and Git-exclude cleanup succeeds.
-        """
-        succeeded = True
-        for artifact in artifacts:
-            if not artifact.present:
-                self.formatter.artifact_absent(artifact.path)
-                continue
-            try:
-                if artifact.path.is_dir() and not artifact.path.is_symlink():
-                    shutil.rmtree(artifact.path)
-                else:
-                    artifact.path.unlink()
-            except OSError as error:
-                self.formatter.error(f"Could not remove artifact {artifact.path}: {error}")
-                succeeded = False
-                continue
-            strategy = "copy" if artifact.copy_strategy else "symlink"
-            self.formatter.artifact_removed(artifact.path, strategy)
-
-        for target in self._distinct_targets(artifacts):
-            if not self._cleanup_exclude(target):
-                succeeded = False
-        return succeeded
-
-    def _cleanup_exclude(self, target: Path) -> bool:
-        """Remove this item's exclude entry from one participating Git target.
-
-        Args:
-            target: Participating target directory to inspect as a Git root.
-
-        Returns:
-            True when the target is not Git, has no entry, or was updated safely.
-        """
-        manager = GitExcludeManager(target)
-        if not manager.is_git_repo():
-            return True
-        entry = self.rel_path.as_posix()
-        try:
-            entries = manager.read_entries()
-        except OSError as error:
-            self.formatter.error(f"Could not read Git exclude file {manager.exclude_file}: {error}")
-            return False
-        if entry not in entries:
-            self.formatter.exclude_absent(entry, manager.exclude_file)
-            return True
-        try:
-            manager.remove_entries({entry})
-        except OSError as error:
-            self.formatter.error(f"Could not remove Git exclude entry {entry!r} in {manager.exclude_file}: {error}")
-            return False
-        self.formatter.exclude_removed(entry, manager.exclude_file)
-        return True
-
     def _distinct_targets(self, artifacts: list[_Artifact]) -> list[Path]:
         """Return target roots once each, preserving their configuration order.
 
@@ -448,26 +372,6 @@ class RemoveOperation:
             Unique target paths in first-seen order.
         """
         return list(dict.fromkeys(artifact.target for artifact in artifacts))
-
-    def _delete_managed_copy(self, managed_copy: Path) -> bool:
-        """Permanently delete the canonical managed item after target cleanup.
-
-        Args:
-            managed_copy: File or directory to delete from the managed project.
-
-        Returns:
-            True on successful deletion; False after reporting an OS failure.
-        """
-        try:
-            if managed_copy.is_dir():
-                shutil.rmtree(managed_copy)
-            else:
-                managed_copy.unlink()
-        except OSError as error:
-            self.formatter.error(f"Could not delete managed copy {managed_copy}: {error}")
-            return False
-        self.formatter.managed_copy_deleted(managed_copy)
-        return True
 
     def _selective_targets(self) -> set[Path]:
         """Return targets of participating mappings that need config removal.

@@ -5,6 +5,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
+from beyond_local_file.daemon.handlers import handle_request
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
 from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
@@ -47,16 +48,16 @@ def _make_git_repository(target: Path, entry: str) -> Path:
 
 
 def _run_remove_operation(config_path: Path, source: Path, rel_path: Path) -> int:
-    """Run RemoveOperation in-process so monkeypatches apply."""
-    context = resolve_revlink_context(str(config_path), Path.cwd())
-    assert not isinstance(context, RevlinkResolveError)
-    return RemoveOperation(
-        source=source,
-        rel_path=rel_path,
-        dry_run=False,
-        formatter=RemoveFormatter(dry_run=False),
-        context=context,
-    ).run()
+    """Run remove in-process so monkeypatches apply."""
+    del source
+    try:
+        response = handle_request(
+            config_path,
+            {"op": "remove", "cwd": str(Path.cwd()), "path": rel_path.as_posix()},
+        )
+    except OSError:
+        return 1
+    return int(response["exit_code"])
 
 
 def test_remove_deletes_every_validated_projection_and_updates_selective_config(
@@ -183,10 +184,10 @@ def test_remove_rejects_copy_true_config_without_mutation(
     assert target_item.read_bytes() == before["target"]
 
 
-def test_remove_rejects_misdirected_participating_symlink_without_mutation(
+def test_remove_deletes_leftover_projection_path_symlinks(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
-    """A bad secondary target blocks removal before its valid sibling changes."""
+    """Mapping membership is enough to delete leftover projection-path symlinks."""
     managed = tmp_path / "managed"
     first_target = tmp_path / "target-one"
     second_target = tmp_path / "target-two"
@@ -210,22 +211,19 @@ def test_remove_rejects_misdirected_participating_symlink_without_mutation(
     - item.txt
 """
     )
-    before = {
-        "config": config_path.read_bytes(),
-        "first_exclude": first_exclude.read_bytes(),
-        "second_exclude": second_exclude.read_bytes(),
-    }
 
     monkeypatch.chdir(first_target)
-    exit_code = _run_remove_operation(config_path, first_item, Path("item.txt"))
+    result = invoke_with_daemon(config_path, ["remove", "item.txt"], isolated_home)
 
-    assert exit_code == 1
-    assert first_item.is_symlink()
-    assert second_item.is_symlink()
-    assert managed_item.exists()
-    assert config_path.read_bytes() == before["config"]
-    assert first_exclude.read_bytes() == before["first_exclude"]
-    assert second_exclude.read_bytes() == before["second_exclude"]
+    assert result.exit_code == 0, result.output
+    assert not first_item.exists()
+    assert not first_item.is_symlink()
+    assert not second_item.exists()
+    assert not second_item.is_symlink()
+    assert not managed_item.exists()
+    assert "item.txt" not in first_exclude.read_text()
+    assert "item.txt" not in second_exclude.read_text()
+    assert "subpath: []" in config_path.read_text()
 
 
 def test_remove_leaves_incidental_artifact_in_nonparticipating_selective_mapping(
@@ -342,7 +340,7 @@ def test_remove_retains_managed_copy_and_config_after_target_cleanup_failure(
     assert target_item.is_symlink()
     assert managed_item.exists()
     assert config_path.read_bytes() == config_before
-    assert "item.txt" not in exclude_file.read_text()
+    assert "item.txt" in exclude_file.read_text()
 
 
 def test_remove_rejects_inaccessible_participating_target_without_mutation(
@@ -454,12 +452,12 @@ def test_remove_continues_cleanup_and_retains_later_phases_after_exclude_read_fa
     exit_code = _run_remove_operation(config_path, first_item, Path("item.txt"))
 
     assert exit_code == 1
-    assert not first_item.exists()
-    assert not second_item.exists()
+    assert first_item.is_symlink()
+    assert second_item.is_symlink()
     assert managed_item.exists()
     assert config_path.read_bytes() == config_before
     assert "item.txt" in first_exclude.read_text()
-    assert "item.txt" not in second_exclude.read_text()
+    assert "item.txt" in second_exclude.read_text()
 
 
 def test_remove_dry_run_prefixes_config_resolution_errors(isolated_home: dict[str, str]) -> None:
@@ -500,7 +498,15 @@ def test_remove_refuses_drifted_copy_projection_without_mutation(
     }
 
     monkeypatch.chdir(alpha)
-    exit_code = _run_remove_operation(config_path, alpha_item, Path("item.txt"))
+    context = resolve_revlink_context(str(config_path), Path.cwd())
+    assert not isinstance(context, RevlinkResolveError)
+    exit_code = RemoveOperation(
+        source=alpha_item,
+        rel_path=Path("item.txt"),
+        dry_run=False,
+        formatter=RemoveFormatter(dry_run=False),
+        context=context,
+    ).run()
     captured = capsys.readouterr()
 
     assert exit_code == 1

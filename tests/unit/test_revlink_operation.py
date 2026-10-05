@@ -311,13 +311,12 @@ class TestContextNoneSkipsGitExclude:
         formatter.git_exclude_exists.assert_not_called()
 
     def test_restore_operation_context_none_returns_zero_without_error(self, tmp_path: Path) -> None:
-        """RestoreOperation._git_exclude returns 0 without error when context is None.
+        """RestoreOperation git-exclude preview is a no-op when context is None.
 
         Source is placed in a plain directory (no .git) so that ``is_git_repo``
         returns ``False`` regardless of whether the ``context is None`` guard
         is present.  This exercises the observable contract: when context is
-        None, the step always exits cleanly with code 0 and no exclude entry
-        is removed.
+        None, the step always exits cleanly and no exclude entry is removed.
 
         Requirements: 3.4
         """
@@ -336,10 +335,8 @@ class TestContextNoneSkipsGitExclude:
             context=None,  # explicitly None
         )
 
-        result = op._git_exclude()
+        op._git_exclude_preview()
 
-        assert result == 0, "Expected _git_exclude to return 0 when context is None"
-        # No entry was removed — exclude file should not exist
         assert not (plain_dir / ".git").exists(), ".git dir should not be created"
         formatter.git_exclude_removed.assert_not_called()
         formatter.git_exclude_not_found.assert_not_called()

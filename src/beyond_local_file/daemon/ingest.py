@@ -13,7 +13,8 @@ from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.project_processor import load_set_projects
 
-from .catchup import remove_path, run_catch_up
+from .catchup import run_catch_up
+from .live import LiveSync
 from .process import state_dir
 from .store import (
     BaselineTrees,
@@ -336,20 +337,28 @@ def prune_removed_replicas(
 def apply_removals(old: dict[str, ConfigProject], removals: tuple[MappingChange, ...]) -> None:
     """Delete target copies for confirmed removals. Hub content is kept.
 
+    Yaml is already committed; only the LiveSync disk job runs. Git exclude
+    is stripped on retracted replicas.
+
     Args:
         old: Mapping snapshot before the commit.
         removals: Classified removals to apply.
     """
+    if not removals:
+        return
+    live = LiveSync(old, {}, last_seen_from_baseline=True)
     index = _index_projects(old)
     for change in removals:
         project = index[change.project]
         if change.kind == "project-remove":
             for target, subpaths in project.targets.items():
-                _delete_projected_items(project.hub, target, subpaths)
+                for name in _projected_item_names(project.hub, subpaths):
+                    live.drop_replica(target, name)
         elif change.kind == "target-remove" and change.target is not None:
-            _delete_projected_items(project.hub, change.target, project.targets[change.target])
+            for name in _projected_item_names(project.hub, project.targets[change.target]):
+                live.drop_replica(change.target, name)
         elif change.kind == "item-remove" and change.target is not None and change.item is not None:
-            remove_path(change.target / change.item)
+            live.drop_replica(change.target, change.item)
 
 
 def confirm_removals() -> bool:
@@ -415,10 +424,8 @@ def _item_adds(old: Subpaths, new: Subpaths, hub: Path) -> list[str]:
     return sorted(new - old)
 
 
-def _delete_projected_items(hub: Path, target: Path, subpaths: Subpaths) -> None:
-    names = _hub_items(hub) if subpaths is None else subpaths
-    for name in names:
-        remove_path(target / name)
+def _projected_item_names(hub: Path, subpaths: Subpaths) -> frozenset[str]:
+    return _hub_items(hub) if subpaths is None else subpaths
 
 
 def _hub_items(hub: Path) -> frozenset[str]:

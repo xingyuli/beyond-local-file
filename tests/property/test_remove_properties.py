@@ -128,13 +128,15 @@ def test_remove_selects_only_generated_participating_mappings(participates: list
 
 
 @settings(max_examples=30)
-@given(invalid_kind=st.sampled_from(("dangling", "misdirected", "copy-mismatch")))
-def test_remove_invalid_projection_never_mutates_persistent_state(invalid_kind: str) -> None:
-    """Any generated invalid invocation state leaves all persistent state intact.
+@given(content=st.binary(min_size=1, max_size=64))
+def test_remove_copy_mismatch_never_mutates_persistent_state(content: bytes) -> None:
+    """A drifted regular-file projection is refused before any cleanup.
 
     Args:
-        invalid_kind: Invalid projection form used to exercise the preflight.
+        content: Bytes that differ from the managed copy.
     """
+    if content == b"authoritative":
+        content = b"divergent"
     with tempfile.TemporaryDirectory() as temporary_directory:
         root = Path(temporary_directory)
         managed = root / "managed"
@@ -144,28 +146,17 @@ def test_remove_invalid_projection_never_mutates_persistent_state(invalid_kind: 
         managed_item = managed / "item.txt"
         managed_item.write_text("authoritative")
         target_item = target / "item.txt"
-        if invalid_kind == "dangling":
-            target_item.symlink_to(root / "missing.txt")
-            subpath = "    - item.txt\n"
-        elif invalid_kind == "misdirected":
-            wrong_item = root / "wrong.txt"
-            wrong_item.write_text("wrong")
-            target_item.symlink_to(wrong_item)
-            subpath = "    - item.txt\n"
-        else:
-            target_item.write_text("divergent")
-            subpath = "    - item.txt\n"
+        target_item.write_bytes(content)
         exclude = target / ".git" / "info" / "exclude"
         exclude.parent.mkdir(parents=True)
         exclude.write_text("item.txt\n")
         config = root / "config.yml"
-        config.write_text(f"managed:\n  target: {target.as_posix()}\n  subpath:\n{subpath}")
+        config.write_text(f"managed:\n  target: {target.as_posix()}\n  subpath:\n    - item.txt\n")
         before = {
             "config": config.read_bytes(),
             "exclude": exclude.read_bytes(),
             "managed": managed_item.read_bytes(),
-            "target_link": target_item.readlink() if target_item.is_symlink() else None,
-            "target_content": target_item.read_bytes() if not target_item.is_symlink() else None,
+            "target_content": target_item.read_bytes(),
         }
 
         previous_cwd = Path.cwd()
@@ -187,8 +178,4 @@ def test_remove_invalid_projection_never_mutates_persistent_state(invalid_kind: 
         assert config.read_bytes() == before["config"]
         assert exclude.read_bytes() == before["exclude"]
         assert managed_item.read_bytes() == before["managed"]
-        if before["target_link"] is not None:
-            assert target_item.is_symlink()
-            assert target_item.readlink() == before["target_link"]
-        else:
-            assert target_item.read_bytes() == before["target_content"]
+        assert target_item.read_bytes() == before["target_content"]

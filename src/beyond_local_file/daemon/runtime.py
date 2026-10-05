@@ -465,11 +465,6 @@ def _execute_unit_request(
             subset = {key: project for key, project in snapshot.items() if project.managed_project_name == unit.name}
             if subset:
                 unit.live.replace_projects(subset)
-                changed_rel = str(request.get("path") or "").strip()
-                recorded = load_baseline(request_config)
-                if op != "create" and changed_rel and recorded is not None:
-                    project = next(iter(subset.values()))
-                    unit.live.merge_item_from_trees(changed_rel, trees_for_project(project, recorded))
     if before is not None:
         emit_isolation_notices(
             project=unit.name,

@@ -18,6 +18,7 @@ from .catchup import (
     add_git_exclude,
     copy_hub_onto_replica,
     rel_in_items,
+    remove_git_exclude,
     remove_path,
     scan_items,
     scan_path_state,
@@ -205,6 +206,76 @@ class LiveSync:
         self._last_source[(str(hub), rel)] = replica
         self._watch_roots = _build_watch_roots(self._projects)
         print(f"live: install {rel} gen 0", flush=True)
+
+    def restore_item(self, replica: Path, rel: str) -> None:
+        """Named restore: delete hub and other replicas' copies; leave *replica*.
+
+        Inverse of :meth:`install_item`. Does not drain the mailbox. Git exclude
+        is stripped on every replica that stops projecting *rel*, including
+        *replica*. Absence is recorded without incrementing generation.
+
+        Args:
+            replica: Requesting replica whose file stays as an unmanaged local file.
+            rel: Item path relative to the hub and replicas.
+        """
+        hub = self._hub_for_install(rel)
+        others = self._other_replica_roots(replica, rel)
+        with log_duration("restore: delete-managed"):
+            remove_path(hub / rel)
+        with log_duration("restore: undo-fan-out"):
+            for other in others:
+                remove_path(other / rel)
+        with log_duration("restore: git-exclude"):
+            for root in (replica, *others):
+                remove_git_exclude(root, rel)
+        self._forget_item(hub, rel)
+        for other in others:
+            self._forget_item(other, rel)
+        print(f"live: restore {rel}", flush=True)
+
+    def remove_item(self, replica: Path, rel: str) -> None:
+        """Named remove: delete hub and every projection, including *replica*.
+
+        Does not drain the mailbox. Git exclude is stripped on every replica
+        that stops projecting *rel*. Absence is recorded without incrementing
+        generation.
+
+        Args:
+            replica: Requesting replica; used to identify sibling projections.
+            rel: Item path relative to the hub and replicas.
+        """
+        hub = self._hub_for_install(rel)
+        replicas = self._replica_roots(rel)
+        if not any(root.resolve() == replica.resolve() for root in replicas):
+            replicas = [replica, *replicas]
+        with log_duration("remove: cleanup-targets"):
+            for root in replicas:
+                remove_path(root / rel)
+        with log_duration("remove: delete-managed"):
+            remove_path(hub / rel)
+        with log_duration("remove: git-exclude"):
+            for root in replicas:
+                remove_git_exclude(root, rel)
+        self._forget_item(hub, rel)
+        for root in replicas:
+            self._forget_item(root, rel)
+        print(f"live: remove {rel}", flush=True)
+
+    def drop_replica(self, replica: Path, rel: str) -> None:
+        """Named ingest retract: delete *replica*'s copy of *rel*; keep the hub.
+
+        Does not drain the mailbox. Git exclude is stripped on *replica* only.
+        Absence is recorded on *replica* without incrementing generation.
+
+        Args:
+            replica: Target that stops projecting *rel*.
+            rel: Item path relative to the replica.
+        """
+        with log_duration("ingest: retract"):
+            remove_path(replica / rel)
+            remove_git_exclude(replica, rel)
+        self._forget_item(replica, rel)
+        print(f"live: drop-replica {rel}", flush=True)
 
     def apply(self) -> tuple[str, ...]:
         """Apply pending mailbox entries one at a time, first-apply-wins per path.
@@ -471,17 +542,16 @@ class LiveSync:
             return hub
         return next(iter(self._projects.values())).managed_project_path
 
-    def _other_replica_roots(self, source: Path, rel: str) -> list[Path]:
-        """Return other mapping targets that declare *rel*.
+    def _replica_roots(self, rel: str) -> list[Path]:
+        """Return mapping targets that declare *rel*.
 
         Args:
-            source: Adopting replica to exclude.
             rel: Item path relative to each replica.
 
         Returns:
             Unique target roots in first-seen order.
         """
-        seen = {source.resolve()}
+        seen: set[Path] = set()
         roots: list[Path] = []
         for project in self._projects.values():
             for mapping in project.mappings:
@@ -494,6 +564,36 @@ class LiveSync:
                     seen.add(resolved)
                     roots.append(target)
         return roots
+
+    def _other_replica_roots(self, source: Path, rel: str) -> list[Path]:
+        """Return other mapping targets that declare *rel*.
+
+        Args:
+            source: Adopting replica to exclude.
+            rel: Item path relative to each replica.
+
+        Returns:
+            Unique target roots in first-seen order.
+        """
+        source_resolved = source.resolve()
+        return [root for root in self._replica_roots(rel) if root.resolve() != source_resolved]
+
+    def _forget_item(self, root: Path, item_name: str) -> None:
+        """Record absence of *item_name* and nested paths without incrementing generation.
+
+        Args:
+            root: Hub or replica whose copy of *item_name* is gone.
+            item_name: Declared item relative to *root*.
+        """
+        slot = self._baseline.get(str(root), {})
+        seen = self._last_seen.get(str(root), {})
+        rels = [path for path in set(slot) | set(seen) if rel_in_items(path, (item_name,))]
+        if item_name not in rels:
+            rels.append(item_name)
+        for rel in rels:
+            gen = get_generation(self._baseline, root, rel)
+            self._oos.discard((str(root), rel))
+            self._record(root, rel, path_state(False, None), gen)
 
     def _record_item(self, root: Path, item_name: str, gen: int) -> None:
         scanned = scan_items(root, [item_name])

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -607,17 +606,12 @@ class CreateOperation:
 
 @dataclass
 class RestoreOperation:
-    """Orchestrates the validate-cleanup workflow for a single projection path.
+    """Validates and formats revlink restore; yaml splice stays in this wrapper.
 
-    The operation is the inverse of :class:`CreateOperation`. It deletes the
-    hub copy and other replicas' projections of the item, and leaves the
-    requesting target's file in place as an unmanaged local file.
-
-    The operation proceeds through internal steps — ``_validate``, ``_replace``,
-    ``_delete_managed``, ``_delete_other_replicas``, ``_git_exclude``,
-    and ``_remove_config`` — each of which returns early with exit code 1 on
-    failure (except cleanup steps which are non-fatal). The public entry point
-    is :meth:`run`.
+    Disk writes (delete hub and other replicas, git exclude, last-seen) are a
+    LiveSync restore job. ``run`` materializes a leftover symlink at PATH so
+    the user keeps a real file, then formats the planned deletes. It does not
+    delete, fan out, or git-exclude.
 
     Attributes:
         source: Absolute path to the projection in the CWD that will be left
@@ -646,15 +640,13 @@ class RestoreOperation:
     # ------------------------------------------------------------------
 
     def run(self) -> int:
-        """Execute the full restore workflow and return an exit code.
+        """Validate, materialize a leftover symlink, and format planned deletes.
 
-        Derives ``managed`` as ``dest_root / rel_path``, preserving the full
-        directory structure so the managed copy location mirrors the target
-        layout exactly.  Then runs the pre-flight validation step.  When not
-        in dry-run mode, proceeds through replace, delete-managed,
-        undo-fan-out, git-exclude, and remove-config steps in order.  When in
-        dry-run mode, previews all steps via the formatter without modifying
-        the filesystem.
+        Derives ``managed`` as ``dest_root / rel_path``. Dry-run previews every
+        step without modifying the filesystem. A real run materializes a leftover
+        symlink at PATH, then prints the intended hub/replica deletes and git
+        exclude; LiveSync restore then writes disks. Yaml drop is
+        :meth:`drop_mapping` after that job.
 
         Returns:
             ``0`` on success, ``1`` if any step fails.
@@ -668,25 +660,26 @@ class RestoreOperation:
 
         if self.dry_run:
             self._preview(managed)
+            return 0
+
+        if self.source.is_symlink():
+            with log_duration("restore: replace"):
+                result = self._replace(managed)
+            if result != 0:
+                return result
         else:
-            if self.source.is_symlink():
-                with log_duration("restore: replace"):
-                    result = self._replace(managed)
-                if result != 0:
-                    return result
-            else:
-                self.formatter.leaving_target_file(self.source)
-
-            with log_duration("restore: delete-managed"):
-                self._delete_managed(managed)
-            with log_duration("restore: undo-fan-out"):
-                self._delete_other_replicas()
-            with log_duration("restore: git-exclude"):
-                self._git_exclude()
-            with log_duration("restore: config"):
-                self._remove_config()
-
+            self.formatter.leaving_target_file(self.source)
+        self.formatter.managed_copy_deleted(managed)
+        for replica_path in self._other_replica_paths():
+            if replica_path.exists() or replica_path.is_symlink():
+                self.formatter.replica_copy_deleted(replica_path)
+        self._git_exclude_preview()
         return 0
+
+    def drop_mapping(self) -> None:
+        """Splice the mapping yaml drop after the LiveSync restore job."""
+        with log_duration("restore: config"):
+            self._remove_config()
 
     def _preview(self, managed: Path) -> None:
         """Emit dry-run preview messages for all steps without touching the filesystem.
@@ -784,50 +777,6 @@ class RestoreOperation:
 
         return 0
 
-    def _delete_managed(self, managed: Path) -> None:
-        """Attempt to delete the managed copy after a successful restore.
-
-        Failure (e.g. permission error) is a warning, not fatal — the restore
-        to CWD has already succeeded.
-
-        Args:
-            managed: Path to the managed copy to delete.
-        """
-        try:
-            if managed.is_dir():
-                shutil.rmtree(managed)
-            else:
-                managed.unlink()
-            self.formatter.managed_copy_deleted(managed)
-        except OSError:
-            self.formatter.managed_copy_delete_failed(managed)
-
-    def _delete_other_replicas(self) -> None:
-        """Delete other replicas' projections of this item (undo create's fan-out).
-
-        The requesting target's file is left in place. Missing paths are skipped.
-        Failure to delete one replica is a warning, not fatal.
-        """
-        for replica_path in self._other_replica_paths():
-            self._delete_replica_copy(replica_path)
-
-    def _delete_replica_copy(self, path: Path) -> None:
-        """Delete one fan-out copy at *path* if it exists.
-
-        Args:
-            path: Projection on another target of this managed project.
-        """
-        if not path.exists() and not path.is_symlink():
-            return
-        try:
-            if path.is_symlink() or path.is_file():
-                path.unlink()
-            else:
-                shutil.rmtree(path)
-            self.formatter.replica_copy_deleted(path)
-        except OSError:
-            self.formatter.replica_copy_delete_failed(path)
-
     def _mappings(self) -> list[Mapping]:
         """Return this managed project's mappings, or an empty list with no context.
 
@@ -901,31 +850,6 @@ class RestoreOperation:
             for target in mapping.targets
         }
 
-    def _git_exclude(self, replica_root: Path | None = None) -> int:
-        """Remove the item from ``.git/info/exclude`` on participating replicas.
-
-        When *replica_root* is omitted, every replica that stops projecting the
-        item is updated, including the requesting target whose file remains.
-        A directory that is not a Git repository is skipped. Nested paths use
-        ``rel_path.as_posix()`` so entries such as ``.kiro/specs/foo`` match
-        what :class:`CreateOperation` wrote.
-
-        This step is non-fatal: it always returns ``0`` regardless of outcome.
-
-        Args:
-            replica_root: Target-project root to update. ``None`` means every
-                participating replica, or ``context.cwd`` when that list is empty.
-
-        Returns:
-            Always ``0``.
-        """
-        if self.context is None:
-            return 0
-        roots = [replica_root] if replica_root is not None else self._git_exclude_roots()
-        for root in roots:
-            self._git_exclude_at(root)
-        return 0
-
     def _git_exclude_roots(self) -> list[Path]:
         """Return replica roots whose git exclude should drop this item.
 
@@ -939,22 +863,6 @@ class RestoreOperation:
         if not any(root.resolve() == cwd.resolve() for root in roots):
             return [cwd, *roots]
         return roots
-
-    def _git_exclude_at(self, replica_root: Path) -> None:
-        """Remove this item from one replica's ``.git/info/exclude`` if present.
-
-        Args:
-            replica_root: Target-project root to inspect as a Git repository.
-        """
-        manager = GitExcludeManager(replica_root)
-        if not manager.is_git_repo():
-            return
-        entry_name = self.rel_path.as_posix()
-        removed = manager.remove_entries({entry_name})
-        if entry_name in removed:
-            self.formatter.git_exclude_removed(entry_name)
-        else:
-            self.formatter.git_exclude_not_found(entry_name)
 
     def _git_exclude_preview(self) -> None:
         """Emit dry-run git-exclude removals without writing exclude files."""
