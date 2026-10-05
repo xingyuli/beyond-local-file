@@ -4,23 +4,7 @@ Each MappingUnit is one managed project x one target with that mapping's items.
 """
 
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
-
-
-class LinkStrategy(StrEnum):
-    """Strategy for linking a project item to the target.
-
-    Config translation always produces COPY. SYMLINK remains only so
-    leftover tests and revlink/remove code can name the old mechanism.
-
-    Attributes:
-        SYMLINK: Create a symbolic link (legacy; not produced from config).
-        COPY: Create a physical copy of a file or directory.
-    """
-
-    SYMLINK = "symlink"
-    COPY = "copy"
 
 
 @dataclass
@@ -30,12 +14,10 @@ class ManagedProjectItem:
     Attributes:
         name: The name of the item (file or directory name).
         path: Absolute path to the item in the managed project.
-        strategy: How this item should be linked (SYMLINK or COPY).
     """
 
     name: str
     path: Path
-    strategy: LinkStrategy
 
 
 @dataclass

@@ -661,7 +661,7 @@ class TestRevlinkNestedPath:
         return ConfigProject(
             managed_project_name="test-project",
             managed_project_path=managed_path,
-            mappings=[Mapping(targets=[target_path], subpaths=[], copy_paths=None)],
+            mappings=[Mapping(targets=[target_path], subpaths=[])],
         )
 
     def test_nested_path_managed_copy_at_correct_location(

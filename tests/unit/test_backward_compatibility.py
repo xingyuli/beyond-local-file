@@ -12,7 +12,6 @@ from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
 from beyond_local_file.config import Config
-from beyond_local_file.symlink_manager import SymlinkManager
 from tests.daemon_support import daemon_running
 
 
@@ -103,87 +102,6 @@ def test_verbose_output_format(isolated_home):
         assert result.exit_code == 0
         assert "Processing test-project" in result.output
         assert "target" in result.output.lower()
-
-
-def test_same_symlink_behavior():
-    """Test that symlink creation and checking behavior remains the same.
-
-    This test verifies that the tool creates symlinks in the same way
-    as before, with the same behavior for existing symlinks, missing
-    symlinks, and git exclude file management.
-    """
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-
-        # Create a project with multiple items
-        project_dir = td_path / "test-project"
-        project_dir.mkdir()
-        (project_dir / "file1.txt").write_text("content1")
-        (project_dir / "file2.txt").write_text("content2")
-        (project_dir / "subdir").mkdir()
-        (project_dir / "subdir" / "file3.txt").write_text("content3")
-
-        target_dir = td_path / "target"
-        target_dir.mkdir()
-
-        # Create managed project items
-        from beyond_local_file.model.processing import (  # noqa: PLC0415 -- avoid circular import
-            LinkStrategy,
-            ManagedProjectItem,
-        )
-
-        items = [
-            ManagedProjectItem(
-                name="file1.txt",
-                path=project_dir / "file1.txt",
-                strategy=LinkStrategy.SYMLINK,
-            ),
-            ManagedProjectItem(
-                name="file2.txt",
-                path=project_dir / "file2.txt",
-                strategy=LinkStrategy.SYMLINK,
-            ),
-            ManagedProjectItem(
-                name="subdir",
-                path=project_dir / "subdir",
-                strategy=LinkStrategy.SYMLINK,
-            ),
-        ]
-
-        # Create SymlinkManager and sync
-        manager = SymlinkManager(items, target_dir)
-        result = manager.create_links()
-
-        # Verify symlink creation behavior
-        # All items should be created (no existing symlinks)
-        assert len(result.created) == 3  # noqa: PLR2004 - test expects 3 items (2 files + 1 dir)
-        assert "file1.txt" in result.created
-        assert "file2.txt" in result.created
-        assert "subdir" in result.created
-
-        # Verify no items were skipped or failed
-        assert len(result.skipped) == 0
-        assert len(result.failed) == 0
-        assert not result.progress.aborted
-
-        # Verify symlinks exist and point to correct sources
-        assert (target_dir / "file1.txt").is_symlink()
-        assert (target_dir / "file2.txt").is_symlink()
-        assert (target_dir / "subdir").is_symlink()
-
-        assert (target_dir / "file1.txt").resolve() == (project_dir / "file1.txt").resolve()
-        assert (target_dir / "file2.txt").resolve() == (project_dir / "file2.txt").resolve()
-        assert (target_dir / "subdir").resolve() == (project_dir / "subdir").resolve()
-
-        # Run sync again - all symlinks should be already_correct
-        result2 = manager.create_links()
-        assert len(result2.already_correct) == 3  # noqa: PLR2004 - test expects 3 items
-        assert len(result2.created) == 0
-
-        # Run check to verify status
-        check_result = manager.check_links()
-        assert len(check_result.exists) == 3  # noqa: PLR2004 - test expects 3 items
-        assert len(check_result.missing) == 0
 
 
 def test_backward_compatible_config_format_variations():

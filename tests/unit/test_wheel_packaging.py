@@ -20,12 +20,10 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/cli.py",
     "beyond_local_file/config.py",
     "beyond_local_file/constants.py",
-    "beyond_local_file/copy_manager.py",
     "beyond_local_file/git_manager.py",
-    "beyond_local_file/link_strategy_protocol.py",
     "beyond_local_file/options.py",
     "beyond_local_file/project_processor.py",
-    "beyond_local_file/symlink_manager.py",
+    "beyond_local_file/projection.py",
     "beyond_local_file/sync_state.py",
     # model subpackage
     "beyond_local_file/model/__init__.py",
@@ -37,7 +35,6 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/operations/base.py",
     "beyond_local_file/operations/daemon.py",
     "beyond_local_file/operations/link_check.py",
-    "beyond_local_file/operations/link_sync.py",
     "beyond_local_file/operations/revlink.py",
     "beyond_local_file/operations/upgrade.py",
     # daemon subpackage

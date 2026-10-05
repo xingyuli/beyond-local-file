@@ -154,9 +154,7 @@ beyond-local-file/
 │       ├── cli.py                   # CLI interface
 │       ├── config.py                # Configuration handling
 │       ├── options.py               # StrEnum definitions for CLI options
-│       ├── link_strategy_protocol.py # Protocol definitions and result types
-│       ├── symlink_manager.py       # Leftover symlink conversion (not a user strategy)
-│       ├── copy_manager.py          # Copy projections
+│       ├── projection.py            # copy_projection
 │       ├── sync_state.py            # Copy hash / baseline tracking
 │       ├── git_manager.py           # Git exclude management
 │       ├── project_processor.py     # Config loading and ProjectProcessor orchestrator
@@ -181,130 +179,11 @@ beyond-local-file/
 └── README.md                        # User documentation
 ```
 
-## Implementing a New Link Strategy
+## Projections
 
-To add a new link strategy (e.g., hard links, junctions), implement the `LinkStrategyManager` protocol:
+Every link is a physical copy (`copy_projection` in `projection.py`). Nested symlink nodes inside a directory item are copied as symlinks. A leftover blf symlink at the projection path becomes a copy on catch-up. There is no second projection mechanism and no strategy protocol.
 
-### 1. Create Manager Class
-
-```python
-from beyond_local_file.link_strategy_protocol import (
-    LinkStrategyManager,
-    LinkCreateResult,
-    LinkCheckResult,
-    GitExcludeAddResult,
-    GitExcludeCheckResult,
-    OperationProgress,
-)
-
-class HardlinkManager:
-    """Manages hard link operations."""
-    
-    def __init__(self, items: list[ProjectItem], target_path: Path):
-        self.items = items
-        self.target_path = target_path
-        self.git_manager = GitExcludeManager(target_path)
-    
-    def get_managed_items(self) -> list[ProjectItem]:
-        """Return managed items."""
-        return self.items
-    
-    def create_links(self) -> LinkCreateResult:
-        """Create hard links for all items."""
-        result = LinkCreateResult(
-            progress=OperationProgress(total_items=len(self.items))
-        )
-        
-        for item in self.items:
-            # Implementation here
-            result.created.add(item.name)
-            result.progress.completed_items += 1
-        
-        return result
-    
-    def check_links(self) -> LinkCheckResult:
-        """Check hard link status."""
-        result = LinkCheckResult()
-        
-        for item in self.items:
-            # Implementation here
-            if link_exists:
-                result.exists.append(item.name)
-            else:
-                result.missing.append(item.name)
-        
-        return result
-    
-    def add_git_excludes(self) -> GitExcludeAddResult:
-        """Add git exclude entries.
-        
-        PRECONDITION: Caller has verified target is in a git repository.
-        """
-        entries = {item.name for item in self.items}
-        return self.git_manager.add_entries(entries)
-    
-    def check_git_excludes(self, all_valid_entries: set[str]) -> GitExcludeCheckResult:
-        """Check git exclude status.
-        
-        PRECONDITION: Caller has verified target is in a git repository.
-        """
-        entries = {item.name for item in self.items}
-        return self.git_manager.check_entries(entries, all_valid_entries)
-```
-
-### 2. Key Requirements
-
-**Protocol Methods:**
-- `get_managed_items()` — Return list of managed items
-- `create_links()` — Create links, return `LinkCreateResult`
-- `check_links()` — Check status, return `LinkCheckResult`
-- `add_git_excludes()` — Add git excludes, return `GitExcludeAddResult | None`
-- `check_git_excludes(all_valid_entries)` — Check git excludes, return `GitExcludeCheckResult | None`
-- `is_git_repo()` — Return whether the target is a git repository root
-
-**Progress Tracking:**
-- Initialize `OperationProgress` with `total_items`
-- Increment `completed_items` as work progresses
-- Set `aborted=True` if user interrupts
-
-**Git Repo Contract:**
-- `add_git_excludes()` and `check_git_excludes()` return `None` when the target is not a git repository — no guards needed at call sites
-- `is_git_repo()` is available on the protocol for callers that need to branch on repo presence (e.g. formatters printing "Target is not a git repository")
-- Managers implement `is_git_repo()` by delegating to their internal `git_manager`
-- `git_manager` is an internal implementation detail of each manager — not part of the protocol surface
-
-**Result Types:**
-- All result types come from `link_strategy_protocol.py`
-- Use composition for strategy-specific details (optional)
-- Define detail classes implementing `LinkCreateDetails` or `LinkCheckDetails` protocols
-
-### 3. Strategy-Specific Details (Optional)
-
-If your strategy needs additional information in results:
-
-```python
-from beyond_local_file.link_strategy_protocol import LinkCreateDetails
-
-@dataclass
-class HardlinkCreateDetails:
-    """Hard link specific details."""
-    
-    inode_count: int = 0
-    
-    def get_summary(self) -> str:
-        return f"Inodes created: {self.inode_count}"
-
-# Use in create_links():
-result = LinkCreateResult(
-    created=created_items,
-    details=HardlinkCreateDetails(inode_count=5),
-    progress=OperationProgress(total_items=10, completed_items=10)
-)
-```
-
-### 4. Integration
-
-Update operations in `src/beyond_local_file/operations/` to partition items for your strategy and create your manager. Add a new module (e.g., `link_hardlink.py`) if your strategy introduces a new subcommand, or extend an existing operation module if it fits an existing command.
+Git exclude lives in `GitExcludeManager`. Catch-up and revlink call it directly.
 
 ## Coding Standards
 

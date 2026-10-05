@@ -8,11 +8,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from beyond_local_file.copy_manager import CopyManager, copy_projection
+from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import HELD_DIR
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.processing import MappingUnit
 from beyond_local_file.model.translator import translate_config_to_mapping_units
+from beyond_local_file.projection import copy_projection
 from beyond_local_file.sync_state import compute_file_hash
 
 from .log import log_duration
@@ -48,7 +49,7 @@ def run_catch_up(
 
     Args:
         projects: Committed mappings to catch up.
-        config_dir: Set run directory passed through to CopyManager.
+        config_dir: Set run directory (unused by copy; kept for call-site compatibility).
         baseline: Previous baseline, or None for a first catch-up.
         on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
         on_line: Optional shell-screen line, one per worker-unit transition.
@@ -284,20 +285,20 @@ def _fresh_catch_up_unit(
     total: int = 1,
     on_progress: ProgressFn | None = None,
 ) -> None:
+    del config_dir
     if not unit.managed_project_path.exists():
         print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
         return
     if not unit.target_project_path.exists():
         print(f"Target directory does not exist: {unit.target_project_path}", flush=True)
         return
-    copy_mgr = CopyManager(list(unit.items), unit.target_project_path, config_dir)
     for item in unit.items:
         if on_progress is not None:
             on_progress(index, total, item.name)
         destination = unit.target_project_path / item.name
-        replace_with_copy(item.path, destination)
+        copy_projection(item.path, destination)
         print(f"catch-up: copied {item.name} -> {destination}", flush=True)
-    copy_mgr.add_git_excludes()
+    _add_git_excludes(unit)
 
 
 def _emit_unit_items(
@@ -348,17 +349,14 @@ def _apply_hub_state(source: Path, destination: Path, hub_state: PathState) -> N
     if hub_state.get("hash") is None:
         destination.mkdir(parents=True, exist_ok=True)
         return
-    replace_with_copy(source, destination)
-
-
-def replace_with_copy(source: Path, destination: Path) -> None:
-    """Replace *destination* with a copy of *source*, preserving symlink nodes.
-
-    Args:
-        source: File, directory, or symlink to copy.
-        destination: Path that should become the copy.
-    """
     copy_projection(source, destination)
+
+
+def _add_git_excludes(unit: MappingUnit) -> None:
+    manager = GitExcludeManager(unit.target_project_path)
+    if not manager.is_git_repo():
+        return
+    manager.write_entries({item.name for item in unit.items})
 
 
 def remove_path(path: Path) -> None:

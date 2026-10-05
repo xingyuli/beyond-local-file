@@ -22,8 +22,7 @@ def test_concurrent_subpath_splices_keep_both_entries(
     beta_target = tmp_path / "lab-notes"
     config_path = tmp_path / "config.yml"
     config_path.write_text(
-        f"alpha:\n  target: {alpha_target}\n  subpath: []\n"
-        f"beta:\n  target: {beta_target}\n  subpath: []\n"
+        f"alpha:\n  target: {alpha_target}\n  subpath: []\nbeta:\n  target: {beta_target}\n  subpath: []\n"
     )
     original_write = Path.write_text
 

@@ -10,7 +10,6 @@ from pathlib import Path
 import click
 
 from beyond_local_file.config import ConfigUpdater
-from beyond_local_file.copy_manager import copy_projection
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import (
@@ -19,6 +18,7 @@ from beyond_local_file.held import (
     store_held_copy,
 )
 from beyond_local_file.model.config import Mapping
+from beyond_local_file.projection import copy_projection
 from beyond_local_file.sync_state import compute_item_hash
 
 # ---------------------------------------------------------------------------

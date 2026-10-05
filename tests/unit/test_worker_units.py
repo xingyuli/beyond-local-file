@@ -316,9 +316,7 @@ def test_link_check_runs_other_units_while_one_unit_is_held(
         while time.monotonic() < deadline and not entered.exists():
             time.sleep(_POLL_S)
         assert entered.exists(), "alpha idle observe never entered the test hold"
-        thread = threading.Thread(
-            target=lambda: invoke_cli(["--config", str(config_path), "link", "check"], env=env)
-        )
+        thread = threading.Thread(target=lambda: invoke_cli(["--config", str(config_path), "link", "check"], env=env))
         thread.start()
         mark = started / "beta"
         mark_deadline = time.monotonic() + _HOLD_WAIT_S

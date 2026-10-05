@@ -71,7 +71,7 @@ def _make_context(
     Returns:
         A RevlinkContext with a selective sync Mapping.
     """
-    mapping = Mapping(targets=[cwd], subpaths=subpaths, copy_paths=None)
+    mapping = Mapping(targets=[cwd], subpaths=subpaths)
     return RevlinkContext(
         config_path=config_path or (cwd / "blf.yaml"),
         project_name="test-project",

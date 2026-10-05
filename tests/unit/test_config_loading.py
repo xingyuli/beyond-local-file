@@ -50,7 +50,7 @@ class TestStringMapping:
         assert projects["my-project"].mappings[0].targets == [target.resolve()]
 
     def test_string_mapping_has_no_subpaths(self, tmp_path: Path) -> None:
-        """A plain string mapping leaves subpaths and copy_paths as None."""
+        """A plain string mapping leaves subpaths as None."""
         target = tmp_path / "target"
         make_project(tmp_path, "my-project")
         config_path = write_config(tmp_path, {"my-project": str(target)})
@@ -59,7 +59,6 @@ class TestStringMapping:
         mapping = projects["my-project"].mappings[0]
 
         assert mapping.subpaths is None
-        assert mapping.copy_paths is None
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +81,6 @@ class TestDictMapping:
         assert len(projects["my-project"].mappings) == 1
         assert mapping.targets == [target.resolve()]
         assert mapping.subpaths is None
-        assert mapping.copy_paths is None
 
     def test_dict_with_subpath_list(self, tmp_path: Path) -> None:
         """Dict mapping with subpath list populates subpaths correctly."""
@@ -102,7 +100,6 @@ class TestDictMapping:
         mapping = projects["my-project"].mappings[0]
 
         assert mapping.subpaths == [".kiro/hooks", "README.md"]
-        assert mapping.copy_paths is None
 
     def test_dict_with_single_string_subpath(self, tmp_path: Path) -> None:
         """A scalar subpath value (not a list) is wrapped into a list."""
@@ -122,7 +119,6 @@ class TestDictMapping:
         mapping = projects["my-project"].mappings[0]
 
         assert mapping.subpaths == [".kiro/hooks"]
-        assert mapping.copy_paths is None
 
     def test_dict_with_copy_true_fails_and_names_project_mapping_and_key(self, tmp_path: Path) -> None:
         """Config load rejects copy: true and names the project, mapping, and key."""
@@ -169,10 +165,9 @@ class TestDictMapping:
         mapping = projects["my-project"].mappings[0]
 
         assert mapping.subpaths == [".kiro/hooks", "rules.md"]
-        assert mapping.copy_paths is None
 
-    def test_mapping_without_copy_flag_has_no_copy_paths(self, tmp_path: Path) -> None:
-        """Existing mappings without copy: true load and do not set copy_paths."""
+    def test_mapping_without_copy_flag_loads_subpaths(self, tmp_path: Path) -> None:
+        """Existing mappings without copy: true load their subpaths."""
         target = tmp_path / "target"
         make_project(tmp_path, "my-project")
         config_path = write_config(
@@ -189,7 +184,6 @@ class TestDictMapping:
         mapping = projects["my-project"].mappings[0]
 
         assert set(mapping.subpaths) == {"file-a.md", "file-b.md", "plain.txt"}
-        assert mapping.copy_paths is None
 
     def test_dict_with_multiple_targets(self, tmp_path: Path) -> None:
         """target: [t1, t2] in a dict mapping produces one Mapping with two targets."""
@@ -304,7 +298,6 @@ class TestListOfMappings:
         mapping = projects["my-project"].mappings[0]
 
         assert mapping.subpaths == ["rules.md"]
-        assert mapping.copy_paths is None
 
 
 # ---------------------------------------------------------------------------

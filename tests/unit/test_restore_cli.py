@@ -131,9 +131,7 @@ def test_restore_rejects_force_flag(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_restore_nonexistent_path_exits_with_error(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_restore_nonexistent_path_exits_with_error(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Test that a non-existent path produces an error message and exits 1.
 
     Requirement 3.1: WHEN the path argument does not exist, THE Restore_Command
@@ -179,9 +177,7 @@ def test_restore_real_file_without_hub_copy_exits_with_error(
 # ---------------------------------------------------------------------------
 
 
-def test_restore_dangling_symlink_exits_with_error(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_restore_dangling_symlink_exits_with_error(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Test that a symlink whose managed copy is missing produces an error.
 
     Requirement 3.3: WHEN the path is a symlink but its target (the
@@ -207,9 +203,7 @@ def test_restore_dangling_symlink_exits_with_error(
 # ---------------------------------------------------------------------------
 
 
-def test_restore_dry_run_accepted_and_exits_zero(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
-) -> None:
+def test_restore_dry_run_accepted_and_exits_zero(tmp_path: Path, monkeypatch, isolated_home: dict[str, str]) -> None:
     """Test that --dry-run is accepted, exits 0, and makes no filesystem changes.
 
     Requirement 3.4: WHEN --dry-run is active, THE Restore_Command SHALL

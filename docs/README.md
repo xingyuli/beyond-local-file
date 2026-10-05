@@ -27,7 +27,6 @@ New to beyond-local-file? Start here:
 
 - **[Daemon design](design-daemon.html)** - Process, live path, mappings, and resolve UI
 - **[Design: Model Separation](design-model-separation.md)** - Two-model architecture (config vs processing)
-- **[Design: Divide-and-Conquer](design-divide-and-conquer.md)** - Strategy management and protocol-based design
 
 ### Platform-Specific Guides
 

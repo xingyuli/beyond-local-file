@@ -414,7 +414,7 @@ blf link check
 └─────────────┴─────────┴─────────┴──────────────────────────────────┘
 ```
 
-A Symlink column appears only when leftover blf symlinks are still present (they become copies on daemon catch-up).
+A leftover blf symlink at a projection path is an incorrect copy (it becomes a copy on daemon catch-up). There is no Symlink column.
 
 **Status indicators:**
 - `✓` — All items correct

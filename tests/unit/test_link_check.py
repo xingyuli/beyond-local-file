@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from beyond_local_file.daemon.catchup import scan_items
-from beyond_local_file.model.processing import LinkStrategy, ManagedProjectItem, MappingUnit
+from beyond_local_file.model.processing import ManagedProjectItem, MappingUnit
 from beyond_local_file.operations.link_check import CheckOperation
 from beyond_local_file.options import OutputFormat
 
@@ -72,12 +72,10 @@ def sample_unit(temp_project_dir: Path, temp_target_dir: Path) -> MappingUnit:
         ManagedProjectItem(
             name="file1.txt",
             path=temp_project_dir / "file1.txt",
-            strategy=LinkStrategy.COPY,
         ),
         ManagedProjectItem(
             name="file2.txt",
             path=temp_project_dir / "file2.txt",
-            strategy=LinkStrategy.COPY,
         ),
     ]
     return MappingUnit(
@@ -297,21 +295,11 @@ def test_check_table_has_no_progress_fraction(
     assert "Checking " not in output
 
 
-def test_check_operation_mixed_strategies_no_false_extra(
+def test_check_operation_git_exclude_covers_every_item(
     tmp_path: Path,
     temp_config_dir: Path,
 ) -> None:
-    """CheckOperation passes all_valid_entries across strategies.
-
-    When a project has both symlink and copy items, git exclude entries for
-    copy items must not be reported as "extra" by the symlink manager (and
-    vice versa). This test verifies that the aggregated all_valid_entries set
-    prevents false positives.
-
-    Args:
-        tmp_path: Pytest temporary directory fixture.
-        temp_config_dir: Temporary config directory fixture.
-    """
+    """Git exclude entries for every projected item are not extra."""
     target_dir = tmp_path / "target"
     target_dir.mkdir()
     info_dir = target_dir / ".git" / "info"
@@ -326,12 +314,10 @@ def test_check_operation_mixed_strategies_no_false_extra(
         ManagedProjectItem(
             name="symlink_file.txt",
             path=project_dir / "symlink_file.txt",
-            strategy=LinkStrategy.SYMLINK,
         ),
         ManagedProjectItem(
             name="copy_file.txt",
             path=project_dir / "copy_file.txt",
-            strategy=LinkStrategy.COPY,
         ),
     ]
     unit = MappingUnit(

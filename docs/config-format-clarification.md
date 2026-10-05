@@ -6,7 +6,7 @@ This document defines the official `config.yml` format and clarifies the distinc
 
 ## Important Note
 
-The "Problem Space" section in `docs/design-divide-and-conquer.md` shows **conceptual examples** for explaining architecture, NOT the actual configuration format. Always refer to this document for the real format.
+Architecture docs may use conceptual examples. They are not the YAML grammar. Always refer to this document for the real format.
 
 ---
 
@@ -76,8 +76,8 @@ Project(
     path=Path("/current/dir/my-project"),
     targets=[Path("/path/to/target")],
     items=[
-        ProjectItem(name=".kiro/hooks", strategy=LinkStrategy.COPY),
-        ProjectItem(name=".kiro/steering/rules.md", strategy=LinkStrategy.COPY),
+        ManagedProjectItem(name=".kiro/hooks", path=Path(".../.kiro/hooks")),
+        ManagedProjectItem(name=".kiro/steering/rules.md", path=Path(".../.kiro/steering/rules.md")),
     ]
 )
 ```
@@ -121,11 +121,11 @@ These fields exist in the internal model, not the user config.
 |--------|-------------|----------------|
 | Location | `config.yml` | Python classes |
 | Format | Simple YAML | Complex objects |
-| Projection | Always a copy | `LinkStrategy.COPY` (leftover symlink conversion is catch-up, not a user option) |
+| Projection | Always a copy | Physical copy; leftover symlink conversion is catch-up, not a user option |
 | Items | Auto-discovered or subpath | Explicit list |
 | Purpose | User-facing | Internal processing |
 
-**Key takeaway:** Use `README.md` and `docs/configuration-reference.md` for configuration. The `docs/design-divide-and-conquer.md` examples illustrate internal architecture only.
+**Key takeaway:** Use `README.md` and `docs/configuration-reference.md` for configuration. Architecture examples in the design docs are not the YAML grammar.
 
 ---
 

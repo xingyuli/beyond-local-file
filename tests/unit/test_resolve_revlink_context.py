@@ -39,7 +39,7 @@ def _make_project(*, name: str = "test-project", targets: list[Path] | None = No
     return ConfigProject(
         managed_project_name=name,
         managed_project_path=_MANAGED_PATH,
-        mappings=[Mapping(targets=targets if targets is not None else [_CWD], subpaths=None, copy_paths=None)],
+        mappings=[Mapping(targets=targets if targets is not None else [_CWD], subpaths=None)],
     )
 
 
@@ -114,12 +114,12 @@ def test_returns_error_when_multiple_projects_match() -> None:
     project_a = ConfigProject(
         managed_project_name="project-a",
         managed_project_path=Path("/managed-a"),
-        mappings=[Mapping(targets=[_CWD], subpaths=None, copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=None)],
     )
     project_b = ConfigProject(
         managed_project_name="project-b",
         managed_project_path=Path("/managed-b"),
-        mappings=[Mapping(targets=[_CWD], subpaths=None, copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=None)],
     )
     load_result = ConfigLoadResult(
         projects={"a": project_a, "b": project_b},
@@ -235,7 +235,7 @@ def test_project_name_selects_among_multiple_cwd_matches() -> None:
     project_b = ConfigProject(
         managed_project_name="project-b",
         managed_project_path=Path("/managed-b"),
-        mappings=[Mapping(targets=[_CWD], subpaths=None, copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=None)],
     )
     load_result = ConfigLoadResult(
         projects={"a": project_a, "b": project_b},
@@ -261,12 +261,12 @@ def test_rel_path_selects_contribution_owner() -> None:
     project_a = ConfigProject(
         managed_project_name="project-a",
         managed_project_path=Path("/managed-a"),
-        mappings=[Mapping(targets=[_CWD], subpaths=[".env"], copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=[".env"])],
     )
     project_b = ConfigProject(
         managed_project_name="project-b",
         managed_project_path=Path("/managed-b"),
-        mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"], copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"])],
     )
     load_result = ConfigLoadResult(
         projects={"a": project_a, "b": project_b},
@@ -285,12 +285,12 @@ def test_rel_path_without_owner_is_not_managed() -> None:
     project_a = ConfigProject(
         managed_project_name="project-a",
         managed_project_path=Path("/managed-a"),
-        mappings=[Mapping(targets=[_CWD], subpaths=[".env"], copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=[".env"])],
     )
     project_b = ConfigProject(
         managed_project_name="project-b",
         managed_project_path=Path("/managed-b"),
-        mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"], copy_paths=None)],
+        mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"])],
     )
     load_result = ConfigLoadResult(
         projects={"a": project_a, "b": project_b},

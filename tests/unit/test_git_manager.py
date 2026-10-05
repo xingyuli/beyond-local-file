@@ -56,7 +56,10 @@ def test_write_entries_preserves_existing_comments(git_repo: Path) -> None:
     Args:
         git_repo: Fake git repo fixture.
     """
-    make_exclude(git_repo, "# git ls-files --others --exclude-from=.git/info/exclude\n# Lines that start with '#' are comments.\n")
+    make_exclude(
+        git_repo,
+        "# git ls-files --others --exclude-from=.git/info/exclude\n# Lines that start with '#' are comments.\n",
+    )
 
     mgr = GitExcludeManager(git_repo)
     mgr.write_entries({"file.txt"})

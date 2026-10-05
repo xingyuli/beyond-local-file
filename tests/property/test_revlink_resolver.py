@@ -33,7 +33,7 @@ _absolute_path = st.lists(_path_component, min_size=1, max_size=4).map(lambda pa
 
 
 def _build_mapping(targets: list[Path]) -> Mapping:
-    """Build a Mapping with the given targets and no subpaths or copy_paths.
+    """Build a Mapping with the given targets and no subpaths.
 
     Args:
         targets: List of target paths for the mapping.
@@ -41,7 +41,7 @@ def _build_mapping(targets: list[Path]) -> Mapping:
     Returns:
         A Mapping instance with the provided targets.
     """
-    return Mapping(targets=targets, subpaths=None, copy_paths=None)
+    return Mapping(targets=targets, subpaths=None)
 
 
 def _build_config_project(name: str, project_path: Path, targets: list[Path]) -> ConfigProject:
@@ -118,8 +118,6 @@ def test_resolver_returns_unique_matching_project(
 ) -> None:
     """Verify the resolver returns the single project when exactly one matches cwd.
 
-    **Validates: Requirements 2.2, 2.3, 2.5**
-
     For any set of ConfigProject instances and any Path that appears as a
     target in exactly one project's mappings, ``_resolve_project_from_cwd``
     must return that project and only that project.
@@ -170,8 +168,6 @@ def test_resolver_returns_none_when_no_project_matches(
 ) -> None:
     """Verify the resolver returns None when cwd does not appear in any mapping.
 
-    **Validates: Requirements 2.4**
-
     For any set of ConfigProject instances and any Path that does not appear
     as a target in any project's mappings, ``_resolve_project_from_cwd`` must
     return ``None``.
@@ -220,8 +216,6 @@ def test_resolver_returns_list_when_multiple_projects_match(
     cwd: Path,
 ) -> None:
     """Verify the resolver returns a list of all matching projects when cwd is ambiguous.
-
-    **Validates: Requirements 2.6**
 
     For any set of ConfigProject instances where two or more projects share
     the same target path, ``_resolve_project_from_cwd`` must return a list

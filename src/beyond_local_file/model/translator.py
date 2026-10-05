@@ -15,7 +15,7 @@ import click
 from beyond_local_file.held import is_held_item_name
 
 from .config import ConfigProject
-from .processing import LinkStrategy, ManagedProjectItem, MappingUnit
+from .processing import ManagedProjectItem, MappingUnit
 
 # Padding threshold for display names
 _PADDING_THRESHOLD = 10
@@ -24,7 +24,6 @@ _PADDING_THRESHOLD = 10
 def _load_items(
     managed_project_path: Path,
     subpaths: list[str] | None,
-    copy_paths: set[str] | None,
 ) -> list[ManagedProjectItem]:
     """Load project items based on subpaths configuration.
 
@@ -33,32 +32,22 @@ def _load_items(
     ``item_loader`` parameter to substitute a different implementation (e.g.
     an in-memory stub in tests).
 
-    Every item is a copy projection. ``copy_paths`` is ignored and retained
-    only so existing ``item_loader`` call sites keep the same signature.
+    Every item is a copy projection.
 
     Args:
         managed_project_path: Path to the managed project directory.
         subpaths: Optional list of relative subpaths to sync.
-        copy_paths: Ignored. Previously named copy-strategy subpaths.
 
     Returns:
         List of ManagedProjectItem instances. Empty list if no items found.
     """
-    del copy_paths
-    # No subpaths: expand all files/directories as copies
     if subpaths is None:
         items: list[ManagedProjectItem] = []
         if managed_project_path.exists() and managed_project_path.is_dir():
             for item_path in managed_project_path.iterdir():
                 if is_held_item_name(item_path.name):
                     continue
-                items.append(
-                    ManagedProjectItem(
-                        name=item_path.name,
-                        path=item_path,
-                        strategy=LinkStrategy.COPY,
-                    )
-                )
+                items.append(ManagedProjectItem(name=item_path.name, path=item_path))
         return items
 
     items_list: list[ManagedProjectItem] = []
@@ -68,18 +57,12 @@ def _load_items(
             continue
         source_path = managed_project_path / subpath
         if source_path.exists():
-            items_list.append(
-                ManagedProjectItem(
-                    name=subpath,
-                    path=source_path,
-                    strategy=LinkStrategy.COPY,
-                )
-            )
+            items_list.append(ManagedProjectItem(name=subpath, path=source_path))
 
     return items_list
 
 
-type ItemLoader = Callable[[Path, list[str] | None, set[str] | None], list[ManagedProjectItem]]
+type ItemLoader = Callable[[Path, list[str] | None], list[ManagedProjectItem]]
 
 
 @dataclass
@@ -125,8 +108,8 @@ def translate_config_to_mapping_units(
 
     Args:
         config_projects: Dictionary of project name to ConfigProject.
-        item_loader: Callable that accepts ``(managed_project_path, subpaths,
-            copy_paths)`` and returns the list of items for that mapping.
+        item_loader: Callable that accepts ``(managed_project_path, subpaths)``
+            and returns the list of items for that mapping.
             Defaults to :func:`_load_items` (real filesystem walk).
 
     Returns:
@@ -171,7 +154,6 @@ def translate_config_to_mapping_units(
                 items = item_loader(
                     config_project.managed_project_path,
                     mapping.subpaths,
-                    mapping.copy_paths,
                 )
 
                 # Skip if no items found (empty managed project)

@@ -33,7 +33,7 @@ def _make_sync_all_context(cwd: Path, dest_root: Path) -> RevlinkContext:
     Returns:
         A ``RevlinkContext`` with a sync-all ``Mapping``.
     """
-    mapping = Mapping(targets=[cwd], subpaths=None, copy_paths=None)
+    mapping = Mapping(targets=[cwd], subpaths=None)
     return RevlinkContext(
         config_path=dest_root / "config.yaml",
         project_name="test-project",

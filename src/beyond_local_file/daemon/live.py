@@ -10,12 +10,12 @@ from typing import Literal
 from beyond_local_file.held import REASON_DELETE_GAP, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
+from beyond_local_file.projection import copy_projection
 
 from .catchup import (
     ScanStats,
     rel_in_items,
     remove_path,
-    replace_with_copy,
     scan_items,
     scan_path_state,
 )
@@ -257,7 +257,7 @@ class LiveSync:
             source = change.replica / change.rel
             if not source.exists() and not source.is_symlink():
                 return
-            replace_with_copy(source, change.hub / change.rel)
+            copy_projection(source, change.hub / change.rel)
         new_gen = old_hub_gen + 1
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
@@ -315,7 +315,7 @@ class LiveSync:
             if new_hub.get("present"):
                 source = change.hub / change.rel
                 if source.exists() or source.is_symlink():
-                    replace_with_copy(source, destination)
+                    copy_projection(source, destination)
                 else:
                     destination.mkdir(parents=True, exist_ok=True)
             else:
@@ -339,7 +339,7 @@ class LiveSync:
                 continue
             destination = watch.root / rel
             if source.exists() or source.is_symlink():
-                replace_with_copy(source, destination)
+                copy_projection(source, destination)
             else:
                 remove_path(destination)
             self._oos.discard((str(watch.root), rel))

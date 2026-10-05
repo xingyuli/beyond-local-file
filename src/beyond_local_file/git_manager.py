@@ -1,4 +1,4 @@
-"""Git exclude file management for symlink targets."""
+"""Git exclude file management for projected items."""
 
 from pathlib import Path
 
@@ -6,11 +6,10 @@ from .file_locks import locked_path
 
 
 class GitExcludeManager:
-    """Manages the .git/info/exclude file for symlink entries.
+    """Manages the .git/info/exclude file for projected items.
 
     This class provides functionality to read, write, and remove entries
-    from the Git exclude file, which prevents Git from tracking symlinks
-    that point outside the repository.
+    from the Git exclude file, which prevents Git from tracking projections.
 
     Attributes:
         repo_root: The root of the Git repository (the directory that

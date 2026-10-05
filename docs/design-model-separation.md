@@ -1,6 +1,6 @@
 # Design: Model Separation
 
-> **📖 Note**: This document describes the two-model architecture. For an overview, see [design-overview.md](design-overview.md). For strategy management, see [design-divide-and-conquer.md](design-divide-and-conquer.md).
+> **📖 Note**: This document describes the two-model architecture. For an overview, see [design-overview.md](design-overview.md).
 
 ## Table of Contents
 
@@ -142,15 +142,13 @@ class Mapping:
     Attributes:
         targets: List of target paths (can have multiple).
         subpaths: Optional list of relative subpaths for selective sync.
-        copy_paths: Optional set of subpath names using copy strategy.
     """
     targets: list[Path]
     subpaths: list[str] | None = None
-    copy_paths: set[str] | None = None
 ```
 
 **Key Points**:
-- Each mapping has its own targets, subpaths, and copy_paths
+- Each mapping has its own targets and subpaths
 - Targets can be a list (from `target: [t1, t2]`)
 - Preserves all mapping-specific rules
 
@@ -222,11 +220,9 @@ class ProjectItem:
     Attributes:
         name: Item name (file or directory name).
         path: Absolute path to the item.
-        strategy: How to link this item (SYMLINK or COPY).
     """
     name: str
     path: Path
-    strategy: LinkStrategy
 ```
 
 ---
@@ -281,7 +277,6 @@ for mapping_idx, mapping in enumerate(config_project.mappings):
         items = _load_items(
             managed_project_path=config_project.managed_project_path,
             subpaths=mapping.subpaths,
-            copy_paths=mapping.copy_paths,
         )
         
         # Create unit
@@ -431,7 +426,7 @@ ConfigProject(
     managed_project_name="my-project",
     managed_project_path=Path("/path/to/my-project"),
     mappings=[
-        Mapping(targets=[Path("/target")], subpaths=None, copy_paths=None)
+        Mapping(targets=[Path("/target")], subpaths=None, )
     ]
 )
 ```
@@ -465,8 +460,8 @@ ConfigProject(
     managed_project_name="my-project",
     managed_project_path=Path("/path/to/my-project"),
     mappings=[
-        Mapping(targets=[Path("/target1")], subpaths=None, copy_paths=None),
-        Mapping(targets=[Path("/target2")], subpaths=[".kiro/hooks"], copy_paths=None),
+        Mapping(targets=[Path("/target1")], subpaths=None, ),
+        Mapping(targets=[Path("/target2")], subpaths=[".kiro/hooks"], ),
     ]
 )
 ```
@@ -513,7 +508,6 @@ ConfigProject(
         Mapping(
             targets=[Path("/target1"), Path("/target2")],
             subpaths=[".kiro/hooks"],
-            copy_paths=None
         ),
     ]
 )
@@ -614,6 +608,5 @@ The translation layer properly converts user intent (configuration) into executi
 ## See Also
 
 - **[design-overview.md](design-overview.md)** - Architecture overview
-- **[design-divide-and-conquer.md](design-divide-and-conquer.md)** - Strategy management details
 - **[configuration-reference.md](configuration-reference.md)** - Configuration format guide
 - **[development.md](development.md)** - Development workflow

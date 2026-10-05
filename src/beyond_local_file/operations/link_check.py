@@ -3,110 +3,87 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
 from rich.console import Console
 from rich.table import Table
 
-from ..copy_manager import CopyManager
 from ..daemon.store import BaselineTrees
-from ..link_strategy_protocol import (
-    CopyCheckDetails,
-    GitExcludeCheckResult,
-    LinkCheckResult,
-)
-from ..model.processing import LinkStrategy, MappingUnit
+from ..git_manager import GitExcludeManager
+from ..model.processing import MappingUnit
 from ..options import OutputFormat
-from ..symlink_manager import SymlinkManager
+from ..sync_state import SyncStatus, detect_status
 from .base import CmdOperation
 
 type ItemProgress = Callable[[int, int, str], None]
 
-# ---------------------------------------------------------------------------
-# Data containers
-# ---------------------------------------------------------------------------
+
+@dataclass
+class CopyCheckDetails:
+    """Live hash labels for copy projections."""
+
+    in_sync: list[str] = field(default_factory=list)
+    mismatched: list[str] = field(default_factory=list)
+    managed_changed: list[str] = field(default_factory=list)
+    target_changed: list[str] = field(default_factory=list)
+    both_changed: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LinkCheckResult:
+    """Result of checking copy projections on one mapping unit."""
+
+    exists: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    incorrect: list[str] = field(default_factory=list)
+    details: CopyCheckDetails = field(default_factory=CopyCheckDetails)
+
+
+@dataclass
+class GitExcludeStatus:
+    """Git exclude present, missing, and extra entries for one target."""
+
+    present: set[str] = field(default_factory=set)
+    missing: set[str] = field(default_factory=set)
+    extra: set[str] = field(default_factory=set)
 
 
 @dataclass
 class MappingUnitResults:
-    """Raw results collected from a single MappingUnit during a check.
-
-    Attributes:
-        unit: The mapping unit that was checked.
-        symlink_link_result: LinkCheckResult from SymlinkManager (None if no symlink items).
-        symlink_git_result: GitExcludeCheckResult from SymlinkManager (None if not a git repo
-            or no symlink items).
-        copy_link_result: LinkCheckResult from CopyManager (None if no copy items).
-        copy_git_result: GitExcludeCheckResult from CopyManager (None if not a git repo or
-            no copy items).
-    """
+    """Raw results collected from a single mapping unit during a check."""
 
     unit: MappingUnit
-    symlink_link_result: LinkCheckResult | None = None
-    symlink_git_result: GitExcludeCheckResult | None = None
     copy_link_result: LinkCheckResult | None = None
-    copy_git_result: GitExcludeCheckResult | None = None
+    git_result: GitExcludeStatus | None = None
 
 
 @dataclass
 class CheckRow:
-    """A single row of check results ready for table rendering.
-
-    The Copy column is shown when the unit has copy items. The Symlink
-    column is omitted unless leftover symlink items are present.
-
-    Attributes:
-        project_name: Name of the project.
-        target_path: Target path that was checked.
-        symlink_link_result: LinkCheckResult from symlink strategy (None if no symlink items).
-        copy_link_result: LinkCheckResult from copy strategy (None if no copy items).
-        git_result: Merged git exclude result (shared across strategies).
-    """
+    """A single row of check results ready for table rendering."""
 
     project_name: str
     target_path: Path
-    symlink_link_result: LinkCheckResult | None = None
     copy_link_result: LinkCheckResult | None = None
-    git_result: GitExcludeCheckResult | None = None
-
-
-# ---------------------------------------------------------------------------
-# Formatters
-# ---------------------------------------------------------------------------
+    git_result: GitExcludeStatus | None = None
 
 
 class LinkCheckFormatter:
-    """Formats and prints detailed (verbose) check results for a single project.
-
-    Handles output for both symlink and copy strategies uniformly.
-    """
+    """Formats and prints detailed (verbose) check results for a single project."""
 
     def __init__(
         self,
         link_result: LinkCheckResult,
-        git_result: GitExcludeCheckResult | None = None,
+        git_result: GitExcludeStatus | None = None,
         show_extra: bool = False,
     ) -> None:
-        """Initialize the formatter.
-
-        Args:
-            link_result: Result of the link check operation.
-            git_result: Optional result of the git exclude check.
-            show_extra: Whether to show extra exclude entries.
-        """
         self.link_result = link_result
         self.git_result = git_result
         self.show_extra = show_extra
 
     def print(self, project_name: str, target_path: Path) -> None:
-        """Print all output lines for this check result.
-
-        Args:
-            project_name: Name of the project.
-            target_path: Target path that was checked.
-        """
+        """Print all output lines for this check result."""
         click.echo(f"\nChecking {project_name} -> {target_path}")
         click.echo("=" * 60)
         self._format_link_status()
@@ -114,31 +91,24 @@ class LinkCheckFormatter:
         self._format_exclude_status()
 
     def _format_link_status(self) -> None:
-        label = "Copy Status" if isinstance(self.link_result.details, CopyCheckDetails) else "Symlink Status"
         has_issues = self.link_result.missing or self.link_result.incorrect
-
         if has_issues:
-            click.echo(f"\n{label}:")
+            click.echo("\nCopy Status:")
             click.echo(f"  Exists: {len(self.link_result.exists)}")
             for item in self.link_result.exists:
                 click.echo(f"    ✓ {item}")
             if self.link_result.incorrect:
                 click.echo(f"  Incorrect: {len(self.link_result.incorrect)}")
-                reason = (
-                    "not a copy" if isinstance(self.link_result.details, CopyCheckDetails) else "points to wrong source"
-                )
                 for item in self.link_result.incorrect:
-                    click.echo(f"    ⚠ {item} ({reason})")
+                    click.echo(f"    ⚠ {item} (not a copy)")
             if self.link_result.missing:
                 click.echo(f"  Missing: {len(self.link_result.missing)}")
                 for item in self.link_result.missing:
                     click.echo(f"    ✗ {item}")
         else:
-            click.echo(f"\n{label}: ✓")
+            click.echo("\nCopy Status: ✓")
 
     def _format_copy_details(self) -> None:
-        if not isinstance(self.link_result.details, CopyCheckDetails):
-            return
         details = self.link_result.details
         click.echo("\nCopy Sync Status:")
         for item in details.in_sync:
@@ -156,14 +126,12 @@ class LinkCheckFormatter:
         if self.git_result is None:
             click.echo("\nTarget is not a git repository")
             return
-
         has_exclude_data = (
             self.git_result.present or self.git_result.missing or (self.show_extra and self.git_result.extra)
         )
         if not has_exclude_data:
             click.echo("\nTarget is not a git repository")
             return
-
         if self.git_result.missing:
             click.echo("\nGit Exclude Status:")
             click.echo(f"  Missing entries: {len(self.git_result.missing)}")
@@ -171,7 +139,6 @@ class LinkCheckFormatter:
                 click.echo(f"    ✗ {item}")
         else:
             click.echo("\nGit Exclude Status: ✓")
-
         if self.show_extra and self.git_result.extra:
             click.echo(f"  Extra entries: {len(self.git_result.extra)}")
             for item in sorted(self.git_result.extra):
@@ -179,145 +146,51 @@ class LinkCheckFormatter:
 
 
 class CheckTableRenderer:
-    """Transforms raw :class:`MappingUnitResults` into :class:`CheckRow` objects.
-
-    Handles merging of git exclude results from both strategies so the table
-    formatter receives a single, unified result per row.
-    """
+    """Transforms raw mapping-unit results into table rows."""
 
     def __init__(self, results: list[MappingUnitResults]) -> None:
-        """Initialize the renderer.
-
-        Args:
-            results: List of raw results from all MappingUnits.
-        """
         self.results = results
 
     def transform(self) -> list[CheckRow]:
-        """Transform raw results into CheckRow objects for table rendering.
-
-        Returns:
-            List of CheckRow objects, one per (project, target) pair.
-        """
-        rows = []
-        for result in self.results:
-            git_result = self._merge_git_results(result.symlink_git_result, result.copy_git_result)
-            rows.append(
-                CheckRow(
-                    project_name=result.unit.display_name,
-                    target_path=result.unit.target_project_path,
-                    symlink_link_result=result.symlink_link_result,
-                    copy_link_result=result.copy_link_result,
-                    git_result=git_result,
-                )
+        """Transform raw results into CheckRow objects for table rendering."""
+        return [
+            CheckRow(
+                project_name=result.unit.display_name,
+                target_path=result.unit.target_project_path,
+                copy_link_result=result.copy_link_result,
+                git_result=result.git_result,
             )
-        return rows
-
-    def _merge_git_results(
-        self,
-        symlink_result: GitExcludeCheckResult | None,
-        copy_result: GitExcludeCheckResult | None,
-    ) -> GitExcludeCheckResult | None:
-        """Merge git exclude results from symlink and copy strategies.
-
-        Args:
-            symlink_result: Git exclude result from symlink strategy.
-            copy_result: Git exclude result from copy strategy.
-
-        Returns:
-            Merged git exclude result, or None if both are None.
-        """
-        if symlink_result is None and copy_result is None:
-            return None
-        if symlink_result is None:
-            return copy_result
-        if copy_result is None:
-            return symlink_result
-        return GitExcludeCheckResult(
-            present=symlink_result.present | copy_result.present,
-            missing=symlink_result.missing | copy_result.missing,
-            extra=symlink_result.extra | copy_result.extra,
-        )
+            for result in self.results
+        ]
 
 
 class CheckTableFormatter:
-    """Formats multiple check results as a compact Rich table.
-
-    Renders one row per (project, target) pair, followed by an optional
-    section listing extra exclude entries when ``show_extra`` is True.
-    """
+    """Formats multiple check results as a compact Rich table."""
 
     def __init__(self, rows: list[CheckRow], show_extra: bool = False) -> None:
-        """Initialize the table formatter.
-
-        Args:
-            rows: Collected check results to render.
-            show_extra: Whether to show extra exclude entries below the table.
-        """
         self.rows = rows
         self.show_extra = show_extra
-        self._has_copy = any(row.copy_link_result is not None for row in rows)
-        self._has_symlink = any(row.symlink_link_result is not None for row in rows)
 
     def render(self) -> None:
         """Render the table and optional extra-exclude section to stdout."""
         console = Console()
-
         table = Table(show_header=True, header_style="bold")
         table.add_column("Project")
-        if self._has_symlink:
-            table.add_column("Symlink", justify="center")
         table.add_column("Exclude", justify="center")
-        if self._has_copy:
-            table.add_column("Copy", justify="center")
+        table.add_column("Copy", justify="center")
         table.add_column("Target Path")
-
         for row in self.rows:
-            cells = [row.project_name]
-            if self._has_symlink:
-                cells.append(self._symlink_cell(row.symlink_link_result))
-            cells.append(self._exclude_cell(row.git_result))
-            if self._has_copy:
-                cells.append(self._copy_cell(row.copy_link_result))
-            cells.append(str(row.target_path))
-            table.add_row(*cells)
-
+            table.add_row(
+                row.project_name,
+                self._exclude_cell(row.git_result),
+                self._copy_cell(row.copy_link_result),
+                str(row.target_path),
+            )
         console.print(table)
-
         if self.show_extra:
             self._render_extra_entries(console)
 
-    def _symlink_cell(self, link_result: LinkCheckResult | None) -> str:
-        """Build the symlink status cell text.
-
-        Args:
-            link_result: The link check result for this row, or None if no symlink items.
-
-        Returns:
-            A short status string: ✓ when all symlinks exist and are correct,
-            ⚠ when some are incorrect, or ✗ when some are missing.
-        """
-        if link_result is None:
-            return "[dim]n/a[/dim]"
-        issues = []
-        if link_result.missing:
-            issues.append(f"{len(link_result.missing)} missing")
-        if link_result.incorrect:
-            issues.append(f"{len(link_result.incorrect)} incorrect")
-        if issues:
-            status = "[red]✗[/red]" if link_result.missing else "[yellow]⚠[/yellow]"
-            return f"{status} ({', '.join(issues)})"
-        return "[green]✓[/green]"
-
-    def _exclude_cell(self, git_result: GitExcludeCheckResult | None) -> str:
-        """Build the git exclude status cell text.
-
-        Args:
-            git_result: The git exclude check result for this row, or None if not a git repo.
-
-        Returns:
-            A short status string indicating exclude health and extra entry count.
-        """
+    def _exclude_cell(self, git_result: GitExcludeStatus | None) -> str:
         if git_result is None:
             return "[dim]n/a[/dim]"
         has_exclude_data = git_result.present or git_result.missing or (self.show_extra and git_result.extra)
@@ -331,18 +204,7 @@ class CheckTableFormatter:
         return "[green]✓[/green]"
 
     def _copy_cell(self, link_result: LinkCheckResult | None) -> str:
-        """Build the copy sync status cell text.
-
-        Args:
-            link_result: The link check result. If details is CopyCheckDetails,
-                renders copy-specific status; otherwise returns n/a.
-
-        Returns:
-            A short status string for the Copy column.
-        """
         if link_result is None:
-            return "[dim]n/a[/dim]"
-        if not isinstance(link_result.details, CopyCheckDetails):
             return "[dim]n/a[/dim]"
         details = link_result.details
         problems = (
@@ -370,11 +232,6 @@ class CheckTableFormatter:
         return "[green]✓[/green]"
 
     def _render_extra_entries(self, console: Console) -> None:
-        """Render the extra exclude entries section below the table.
-
-        Args:
-            console: Rich console to write output to.
-        """
         extras = [
             (row.project_name, sorted(row.git_result.extra))
             for row in self.rows
@@ -387,19 +244,8 @@ class CheckTableFormatter:
             console.print(f"  {project_name}: {', '.join(entries)}")
 
 
-# ---------------------------------------------------------------------------
-# Operation
-# ---------------------------------------------------------------------------
-
-
 class CheckOperation(CmdOperation):
-    """Encapsulates the check operation logic for symlinks and copies.
-
-    Supports two output formats:
-    - ``OutputFormat.TABLE`` (default): collects all results and renders a compact
-      Rich table after all projects are processed via :meth:`render`.
-    - ``OutputFormat.VERBOSE``: prints detailed per-project output immediately.
-    """
+    """Check live copy projections and git exclude entries per mapping unit."""
 
     def __init__(
         self,
@@ -407,13 +253,6 @@ class CheckOperation(CmdOperation):
         show_extra: bool = False,
         output_format: OutputFormat = OutputFormat.TABLE,
     ) -> None:
-        """Initialize the check operation.
-
-        Args:
-            config_dir: Directory where the config file lives.
-            show_extra: Whether to show extra exclude entries.
-            output_format: Output format — TABLE (default) or VERBOSE.
-        """
         self.config_dir = config_dir
         self.show_extra = show_extra
         self.output_format = output_format
@@ -429,11 +268,7 @@ class CheckOperation(CmdOperation):
         return list(self._results)
 
     def extend_results(self, results: list[MappingUnitResults]) -> None:
-        """Append *results* from another check run for a later table render.
-
-        Args:
-            results: Rows collected on a worker unit.
-        """
+        """Append *results* from another check run for a later table render."""
         self._results.extend(results)
 
     @property
@@ -442,122 +277,53 @@ class CheckOperation(CmdOperation):
         return self.output_format == OutputFormat.VERBOSE
 
     def execute_unit(self, unit: MappingUnit) -> bool:
-        """Execute the check operation for a single mapping unit.
-
-        Partitions items by strategy, delegates to the appropriate managers,
-        then either prints verbose output immediately or accumulates results
-        for deferred table rendering.
-
-        Args:
-            unit: The mapping unit to check.
-
-        Returns:
-            Always True to continue processing.
-        """
+        """Check one mapping unit's copy projections and git exclude."""
         self._unit_index += 1
-        symlink_items = [i for i in unit.items if i.strategy == LinkStrategy.SYMLINK]
-        copy_items = [i for i in unit.items if i.strategy == LinkStrategy.COPY]
-
-        symlink_mgr = SymlinkManager(symlink_items, unit.target_project_path) if symlink_items else None
-        copy_mgr = CopyManager(copy_items, unit.target_project_path, self.config_dir) if copy_items else None
-
-        # Aggregate all valid entry names for git exclude checking across strategies
-        all_valid_entries: set[str] = set()
-        if symlink_mgr:
-            all_valid_entries.update(i.name for i in symlink_mgr.get_managed_items())
-        if copy_mgr:
-            all_valid_entries.update(i.name for i in copy_mgr.get_managed_items())
-
+        item_names = {item.name for item in unit.items}
+        link_result = self._check_copies(unit)
+        git_result = _check_git_excludes(unit.target_project_path, item_names)
         if self.output_format == OutputFormat.VERBOSE:
-            self._execute_verbose(unit, symlink_mgr, copy_mgr, all_valid_entries)
+            LinkCheckFormatter(link_result, git_result, self.show_extra).print(
+                unit.display_name, unit.target_project_path
+            )
         else:
-            self._execute_table(unit, symlink_mgr, copy_mgr, all_valid_entries)
-
+            self._results.append(MappingUnitResults(unit=unit, copy_link_result=link_result, git_result=git_result))
         return True
 
-    def _execute_verbose(
-        self,
-        unit: MappingUnit,
-        symlink_mgr: SymlinkManager | None,
-        copy_mgr: CopyManager | None,
-        all_valid_entries: set[str],
-    ) -> None:
-        """Run check and print verbose output immediately.
-
-        Args:
-            unit: The mapping unit being checked.
-            symlink_mgr: SymlinkManager for symlink items, or None.
-            copy_mgr: CopyManager for copy items, or None.
-            all_valid_entries: All managed item names across both strategies.
-        """
-        if symlink_mgr:
-            for item in symlink_mgr.get_managed_items():
-                self._emit(item.name)
-            link_result = symlink_mgr.check_links()
-            git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-            LinkCheckFormatter(link_result, git_result, self.show_extra).print(
-                unit.display_name, unit.target_project_path
+    def _check_copies(self, unit: MappingUnit) -> LinkCheckResult:
+        details = CopyCheckDetails()
+        in_sync: list[str] = []
+        missing: list[str] = []
+        incorrect: list[str] = []
+        for item in unit.items:
+            self._emit(item.name)
+            target_file = unit.target_project_path / item.name
+            if target_file.is_symlink():
+                incorrect.append(item.name)
+                continue
+            if not target_file.exists():
+                missing.append(item.name)
+                continue
+            baseline_view = (
+                (self.baseline, unit.managed_project_path, unit.target_project_path, item.name)
+                if self.baseline is not None
+                else None
             )
-
-        if copy_mgr:
-            link_result = copy_mgr.check_links(
-                baseline=self.baseline,
-                managed_root=unit.managed_project_path,
-                on_item=self._emit,
-            )
-            git_result = copy_mgr.check_git_excludes(all_valid_entries)
-            LinkCheckFormatter(link_result, git_result, self.show_extra).print(
-                unit.display_name, unit.target_project_path
-            )
-
-    def _execute_table(
-        self,
-        unit: MappingUnit,
-        symlink_mgr: SymlinkManager | None,
-        copy_mgr: CopyManager | None,
-        all_valid_entries: set[str],
-    ) -> None:
-        """Run check and accumulate results for deferred table rendering.
-
-        Args:
-            unit: The mapping unit being checked.
-            symlink_mgr: SymlinkManager for symlink items, or None.
-            copy_mgr: CopyManager for copy items, or None.
-            all_valid_entries: All managed item names across both strategies.
-        """
-        symlink_link_result = None
-        symlink_git_result = None
-        if symlink_mgr:
-            for item in symlink_mgr.get_managed_items():
-                self._emit(item.name)
-            symlink_link_result = symlink_mgr.check_links()
-            symlink_git_result = symlink_mgr.check_git_excludes(all_valid_entries)
-
-        copy_link_result = None
-        copy_git_result = None
-        if copy_mgr:
-            copy_link_result = copy_mgr.check_links(
-                baseline=self.baseline,
-                managed_root=unit.managed_project_path,
-                on_item=self._emit,
-            )
-            copy_git_result = copy_mgr.check_git_excludes(all_valid_entries)
-
-        self._results.append(
-            MappingUnitResults(
-                unit=unit,
-                symlink_link_result=symlink_link_result,
-                symlink_git_result=symlink_git_result,
-                copy_link_result=copy_link_result,
-                copy_git_result=copy_git_result,
-            )
-        )
+            status = detect_status(item.path, target_file, baseline_view)
+            status_map = {
+                SyncStatus.IN_SYNC: details.in_sync,
+                SyncStatus.MISMATCH: details.mismatched,
+                SyncStatus.MANAGED_CHANGED: details.managed_changed,
+                SyncStatus.TARGET_CHANGED: details.target_changed,
+                SyncStatus.BOTH_CHANGED: details.both_changed,
+            }
+            status_map[status].append(item.name)
+            if status == SyncStatus.IN_SYNC:
+                in_sync.append(item.name)
+        return LinkCheckResult(exists=in_sync, missing=missing, incorrect=incorrect, details=details)
 
     def render(self) -> None:
-        """Render collected results as a table.
-
-        No-op when ``output_format`` is VERBOSE since output is already printed.
-        """
+        """Render collected results as a table."""
         if self.output_format != OutputFormat.VERBOSE and self._results:
             rows = CheckTableRenderer(self._results).transform()
             CheckTableFormatter(rows, self.show_extra).render()
@@ -566,3 +332,15 @@ class CheckOperation(CmdOperation):
         if self.on_progress is None or self.output_format == OutputFormat.VERBOSE:
             return
         self.on_progress(self._unit_index, self.unit_count, item_name)
+
+
+def _check_git_excludes(target_path: Path, item_names: set[str]) -> GitExcludeStatus | None:
+    manager = GitExcludeManager(target_path)
+    if not manager.is_git_repo():
+        return None
+    exclude_entries = manager.read_entries()
+    return GitExcludeStatus(
+        present=item_names & exclude_entries,
+        missing=item_names - exclude_entries,
+        extra=exclude_entries - item_names,
+    )

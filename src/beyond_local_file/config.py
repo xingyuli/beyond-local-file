@@ -24,6 +24,7 @@ def _locked_config(func: Callable[..., object]) -> Callable[..., object]:
 
     return wrapper
 
+
 _KEY_TARGET = "target"
 _KEY_SUBPATH = "subpath"
 _KEY_COPY = "copy"
@@ -171,7 +172,7 @@ class Config:
         *,
         project_name: str,
         mapping_index: int,
-    ) -> tuple[list[str] | None, set[str] | None]:
+    ) -> list[str] | None:
         """Parse subpath entries.
 
         Each entry can be a plain string or a dict with ``path``.
@@ -183,16 +184,16 @@ class Config:
             mapping_index: 1-based mapping index, used in the ``copy: true`` error.
 
         Returns:
-            Tuple of (subpath list, copy_paths). copy_paths is always None.
+            Subpath list, or None when the mapping has no subpaths.
 
         Raises:
             ConfigError: If a subpath entry still has ``copy: true``.
         """
         if raw is None:
-            return None, None
+            return None
 
         if isinstance(raw, str):
-            return [raw], None
+            return [raw]
 
         subpaths: list[str] = []
 
@@ -205,7 +206,7 @@ class Config:
                 if entry.get(_KEY_COPY, False):
                     raise _unsupported_copy_option(project_name, mapping_index)
 
-        return subpaths, None
+        return subpaths
 
     def _build_config_project(self, name: str, value: str | list | dict) -> ConfigProject:
         """Build a ConfigProject from raw YAML value according to grammar.
@@ -277,7 +278,7 @@ class Config:
             Mapping with single target, no subpaths.
         """
         targets = self._normalize_targets(target)
-        return Mapping(targets=targets, subpaths=None, copy_paths=None)
+        return Mapping(targets=targets, subpaths=None)
 
     def _parse_dict_mapping(
         self,
@@ -294,7 +295,7 @@ class Config:
             mapping_index: 1-based mapping index, used in the ``copy: true`` error.
 
         Returns:
-            Mapping with targets and subpaths. copy_paths is always None.
+            Mapping with targets and subpaths.
 
         Raises:
             ConfigError: If the mapping still has ``copy: true``.
@@ -303,17 +304,13 @@ class Config:
             raise _unsupported_copy_option(project_name, mapping_index)
         targets = self._normalize_targets(mapping_dict[_KEY_TARGET])
         raw_subpaths = mapping_dict.get(_KEY_SUBPATH)
-        subpaths, copy_paths = self._parse_subpaths(
+        subpaths = self._parse_subpaths(
             raw_subpaths,
             project_name=project_name,
             mapping_index=mapping_index,
         )
 
-        return Mapping(
-            targets=targets,
-            subpaths=subpaths,
-            copy_paths=copy_paths,
-        )
+        return Mapping(targets=targets, subpaths=subpaths)
 
 
 class ConfigUpdater:
