@@ -399,7 +399,10 @@ def test_live_observe_does_not_run_during_catch_up(
         assert (managed / "shared.txt").read_text() == "hub-0"
         log = _log_path(config_path)
         if log.exists():
-            assert "live:" not in log.read_text(encoding="utf-8")
+            text = log.read_text(encoding="utf-8")
+            assert "live: tick" not in text
+            assert "live: update" not in text
+            assert "live: create" not in text
     finally:
         finished = _finish_start(proc, hold)
     assert finished.returncode == 0, finished.stdout + finished.stderr

@@ -207,6 +207,29 @@ class LiveSync:
         self._watch_roots = _build_watch_roots(self._projects)
         print(f"live: install {rel} gen 0", flush=True)
 
+    def seed_item(self, replica: Path, rel: str) -> None:
+        """Named install-from-hub: copy *rel* from the hub onto *replica*, exclude, gen 0.
+
+        Does not drain the mailbox. Colliding replica bytes are held
+        ``create-overwrite`` then overwritten. Equal bytes stay. A missing
+        projection is copied with no hold. Generation 0 is the first version
+        observed; an already-recorded hub generation is left unchanged.
+
+        Args:
+            replica: Target that should start matching the hub at *rel*.
+            rel: Item path relative to the hub and replica.
+        """
+        hub = self._hub_for_replica(replica, rel)
+        with log_duration("seed: copy"):
+            copy_hub_onto_replica(hub, replica, rel)
+        with log_duration("seed: git-exclude"):
+            add_git_exclude(replica, rel)
+        if not self._item_recorded(hub, rel):
+            self._record_item(hub, rel, gen=0)
+        self._record_item(replica, rel, gen=0)
+        self._last_source.setdefault((str(hub), rel), hub)
+        print(f"live: seed {rel} gen 0", flush=True)
+
     def restore_item(self, replica: Path, rel: str) -> None:
         """Named restore: delete hub and other replicas' copies; leave *replica*.
 
@@ -542,6 +565,26 @@ class LiveSync:
             return hub
         return next(iter(self._projects.values())).managed_project_path
 
+    def _hub_for_replica(self, replica: Path, rel: str) -> Path:
+        """Return the managed project that maps *rel* onto *replica*.
+
+        Args:
+            replica: Target that should receive hub bytes.
+            rel: Item path relative to the hub and replica.
+
+        Returns:
+            Hub directory for this replica's mapping of *rel*.
+        """
+        replica_resolved = replica.resolve()
+        for watch in self._watch_roots:
+            if watch.is_hub:
+                continue
+            if watch.root.resolve() != replica_resolved:
+                continue
+            if rel_in_items(rel, watch.item_names):
+                return _owner_hub(watch, rel)
+        return self._hub_for_install(rel)
+
     def _replica_roots(self, rel: str) -> list[Path]:
         """Return mapping targets that declare *rel*.
 
@@ -594,6 +637,10 @@ class LiveSync:
             gen = get_generation(self._baseline, root, rel)
             self._oos.discard((str(root), rel))
             self._record(root, rel, path_state(False, None), gen)
+
+    def _item_recorded(self, root: Path, item_name: str) -> bool:
+        slot = self._baseline.get(str(root), {})
+        return any(rel_in_items(rel, (item_name,)) for rel in slot)
 
     def _record_item(self, root: Path, item_name: str, gen: int) -> None:
         scanned = scan_items(root, [item_name])

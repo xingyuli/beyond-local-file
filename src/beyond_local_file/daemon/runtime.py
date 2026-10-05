@@ -19,7 +19,7 @@ from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import MappingUnitResults
 from beyond_local_file.project_processor import load_set_projects
 
-from .catchup import run_catch_up
+from .catchup import catch_up_live, run_catch_up
 from .handlers import collect_check_results, handle_request, render_check_results
 from .ingest import prepare_reload
 from .ipc import (
@@ -46,7 +46,7 @@ from .notice import emit_isolation_notices, snapshot_isolation
 from .process import state_dir, write_ready
 from .resolve_ui import ResolveHttp, start_resolve_ui, stop_resolve_ui
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
-from .workers import WorkerUnit, build_worker_units, route_worker_unit, trees_for_project
+from .workers import WorkerUnit, build_worker_units, route_worker_unit
 
 _TEST_HOLD_ENV = "BLF_TEST_CATCHUP_HOLD"
 _HOLD_POLL_S = 0.05
@@ -256,10 +256,9 @@ def _catch_up_unit(config_path: Path, unit: WorkerUnit, on_line: ProgressCallbac
         if on_line is not None:
             on_line(f"Done · {unit.name}")
         return
-    trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path), on_line=on_line)
+    unit.live.replace_projects(subset)
+    trees = catch_up_live(unit.live, started_with_baseline=True, on_line=on_line)
     save_baseline(config_path, trees, subset)
-    project = next(iter(subset.values()))
-    unit.live.reload(subset, trees_for_project(project, trees))
 
 
 def _catch_up_new_unit(

@@ -7,11 +7,12 @@ import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import HELD_DIR, REASON_CREATE_OVERWRITE, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.processing import ManagedProjectItem, MappingUnit
+from beyond_local_file.model.processing import MappingUnit
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.projection import copy_projection
 from beyond_local_file.sync_state import compute_file_hash
@@ -23,6 +24,9 @@ from .store import (
     path_state,
     state_equal,
 )
+
+if TYPE_CHECKING:
+    from .live import LiveSync
 
 type ProgressFn = Callable[[int, int, str], None]
 type LineFn = Callable[[str], None]
@@ -44,7 +48,7 @@ def run_catch_up(
     on_progress: ProgressFn | None = None,
     on_line: LineFn | None = None,
 ) -> BaselineTrees:
-    """Apply fresh or update catch-up and return the new baseline trees.
+    """Apply fresh or update catch-up and return LiveSync's baseline trees.
 
     Args:
         projects: Committed mappings to catch up.
@@ -54,19 +58,53 @@ def run_catch_up(
         on_line: Optional shell-screen line, one per worker-unit transition.
 
     Returns:
-        Newly recorded per-path baseline trees.
+        LiveSync baseline trees after seed and, when a baseline existed, tick.
     """
     del config_dir
-    _mark_catchup_started(projects)
-    units = translate_config_to_mapping_units(projects)
+    from .live import LiveSync as _LiveSync  # noqa: PLC0415 -- avoid import cycle with live observe
+
+    live = _LiveSync(projects, baseline or {}, last_seen_from_baseline=True)
+    return catch_up_live(
+        live,
+        started_with_baseline=baseline is not None,
+        on_progress=on_progress,
+        on_line=on_line,
+    )
+
+
+def catch_up_live(
+    live: LiveSync,
+    *,
+    started_with_baseline: bool,
+    on_progress: ProgressFn | None = None,
+    on_line: LineFn | None = None,
+) -> BaselineTrees:
+    """Seed unrecorded replicas on *live*, then tick when a baseline existed.
+
+    Args:
+        live: Observer whose mappings and last-seen to use.
+        started_with_baseline: False for fresh catch-up (seed only). True for
+            update catch-up or an existing worker unit (seed then tick).
+        on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
+        on_line: Optional shell-screen line, one per worker-unit transition.
+
+    Returns:
+        *live*'s baseline trees after seed and optional tick.
+    """
+    _mark_catchup_started(live.projects)
+    units = translate_config_to_mapping_units(live.projects)
     _announce_waiting(units, on_line)
-    if baseline is None:
+    if started_with_baseline:
+        print("catch-up: update", flush=True)
+    else:
         print("catch-up: fresh", flush=True)
-        _fresh_catch_up(on_progress, on_line, units)
-        return record_baseline(projects, previous=None)
-    print("catch-up: update", flush=True)
-    applied = _update_catch_up(baseline, on_progress, on_line, units, projects)
-    return record_baseline(projects, previous=applied)
+    _seed_unrecorded(live, units, on_progress, on_line, started_with_baseline=started_with_baseline)
+    if started_with_baseline:
+        live.tick(reason="catch-up")
+        live.apply_frozen_mismatches()
+        for index in range(1, len(units) + 1):
+            _mark_unit_done(units, index, on_line)
+    return live.baseline
 
 
 def record_baseline(
@@ -240,81 +278,51 @@ def _item_progress(
     return emit
 
 
-def _fresh_catch_up(
+def _seed_unrecorded(
+    live: LiveSync,
+    units: list[MappingUnit],
     on_progress: ProgressFn | None,
     on_line: LineFn | None,
-    units: list[MappingUnit],
+    *,
+    started_with_baseline: bool,
 ) -> None:
-    total = len(units)
-    for index, unit in enumerate(units, start=1):
-        _fresh_catch_up_unit(
-            unit,
-            index=index,
-            total=total,
-            on_progress=_item_progress(unit, on_progress, on_line),
-        )
-        _mark_unit_done(units, index, on_line)
+    """Seed replicas and items this LiveSync has never recorded.
 
-
-def _update_catch_up(
-    baseline: BaselineTrees,
-    on_progress: ProgressFn | None,
-    on_line: LineFn | None,
-    units: list[MappingUnit],
-    projects: dict[str, ConfigProject],
-) -> BaselineTrees:
-    from .live import LiveSync  # noqa: PLC0415 -- avoid import cycle with live observe
-
-    working: BaselineTrees = {root: dict(paths) for root, paths in baseline.items()}
+    Args:
+        live: Observer whose baseline decides what is still unrecorded.
+        units: Mapping units to seed.
+        on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
+        on_line: Optional shell-screen line.
+        started_with_baseline: True when this is update catch-up (or an existing
+            worker unit). Fresh replicas then log as such.
+    """
     total = len(units)
     for index, unit in enumerate(units, start=1):
         emit = _item_progress(unit, on_progress, on_line)
+        if not unit.managed_project_path.exists():
+            print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
+            if not started_with_baseline:
+                _mark_unit_done(units, index, on_line)
+            continue
+        if not unit.target_project_path.exists():
+            print(f"Target directory does not exist: {unit.target_project_path}", flush=True)
+            if not started_with_baseline:
+                _mark_unit_done(units, index, on_line)
+            continue
         replica_key = str(unit.target_project_path)
-        if replica_key not in working:
+        replica_tree = live.baseline.get(replica_key, {})
+        if started_with_baseline and replica_key not in live.baseline:
             print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
-            _fresh_catch_up_unit(unit, index=index, total=total, on_progress=emit)
-            item_names = [item.name for item in unit.items]
-            working[replica_key] = scan_items(unit.target_project_path, item_names)
-        else:
-            _emit_unit_items(unit, index, total, emit)
-            if _install_unrecorded_items(unit, working):
-                _add_git_excludes(unit)
-    live = LiveSync(projects, working, last_seen_from_baseline=True)
-    live.tick(reason="catch-up")
-    live.apply_frozen_mismatches()
-    for index in range(1, len(units) + 1):
-        _mark_unit_done(units, index, on_line)
-    return live.baseline
-
-
-def _fresh_catch_up_unit(
-    unit: MappingUnit,
-    *,
-    index: int = 1,
-    total: int = 1,
-    on_progress: ProgressFn | None = None,
-) -> None:
-    if not unit.managed_project_path.exists():
-        print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
-        return
-    if not unit.target_project_path.exists():
-        print(f"Target directory does not exist: {unit.target_project_path}", flush=True)
-        return
-    for item in unit.items:
-        if on_progress is not None:
-            on_progress(index, total, item.name)
-        destination = unit.target_project_path / item.name
-        _install_projection(unit, item)
-        print(f"catch-up: copied {item.name} -> {destination}", flush=True)
-    _add_git_excludes(unit)
-
-
-def _install_projection(unit: MappingUnit, item: ManagedProjectItem) -> None:
-    """Copy hub bytes onto the replica, holding different replica bytes first.
-
-    Equal bytes are left in place. A missing projection is copied with no hold.
-    """
-    copy_hub_onto_replica(unit.managed_project_path, unit.target_project_path, item.name)
+        _emit_unit_items(unit, index, total, emit)
+        for item in unit.items:
+            if _item_recorded(replica_tree, item.name):
+                continue
+            live.seed_item(unit.target_project_path, item.name)
+            destination = unit.target_project_path / item.name
+            print(f"catch-up: copied {item.name} -> {destination}", flush=True)
+            replica_tree = live.baseline.get(replica_key, {})
+        if not started_with_baseline:
+            _mark_unit_done(units, index, on_line)
 
 
 def copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
@@ -373,32 +381,6 @@ def _item_recorded(tree: dict[str, PathState], item_name: str) -> bool:
     return any(rel_in_items(rel, [item_name]) for rel in tree)
 
 
-def _install_unrecorded_items(unit: MappingUnit, working: BaselineTrees) -> list[str]:
-    """Install items this replica has never recorded, holding colliding bytes.
-
-    Returns:
-        Item names installed onto the replica.
-    """
-    replica_key = str(unit.target_project_path)
-    replica_tree = working.get(replica_key, {})
-    names: list[str] = []
-    for item in unit.items:
-        if _item_recorded(replica_tree, item.name):
-            continue
-        destination = unit.target_project_path / item.name
-        _install_projection(unit, item)
-        names.append(item.name)
-        print(f"catch-up: copied {item.name} -> {destination}", flush=True)
-    if not names:
-        return names
-    hub_key = str(unit.managed_project_path)
-    hub_new = [name for name in names if not _item_recorded(working.get(hub_key, {}), name)]
-    if hub_new:
-        _merge_tree(working, unit.managed_project_path, scan_items(unit.managed_project_path, hub_new))
-    _merge_tree(working, unit.target_project_path, scan_items(unit.target_project_path, names))
-    return names
-
-
 def _emit_unit_items(
     unit: MappingUnit,
     index: int,
@@ -409,13 +391,6 @@ def _emit_unit_items(
         return
     for item in unit.items:
         on_progress(index, total, item.name)
-
-
-def _add_git_excludes(unit: MappingUnit) -> None:
-    manager = GitExcludeManager(unit.target_project_path)
-    if not manager.is_git_repo():
-        return
-    manager.write_entries({item.name for item in unit.items})
 
 
 def add_git_exclude(root: Path, rel: str) -> None:
