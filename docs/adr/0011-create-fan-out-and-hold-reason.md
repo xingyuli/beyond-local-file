@@ -2,7 +2,7 @@
 
 `revlink create` is item-add: copy into the hub, then fan out to every other target of that managed project (source replica excluded). Selective mappings all receive the subpath. That is the expand-phase form of “tell the daemon this path is a managed item.”
 
-If a non-source replica already has different bytes at that path, those bytes are stored as a held copy with hold reason `create-overwrite`, then the hub copy overwrites the replica. Equal bytes are left in place and recorded in-sync. WARNINGs print the hold-reason clause so a later resolve UI can show the same text.
+If a non-source replica already has different bytes at that path, those bytes are stored as a held copy with hold reason `create-overwrite`, then the hub copy overwrites the replica. Equal bytes are left in place and recorded in-sync. WARNINGs print the hold-reason clause so a later resolve UI can show the same text. The same hold-then-overwrite applies whenever hub bytes are installed onto a replica that differs (0028).
 
 ## Status
 

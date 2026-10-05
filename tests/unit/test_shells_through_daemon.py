@@ -348,7 +348,9 @@ def test_create_restore_remove_change_state_through_the_daemon(
     assert restored.exit_code == 0, restored.output
     assert not hub.exists()
     assert source.read_text() == "adopt me"
-    assert replica.read_text() == "adopt me"
+    assert not replica.exists()
+    assert "item.txt" not in exclude.read_text()
+    assert "item.txt" not in second_exclude.read_text()
     assert "- item.txt" not in config_path.read_text()
     assert "item.txt" not in _snapshot_path(config_path).read_text()
 

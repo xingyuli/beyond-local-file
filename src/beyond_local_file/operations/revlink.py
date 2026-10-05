@@ -340,6 +340,22 @@ class RestoreFormatter:
         """
         self._echo(f"Warning: could not delete managed copy at {path.as_posix()}")
 
+    def replica_copy_deleted(self, path: Path) -> None:
+        """Print a confirmation that another replica's projection was deleted.
+
+        Args:
+            path: Fan-out copy that was removed from another target project.
+        """
+        self._echo(f"Deleted replica copy: {path.as_posix()}")
+
+    def replica_copy_delete_failed(self, path: Path) -> None:
+        """Print a warning that another replica's projection could not be deleted.
+
+        Args:
+            path: Fan-out copy that could not be removed.
+        """
+        self._echo(f"Warning: could not delete replica copy at {path.as_posix()}")
+
     def git_exclude_removed(self, name: str) -> None:
         """Print a confirmation that *name* was removed from ``.git/info/exclude``.
 
@@ -844,13 +860,14 @@ class RestoreOperation:
     """Orchestrates the validate-cleanup workflow for a single projection path.
 
     The operation is the inverse of :class:`CreateOperation`. It deletes the
-    hub copy, leaves the requesting target's file in place, and leaves other
-    targets' copies as unmanaged files.
+    hub copy and other replicas' projections of the item, and leaves the
+    requesting target's file in place as an unmanaged local file.
 
     The operation proceeds through internal steps — ``_validate``, ``_replace``,
-    ``_verify``, ``_delete_managed``, ``_git_exclude``, and ``_remove_config`` —
-    each of which returns early with exit code 1 on failure (except cleanup steps
-    which are non-fatal). The public entry point is :meth:`run`.
+    ``_verify``, ``_delete_managed``, ``_delete_other_replicas``, ``_git_exclude``,
+    and ``_remove_config`` — each of which returns early with exit code 1 on
+    failure (except cleanup steps which are non-fatal). The public entry point
+    is :meth:`run`.
 
     Attributes:
         source: Absolute path to the projection in the CWD that will be left
@@ -885,8 +902,9 @@ class RestoreOperation:
         directory structure so the managed copy location mirrors the target
         layout exactly.  Then runs the pre-flight validation step.  When not
         in dry-run mode, proceeds through replace, verify, delete-managed,
-        git-exclude, and remove-config steps in order.  When in dry-run mode,
-        previews all steps via the formatter without modifying the filesystem.
+        undo-fan-out, git-exclude, and remove-config steps in order.  When in
+        dry-run mode, previews all steps via the formatter without modifying
+        the filesystem.
 
         Returns:
             ``0`` on success, ``1`` if any step fails.
@@ -916,6 +934,8 @@ class RestoreOperation:
 
             with log_duration("restore: delete-managed"):
                 self._delete_managed(managed)
+            with log_duration("restore: undo-fan-out"):
+                self._delete_other_replicas()
             with log_duration("restore: git-exclude"):
                 self._git_exclude()
             with log_duration("restore: config"):
@@ -941,6 +961,12 @@ class RestoreOperation:
         else:
             self.formatter.leaving_target_file(self.source)
         self.formatter.managed_copy_deleted(managed)
+        for replica_path in self._other_replica_paths():
+            if replica_path.exists() or replica_path.is_symlink():
+                self.formatter.replica_copy_deleted(replica_path)
+        self._git_exclude_preview()
+        if self._selective_targets():
+            self.formatter.config_entry_removed(self.rel_path.as_posix())
 
     # ------------------------------------------------------------------
     # Internal steps
@@ -1065,47 +1091,180 @@ class RestoreOperation:
         except OSError:
             self.formatter.managed_copy_delete_failed(managed)
 
-    def _git_exclude(self) -> int:
-        """Remove the source item from ``.git/info/exclude`` if inside a Git repository.
+    def _delete_other_replicas(self) -> None:
+        """Delete other replicas' projections of this item (undo create's fan-out).
 
-        Instantiates a :class:`~beyond_local_file.git_manager.GitExcludeManager`
-        for the project root (``context.cwd``).  If the directory is not a Git
-        repository the step is silently skipped.  Otherwise calls
-        :meth:`~beyond_local_file.git_manager.GitExcludeManager.remove_entries`
-        with a set containing ``rel_path.as_posix()`` and reports the outcome via the
-        formatter.  Using ``rel_path`` rather than ``source.name`` ensures the
-        entry matches what was written by :class:`CreateOperation` for nested
-        paths (e.g. ``.kiro/specs/foo`` instead of just ``foo``).
+        The requesting target's file is left in place. Missing paths are skipped.
+        Failure to delete one replica is a warning, not fatal.
+        """
+        for replica_path in self._other_replica_paths():
+            self._delete_replica_copy(replica_path)
+
+    def _delete_replica_copy(self, path: Path) -> None:
+        """Delete one fan-out copy at *path* if it exists.
+
+        Args:
+            path: Projection on another target of this managed project.
+        """
+        if not path.exists() and not path.is_symlink():
+            return
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            else:
+                shutil.rmtree(path)
+            self.formatter.replica_copy_deleted(path)
+        except OSError:
+            self.formatter.replica_copy_delete_failed(path)
+
+    def _mappings(self) -> list[Mapping]:
+        """Return this managed project's mappings, or an empty list with no context.
+
+        Returns:
+            Config mappings for the resolved project.
+        """
+        if self.context is None:
+            return []
+        return self.context.mappings or [self.context.matched_mapping]
+
+    def _participating_mappings(self) -> list[Mapping]:
+        """Return mappings that declare this item.
+
+        Sync-all mappings declare every item. Selective mappings declare the
+        item when it is in their subpath list.
+
+        Returns:
+            Mappings whose targets currently project this item.
+        """
+        entry = self.rel_path.as_posix()
+        return [mapping for mapping in self._mappings() if mapping.subpaths is None or entry in mapping.subpaths]
+
+    def _participating_replica_roots(self) -> list[Path]:
+        """Return unique target roots that currently project this item.
+
+        Returns:
+            Target-project roots in first-seen order, including the requesting
+            target when it participates.
+        """
+        seen: set[Path] = set()
+        roots: list[Path] = []
+        for mapping in self._participating_mappings():
+            for target in mapping.targets:
+                resolved = target.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                roots.append(target)
+        return roots
+
+    def _other_replica_roots(self) -> list[Path]:
+        """Return other target-project roots that declare this item.
+
+        Returns:
+            Unique target paths excluding the requesting replica (cwd).
+        """
+        if self.context is None:
+            return []
+        source = self.context.cwd.resolve()
+        return [root for root in self._participating_replica_roots() if root.resolve() != source]
+
+    def _other_replica_paths(self) -> list[Path]:
+        """Return other replicas' projection paths for this item.
+
+        Returns:
+            ``replica_root / rel_path`` for each other participating replica.
+        """
+        return [root / self.rel_path for root in self._other_replica_roots()]
+
+    def _selective_targets(self) -> set[Path]:
+        """Return targets of participating selective mappings.
+
+        Returns:
+            Every target that lists this item in a subpath list.
+        """
+        entry = self.rel_path.as_posix()
+        return {
+            target
+            for mapping in self._participating_mappings()
+            if mapping.subpaths is not None and entry in mapping.subpaths
+            for target in mapping.targets
+        }
+
+    def _git_exclude(self, replica_root: Path | None = None) -> int:
+        """Remove the item from ``.git/info/exclude`` on participating replicas.
+
+        When *replica_root* is omitted, every replica that stops projecting the
+        item is updated, including the requesting target whose file remains.
+        A directory that is not a Git repository is skipped. Nested paths use
+        ``rel_path.as_posix()`` so entries such as ``.kiro/specs/foo`` match
+        what :class:`CreateOperation` wrote.
 
         This step is non-fatal: it always returns ``0`` regardless of outcome.
+
+        Args:
+            replica_root: Target-project root to update. ``None`` means every
+                participating replica, or ``context.cwd`` when that list is empty.
 
         Returns:
             Always ``0``.
         """
         if self.context is None:
             return 0
-        manager = GitExcludeManager(self.context.cwd)
+        roots = [replica_root] if replica_root is not None else self._git_exclude_roots()
+        for root in roots:
+            self._git_exclude_at(root)
+        return 0
 
+    def _git_exclude_roots(self) -> list[Path]:
+        """Return replica roots whose git exclude should drop this item.
+
+        Returns:
+            Participating replica roots, always including cwd when context exists.
+        """
+        if self.context is None:
+            return []
+        roots = self._participating_replica_roots()
+        cwd = self.context.cwd
+        if not any(root.resolve() == cwd.resolve() for root in roots):
+            return [cwd, *roots]
+        return roots
+
+    def _git_exclude_at(self, replica_root: Path) -> None:
+        """Remove this item from one replica's ``.git/info/exclude`` if present.
+
+        Args:
+            replica_root: Target-project root to inspect as a Git repository.
+        """
+        manager = GitExcludeManager(replica_root)
         if not manager.is_git_repo():
-            return 0
-
+            return
         entry_name = self.rel_path.as_posix()
         removed = manager.remove_entries({entry_name})
-
         if entry_name in removed:
             self.formatter.git_exclude_removed(entry_name)
         else:
             self.formatter.git_exclude_not_found(entry_name)
 
-        return 0
+    def _git_exclude_preview(self) -> None:
+        """Emit dry-run git-exclude removals without writing exclude files."""
+        if self.context is None:
+            return
+        entry_name = self.rel_path.as_posix()
+        for replica_root in self._git_exclude_roots():
+            manager = GitExcludeManager(replica_root)
+            if not manager.is_git_repo():
+                continue
+            if entry_name in manager.read_entries():
+                self.formatter.git_exclude_removed(entry_name)
+            else:
+                self.formatter.git_exclude_not_found(entry_name)
 
     def _remove_config(self) -> None:
         """Remove the source item from every participating selective mapping.
 
-        Other targets keep their files, but those copies become unmanaged once
-        the subpath is dropped. Sync-all mappings have no subpath list and are
-        left unchanged. Nested paths use ``rel_path.as_posix()`` so entries
-        such as ``.kiro/specs/foo`` match.
+        Sync-all mappings have no subpath list and are left unchanged. Nested
+        paths use ``rel_path.as_posix()`` so entries such as ``.kiro/specs/foo``
+        match.
 
         This step is non-fatal: failures are silently ignored so that a config
         write error does not undo the already-completed restore.
@@ -1114,13 +1273,7 @@ class RestoreOperation:
             return
 
         entry_name = self.rel_path.as_posix()
-        mappings = self.context.mappings or [self.context.matched_mapping]
-        targets = {
-            target
-            for mapping in mappings
-            if mapping.subpaths is not None and entry_name in mapping.subpaths
-            for target in mapping.targets
-        }
+        targets = self._selective_targets()
         if not targets:
             return
 

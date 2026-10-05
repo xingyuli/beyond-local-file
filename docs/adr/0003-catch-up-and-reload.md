@@ -1,6 +1,6 @@
 # Fresh catch-up, update catch-up, explicit reload
 
-The daemon distinguishes two starts by whether a baseline exists for that managed project. No baseline: **fresh catch-up** — projections are made to match the managed project, then observation begins. Baseline present: **update catch-up** — only paths that differ from the baseline are queued (stale-base conflict still applies), then observation begins. A crash is always update catch-up; first 0.5.0 start is fresh.
+The daemon distinguishes two starts by whether a baseline exists for that managed project. No baseline: **fresh catch-up** — named install jobs make every projection match the managed project, then observation begins. Differing replica bytes are held first (0028). Baseline present: **update catch-up** — idle observe against that baseline queues only paths that differ (stale-base conflict still applies), then observation begins. Catch-up is not a third write engine (0030). A crash is always update catch-up; first 0.5.0 start is fresh.
 
 A new target project on an existing managed project is fresh **for that replica only**. Other replicas are not reset.
 

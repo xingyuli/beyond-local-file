@@ -79,6 +79,18 @@ class TestRestoreFormatterNoDryRun:
             self.formatter.managed_copy_delete_failed(Path("/managed/file.txt"))
         mock_echo.assert_called_once_with("Warning: could not delete managed copy at /managed/file.txt")
 
+    def test_replica_copy_deleted(self) -> None:
+        """replica_copy_deleted emits the expected message without prefix."""
+        with patch("click.echo") as mock_echo:
+            self.formatter.replica_copy_deleted(Path("/example/file.txt"))
+        mock_echo.assert_called_once_with("Deleted replica copy: /example/file.txt")
+
+    def test_replica_copy_delete_failed(self) -> None:
+        """replica_copy_delete_failed emits the expected warning without prefix."""
+        with patch("click.echo") as mock_echo:
+            self.formatter.replica_copy_delete_failed(Path("/example/file.txt"))
+        mock_echo.assert_called_once_with("Warning: could not delete replica copy at /example/file.txt")
+
     def test_git_exclude_removed(self) -> None:
         """git_exclude_removed emits the expected message without prefix.
 
@@ -179,6 +191,18 @@ class TestRestoreFormatterDryRun:
         with patch("click.echo") as mock_echo:
             self.formatter.managed_copy_delete_failed(Path("/managed/file.txt"))
         mock_echo.assert_called_once_with("[dry-run] Warning: could not delete managed copy at /managed/file.txt")
+
+    def test_replica_copy_deleted_dry_run(self) -> None:
+        """replica_copy_deleted emits [dry-run] prefix when dry_run=True."""
+        with patch("click.echo") as mock_echo:
+            self.formatter.replica_copy_deleted(Path("/example/file.txt"))
+        mock_echo.assert_called_once_with("[dry-run] Deleted replica copy: /example/file.txt")
+
+    def test_replica_copy_delete_failed_dry_run(self) -> None:
+        """replica_copy_delete_failed emits [dry-run] prefix when dry_run=True."""
+        with patch("click.echo") as mock_echo:
+            self.formatter.replica_copy_delete_failed(Path("/example/file.txt"))
+        mock_echo.assert_called_once_with("[dry-run] Warning: could not delete replica copy at /example/file.txt")
 
     def test_git_exclude_removed_dry_run(self) -> None:
         """git_exclude_removed emits [dry-run] prefix when dry_run=True.

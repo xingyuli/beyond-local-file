@@ -196,83 +196,117 @@ def _write_item_on_two_targets(
         tmp_path: Test root.
 
     Returns:
-        ``(config_path, managed_item, first_item, second_item, first_target, second_target)``.
+        ``(config_path, hub_item, alpha_item, example_item, alpha, example)``.
     """
-    managed = tmp_path / "managed"
-    first_target = tmp_path / "target-one"
-    second_target = tmp_path / "target-two"
-    for directory in (managed, first_target, second_target):
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
         directory.mkdir()
-    managed_item = managed / "item.txt"
-    first_item = first_target / "item.txt"
-    second_item = second_target / "item.txt"
-    managed_item.write_text("shared content")
-    first_item.write_text("shared content")
-    second_item.write_text("shared content")
+    hub_item = hub / "item.txt"
+    alpha_item = alpha / "item.txt"
+    example_item = example / "item.txt"
+    hub_item.write_text("shared content")
+    alpha_item.write_text("shared content")
+    example_item.write_text("shared content")
     config_path = tmp_path / "config.yml"
     config_path.write_text(
-        f"""managed:
-  target: [{first_target}, {second_target}]
+        f"""lab-app:
+  target: [{alpha}, {example}]
   subpath:
     - item.txt
 """
     )
-    return config_path, managed_item, first_item, second_item, first_target, second_target
+    return config_path, hub_item, alpha_item, example_item, alpha, example
 
 
-def test_revlink_restore_deletes_hub_and_leaves_other_targets_unmanaged(
+def test_revlink_restore_from_alpha_deletes_example_projection(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
-    """Restore deletes the hub copy, keeps this target's file, and leaves other copies."""
-    config_path, managed_item, first_item, second_item, first_target, _second_target = _write_item_on_two_targets(
-        tmp_path
+    """Restore from alpha deletes the hub and example copies; alpha's file remains."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
+        directory.mkdir()
+    (hub / "notes.md").write_text("shared notes")
+    (alpha / "notes.md").write_text("shared notes")
+    (example / "notes.md").write_text("shared notes")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: [{alpha}, {example}]
+  subpath:
+    - notes.md
+"""
     )
 
-    monkeypatch.chdir(first_target)
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "notes.md"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert not (hub / "notes.md").exists()
+    assert (alpha / "notes.md").is_file()
+    assert not (alpha / "notes.md").is_symlink()
+    assert (alpha / "notes.md").read_text() == "shared notes"
+    assert not (example / "notes.md").exists()
+    assert "subpath: []" in config_path.read_text()
+
+
+def test_revlink_restore_strips_git_exclude_on_every_replica(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Restore removes the git exclude on alpha (file remains) and example (file gone)."""
+    config_path, hub_item, alpha_item, example_item, alpha, example = _write_item_on_two_targets(tmp_path)
+    alpha_exclude = _make_git_repo(alpha)
+    alpha_exclude.write_text("# preserved\nitem.txt\n")
+    example_exclude = _make_git_repo(example)
+    example_exclude.write_text("# preserved\nitem.txt\n")
+
+    monkeypatch.chdir(alpha)
     result = invoke_with_daemon(config_path, ["revlink", "restore", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
-    assert not managed_item.exists()
-    assert first_item.is_file()
-    assert not first_item.is_symlink()
-    assert first_item.read_text() == "shared content"
-    assert second_item.is_file()
-    assert not second_item.is_symlink()
-    assert second_item.read_text() == "shared content"
-    assert "subpath: []" in config_path.read_text()
+    assert not hub_item.exists()
+    assert alpha_item.is_file()
+    assert not example_item.exists()
+    assert "item.txt" not in alpha_exclude.read_text()
+    assert "# preserved" in alpha_exclude.read_text()
+    assert "item.txt" not in example_exclude.read_text()
+    assert "# preserved" in example_exclude.read_text()
 
 
 def test_revlink_restore_unregisters_item_from_every_participating_mapping(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
-    """Restore drops the subpath from every mapping so leftover copies are unmanaged."""
-    managed = tmp_path / "managed"
-    first_target = tmp_path / "target-one"
-    second_target = tmp_path / "target-two"
-    for directory in (managed, first_target, second_target):
+    """Restore drops the subpath from every mapping and deletes other replicas' copies."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
         directory.mkdir()
-    (managed / "item.txt").write_text("shared content")
-    (first_target / "item.txt").write_text("shared content")
-    (second_target / "item.txt").write_text("shared content")
+    (hub / "item.txt").write_text("shared content")
+    (alpha / "item.txt").write_text("shared content")
+    (example / "item.txt").write_text("shared content")
     config_path = tmp_path / "config.yml"
     config_path.write_text(
-        f"""managed:
-  - target: {first_target}
+        f"""lab-app:
+  - target: {alpha}
     subpath:
       - item.txt
-  - target: {second_target}
+  - target: {example}
     subpath:
       - item.txt
 """
     )
 
-    monkeypatch.chdir(first_target)
+    monkeypatch.chdir(alpha)
     result = invoke_with_daemon(config_path, ["revlink", "restore", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
-    assert not (managed / "item.txt").exists()
-    assert (first_target / "item.txt").read_text() == "shared content"
-    assert (second_target / "item.txt").read_text() == "shared content"
+    assert not (hub / "item.txt").exists()
+    assert (alpha / "item.txt").read_text() == "shared content"
+    assert not (example / "item.txt").exists()
     updated = config_path.read_text()
     assert "subpath: []" in updated
     assert "- item.txt" not in updated
@@ -282,56 +316,146 @@ def test_revlink_restore_leaves_directory_in_this_target(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
     """Restore deletes a hub directory and leaves this target's real tree."""
-    managed = tmp_path / "managed"
-    target = tmp_path / "target"
-    managed.mkdir()
-    target.mkdir()
-    hub_dir = managed / "hooks"
-    target_dir = target / "hooks"
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    hub_dir = hub / "hooks"
+    alpha_dir = alpha / "hooks"
     hub_dir.mkdir()
-    target_dir.mkdir()
+    alpha_dir.mkdir()
     (hub_dir / "hook.json").write_text('{"on": "save"}')
-    (target_dir / "hook.json").write_text('{"on": "save"}')
+    (alpha_dir / "hook.json").write_text('{"on": "save"}')
     config_path = tmp_path / "config.yml"
     config_path.write_text(
-        f"""managed:
-  target: {target}
+        f"""lab-app:
+  target: {alpha}
   subpath:
     - hooks
 """
     )
 
-    monkeypatch.chdir(target)
+    monkeypatch.chdir(alpha)
     result = invoke_with_daemon(config_path, ["revlink", "restore", "hooks"], isolated_home)
 
     assert result.exit_code == 0, result.output
     assert not hub_dir.exists()
-    assert target_dir.is_dir()
-    assert not target_dir.is_symlink()
-    assert (target_dir / "hook.json").read_text() == '{"on": "save"}'
+    assert alpha_dir.is_dir()
+    assert not alpha_dir.is_symlink()
+    assert (alpha_dir / "hook.json").read_text() == '{"on": "save"}'
+
+
+def test_revlink_restore_deletes_other_replica_directory(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Restore from alpha deletes example's directory projection of the item."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
+        directory.mkdir()
+    for root in (hub, alpha, example):
+        hooks = root / "hooks"
+        hooks.mkdir()
+        (hooks / "hook.json").write_text('{"on": "save"}')
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: [{alpha}, {example}]
+  subpath:
+    - hooks
+"""
+    )
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "hooks"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert not (hub / "hooks").exists()
+    assert (alpha / "hooks" / "hook.json").read_text() == '{"on": "save"}'
+    assert not (example / "hooks").exists()
+
+
+def test_revlink_restore_dry_run_previews_other_replica_without_touching_disks(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Dry-run restore previews example's delete and exclude strip without mutating."""
+    config_path, hub_item, alpha_item, example_item, alpha, example = _write_item_on_two_targets(tmp_path)
+    alpha_exclude = _make_git_repo(alpha)
+    alpha_exclude.write_text("# preserved\nitem.txt\n")
+    example_exclude = _make_git_repo(example)
+    example_exclude.write_text("# preserved\nitem.txt\n")
+    hub_bytes = hub_item.read_text()
+    example_bytes = example_item.read_text()
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "--dry-run", "item.txt"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "Deleted replica copy:" in result.output
+    assert str(example_item) in result.output
+    assert hub_item.read_text() == hub_bytes
+    assert alpha_item.read_text() == "shared content"
+    assert example_item.read_text() == example_bytes
+    assert "item.txt" in alpha_exclude.read_text()
+    assert "item.txt" in example_exclude.read_text()
+    assert "- item.txt" in config_path.read_text()
+
+
+def test_revlink_restore_leftover_symlink_still_deletes_other_replica(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Leftover symlink at alpha is materialized; example's fan-out copy is deleted."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
+        directory.mkdir()
+    hub_item = hub / "notes.md"
+    hub_item.write_text("shared notes")
+    (alpha / "notes.md").symlink_to(hub_item)
+    (example / "notes.md").write_text("shared notes")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: [{alpha}, {example}]
+  subpath:
+    - notes.md
+"""
+    )
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["revlink", "restore", "notes.md"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert not hub_item.exists()
+    alpha_item = alpha / "notes.md"
+    assert alpha_item.is_file()
+    assert not alpha_item.is_symlink()
+    assert alpha_item.read_text() == "shared notes"
+    assert not (example / "notes.md").exists()
 
 
 def test_remove_deletes_hub_copy_and_every_projection(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
     """Remove deletes the hub copy and every target projection of that item."""
-    config_path, managed_item, first_item, second_item, first_target, _second_target = _write_item_on_two_targets(
-        tmp_path
-    )
-    first_exclude = _make_git_repo(first_target)
-    first_exclude.write_text("# preserved\nitem.txt\n")
-    second_exclude = _make_git_repo(_second_target)
-    second_exclude.write_text("# preserved\nitem.txt\n")
+    config_path, hub_item, alpha_item, example_item, alpha, example = _write_item_on_two_targets(tmp_path)
+    alpha_exclude = _make_git_repo(alpha)
+    alpha_exclude.write_text("# preserved\nitem.txt\n")
+    example_exclude = _make_git_repo(example)
+    example_exclude.write_text("# preserved\nitem.txt\n")
 
-    monkeypatch.chdir(first_target)
+    monkeypatch.chdir(alpha)
     result = invoke_with_daemon(config_path, ["remove", "item.txt"], isolated_home)
 
     assert result.exit_code == 0, result.output
-    assert not managed_item.exists()
-    assert not first_item.exists()
-    assert not second_item.exists()
-    assert "item.txt" not in first_exclude.read_text()
-    assert "item.txt" not in second_exclude.read_text()
+    assert not hub_item.exists()
+    assert not alpha_item.exists()
+    assert not example_item.exists()
+    assert "item.txt" not in alpha_exclude.read_text()
+    assert "item.txt" not in example_exclude.read_text()
     assert "subpath: []" in config_path.read_text()
 
 
@@ -339,28 +463,28 @@ def test_remove_deletes_directory_hub_and_projections(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
     """Remove deletes a hub directory tree and every target copy of it."""
-    managed = tmp_path / "managed"
-    first_target = tmp_path / "target-one"
-    second_target = tmp_path / "target-two"
-    for directory in (managed, first_target, second_target):
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
         directory.mkdir()
-    for root in (managed, first_target, second_target):
+    for root in (hub, alpha, example):
         hooks = root / "hooks"
         hooks.mkdir()
         (hooks / "hook.json").write_text('{"on": "save"}')
     config_path = tmp_path / "config.yml"
     config_path.write_text(
-        f"""managed:
-  target: [{first_target}, {second_target}]
+        f"""lab-app:
+  target: [{alpha}, {example}]
   subpath:
     - hooks
 """
     )
 
-    monkeypatch.chdir(first_target)
+    monkeypatch.chdir(alpha)
     result = invoke_with_daemon(config_path, ["remove", "hooks"], isolated_home)
 
     assert result.exit_code == 0, result.output
-    assert not (managed / "hooks").exists()
-    assert not (first_target / "hooks").exists()
-    assert not (second_target / "hooks").exists()
+    assert not (hub / "hooks").exists()
+    assert not (alpha / "hooks").exists()
+    assert not (example / "hooks").exists()

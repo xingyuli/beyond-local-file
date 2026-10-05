@@ -220,9 +220,10 @@ def revlink_create(ctx, path, dry_run, force):
 def revlink_restore(ctx, path, dry_run):
     """Stop managing PATH and leave the target file in place.
 
-    Deletes the managed copy, leaves PATH as a regular file or directory,
-    leaves other targets' copies as unmanaged files, removes the item from
-    .git/info/exclude, and removes the entry from the config subpath list if
+    Inverse of create's fan-out: deletes the managed copy and other replicas'
+    projections of the item, leaves PATH as a regular file or directory,
+    removes the item from .git/info/exclude on every replica that stops
+    projecting it, and removes the entry from the config subpath list if
     selective sync is active.
     """
     cwd = _cwd_containing(ctx, path, resolve_source=False)

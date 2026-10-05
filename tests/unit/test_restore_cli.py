@@ -96,6 +96,15 @@ def test_restore_help_does_not_show_force_option() -> None:
     assert "--force" not in result.output
 
 
+def test_restore_help_describes_undo_fan_out() -> None:
+    """Restore help is the inverse of create's fan-out, not leave-other-copies."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["revlink", "restore", "--help"])
+    assert result.exit_code == 0
+    assert "fan-out" in result.output.lower()
+    assert "unmanaged files" not in result.output.lower()
+
+
 # ---------------------------------------------------------------------------
 # Requirement 1.4 — --force flag is rejected by restore
 # ---------------------------------------------------------------------------

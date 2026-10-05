@@ -632,12 +632,14 @@ With `--dry-run`:
 ## `revlink restore` — Stop Managing a Path
 
 The inverse of `revlink create`. Given a path in the current working directory that is a
-managed projection, `revlink restore` deletes the managed (hub) copy, leaves PATH as a
-regular file or directory, leaves other targets' copies as unmanaged files, and removes
-the item from `.git/info/exclude` and the config subpath list.
+managed projection, `revlink restore` undoes create's fan-out: it deletes the managed
+(hub) copy and other replicas' projections of that item, leaves PATH as a regular file or
+directory, and removes the item from `.git/info/exclude` on every replica that stops
+projecting it and from the config subpath list.
 
 Leftover blf symlinks from older versions are still restorable: the symlink is removed and
-the managed content is copied back as a regular file.
+the managed content is copied back as a regular file. Other replicas' projections of the
+item are still deleted.
 
 ### Syntax
 
@@ -664,12 +666,13 @@ blf revlink restore [OPTIONS] PATH
 3. Validates the path (must exist as a regular file, directory, or leftover symlink; managed copy must exist).
 4. Leaves the requesting target's file in place (or, for a leftover symlink, replaces it with a real copy).
 5. Deletes the managed copy (non-fatal if this fails — a warning is printed and the restore is still considered successful).
-6. Removes the item name from `.git/info/exclude` if the current directory is a Git repository.
-7. If the matched mapping uses selective projection (`subpath` list), removes the item name from that list in the mapping file.
+6. Deletes other replicas' projections of that item (the same destination set create fans out to).
+7. Removes the item name from `.git/info/exclude` on every replica that stops projecting the item, including the requesting target whose file remains.
+8. If the matched mapping uses selective projection (`subpath` list), removes the item name from that list in the mapping file.
 
 #### Terminal
 
-On a terminal, `revlink restore` opens a shell screen and leaves it up until you close it, including a fast restore. The header names `revlink restore` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Leaving target file in place: …`, `Managed copy deleted: …`, and the rest, or the error text).
+On a terminal, `revlink restore` opens a shell screen and leaves it up until you close it, including a fast restore. The header names `revlink restore` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Leaving target file in place: …`, `Managed copy deleted: …`, `Deleted replica copy: …` when other replicas had the item, and the rest, or the error text).
 
 The input line is hidden except while a typed answer is required. It sits directly above the hint.
 
@@ -698,8 +701,9 @@ blf -c ~/my-files/config.yml revlink restore myfile.txt
 ### Output
 
 ```
-Leaving target file in place: /Users/user/project/myfile.txt
-✓ Managed copy deleted: /Users/user/my-files/project/myfile.txt
+Leaving target file in place: /Users/user/alpha/myfile.txt
+✓ Managed copy deleted: /Users/user/lab-app/myfile.txt
+Deleted replica copy: /Users/user/example/myfile.txt
 Removed 'myfile.txt' from .git/info/exclude
 Removed 'myfile.txt' from config subpath list
 ```
@@ -707,8 +711,11 @@ Removed 'myfile.txt' from config subpath list
 With `--dry-run`:
 
 ```
-[dry-run] Leaving target file in place: /Users/user/project/myfile.txt
-[dry-run] ✓ Managed copy deleted: /Users/user/my-files/project/myfile.txt
+[dry-run] Leaving target file in place: /Users/user/alpha/myfile.txt
+[dry-run] ✓ Managed copy deleted: /Users/user/lab-app/myfile.txt
+[dry-run] Deleted replica copy: /Users/user/example/myfile.txt
+[dry-run] Removed 'myfile.txt' from .git/info/exclude
+[dry-run] Removed 'myfile.txt' from config subpath list
 ```
 
 ### Error Cases

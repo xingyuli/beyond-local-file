@@ -93,11 +93,11 @@ The last recorded hashes and presence for each path on a managed project and its
 _Avoid_: Checkpoint, watermark, sync-state
 
 **Fresh catch-up**:
-Daemon start with no baseline in the set run directory: every projection is made to match the managed project. IPC is already up (phase ``catch-up``); live observation begins at phase ``ready``.
+Daemon start with no baseline in the set run directory: named install jobs make every projection match the managed project. A replica that already has different bytes is held, then overwritten. IPC is already up (phase ``catch-up``); live observation begins at phase ``ready``.
 _Avoid_: Reset, initial sync, first sync
 
 **Update catch-up**:
-Daemon start (or reload) with a baseline: only paths that differ from the baseline are queued. IPC is already up; live observation begins at phase ``ready``. Not a reset.
+Daemon start (or reload) with a baseline: idle observe against that baseline queues only paths that differ. IPC is already up; live observation begins at phase ``ready``. Not a reset.
 _Avoid_: Resync, full sync, recover
 
 **Reload**:
@@ -105,7 +105,7 @@ Classify external mapping edits by diffing the configuration set's mapping files
 _Avoid_: Hot reload, config watch, live config
 
 **Path change**:
-A typed unit of work on a path under an item: create, update, or delete.
+A typed unit of work on a path under an item: create, update, or delete. Idle observe discovers them; a shell request names them. Both apply the same way.
 _Avoid_: Event, delta, mutation
 
 **Mailbox**:
@@ -117,7 +117,7 @@ After a successful hub apply, copy or delete that generation onto every in-sync 
 _Avoid_: Broadcast, replicate, push, echo
 
 **Generation**:
-A per-path counter on the hub, incremented once per successful hub apply. A delete wins on the live path if the hub generation is at most 3 ahead of the replica's base.
+A per-path counter on the hub. Generation 0 is the first version the tool observed (install, fresh catch-up, rescan). It increments once per successful hub apply after that. A delete wins on the live path if the hub generation is at most 3 ahead of the replica's base.
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
@@ -125,7 +125,7 @@ Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
-A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (item-add fan-out replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
+A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
@@ -157,7 +157,7 @@ Producing a confirmed fact by folding one differing replica at a time into the c
 _Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict, replica switcher
 
 **Mapping change**:
-A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove.
+A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove. A mutating shell splices the mapping yaml; apply writes disks.
 _Avoid_: Config diff, reload delta
 
 **Subpath**:
@@ -177,8 +177,16 @@ The pure structural transformation that converts a config with M mappings and N 
 _Avoid_: Translation, flattening, config parsing
 
 **Revlink**:
-The reverse adoption workflow: copy an item that already exists in a target project into the managed project, leave the target path as a real file, and register it as a projection. The inverse unregisters the item and leaves the target file in place. Restore and remove resolve the hub from PATH's contribution source when several managed projects target the working directory. Create of a new item there interviews in the shell for a hub; an already-covered path uses that owner without a prompt.
+Create copies an item that already exists in a target project into the managed project, fans it out to the other targets of that hub, leaves the requesting target's file in place, and registers it as a projection. Restore is the inverse. Restore and remove resolve the hub from PATH's contribution source when several managed projects target the working directory. Create of a new item there interviews in the shell for a hub; an already-covered path uses that owner without a prompt.
 _Avoid_: Adopt, import, reverse sync
+
+**Restore**:
+The inverse of create: unregister the item, delete the hub copy and the fan-out projections, leave the requesting target's file in place as an unmanaged local file.
+_Avoid_: unadopt, reverse sync, unlink
+
+**Remove**:
+Delete the hub copy and every projection, including the requesting target's file, and drop the subpath.
+_Avoid_: unlink, unmap
 
 **Git exclude**:
 An entry in a target project's `.git/info/exclude` that prevents Git from tracking a projected item. The tool maintains these entries automatically alongside projections.
@@ -202,4 +210,4 @@ A yaml file already loaded by a running set is served by that process (``-c`` is
 
 Idle observe is recorded in the idle log. A shell request and every step it caused are recorded in the request log. Process start, the catch-up that belongs to start, ready, and stop are recorded in the daemon log. Stamps are written at millisecond resolution. ``blf logs`` follows the merge and prefixes each line with its record. Request stdout captured for the CLI is not a substitute. See 0015, 0020, 0021, and 0022.
 
-The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating work on that queue (shells routed by mapping snapshot / contribution source; resolve from the resolve UI). A mutating shell applies the mailbox (no scan) then the op; it does not start an observe. On a terminal the shell screen stays up for the request. The hint names the keys for the current state: interrupt before send or while running, Enter to confirm an interrupt or Esc to resume, close after it finishes. Reload's isolation ack is Enter to continue. A confirmed interrupt cancels a running request. Closing a finished screen prints the plain result. Ctrl+C also closes a finished screen and is not listed. On status, ``o`` opens the resolve UI and closes. Non-TTY: result only, no screen. See 0023. After persist, live observation continues from the new baseline without a reload scan. ``daemon reload`` catch-up jobs run only for worker units whose mappings changed. Two worker units splicing the same mapping yaml or ``.git/info/exclude`` take a lock per file so both writes survive.
+The accept thread binds the port and answers ``status``. It does not hash. Each worker unit has its own thread: idle observe of **that** unit's trees (15 s from the end of that unit's last idle observe, units staggered) and mutating work on that queue (shells routed by mapping snapshot / contribution source; resolve from the resolve UI). Idle observe discovers path changes and applies them. A mutating shell applies the mailbox (no scan) then the named job; it does not start an observe. Both wrappers share one apply. See 0030. On a terminal the shell screen stays up for the request. The hint names the keys for the current state: interrupt before send or while running, Enter to confirm an interrupt or Esc to resume, close after it finishes. Reload's isolation ack is Enter to continue. A confirmed interrupt cancels a running request. Closing a finished screen prints the plain result. Ctrl+C also closes a finished screen and is not listed. On status, ``o`` opens the resolve UI and closes. Non-TTY: result only, no screen. See 0023. After persist, live observation continues from the new baseline without a reload scan. ``daemon reload`` catch-up jobs run only for worker units whose mappings changed. Two worker units splicing the same mapping yaml or ``.git/info/exclude`` take a lock per file so both writes survive.
