@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from beyond_local_file.git_manager import GitExcludeManager
-from beyond_local_file.held import HELD_DIR
+from beyond_local_file.held import HELD_DIR, REASON_CREATE_OVERWRITE, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.processing import MappingUnit
+from beyond_local_file.model.processing import ManagedProjectItem, MappingUnit
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.projection import copy_projection
 from beyond_local_file.sync_state import compute_file_hash
@@ -21,6 +21,7 @@ from .store import (
     BaselineTrees,
     PathState,
     path_state,
+    state_equal,
 )
 
 type ProgressFn = Callable[[int, int, str], None]
@@ -276,6 +277,8 @@ def _update_catch_up(
             working[replica_key] = scan_items(unit.target_project_path, item_names)
         else:
             _emit_unit_items(unit, index, total, emit)
+            if _install_unrecorded_items(unit, working):
+                _add_git_excludes(unit)
     live = LiveSync(projects, working, last_seen_from_baseline=True)
     live.tick(reason="catch-up")
     live.apply_frozen_mismatches()
@@ -301,9 +304,76 @@ def _fresh_catch_up_unit(
         if on_progress is not None:
             on_progress(index, total, item.name)
         destination = unit.target_project_path / item.name
-        copy_projection(item.path, destination)
+        _install_projection(unit, item)
         print(f"catch-up: copied {item.name} -> {destination}", flush=True)
     _add_git_excludes(unit)
+
+
+def _install_projection(unit: MappingUnit, item: ManagedProjectItem) -> None:
+    """Copy hub bytes onto the replica, holding different replica bytes first.
+
+    Equal bytes are left in place. A missing projection is copied with no hold.
+    """
+    destination = unit.target_project_path / item.name
+    source_ready = item.path.exists() or item.path.is_symlink()
+    dest_ready = destination.exists() or destination.is_symlink()
+    if dest_ready and source_ready and _item_matches(unit.managed_project_path, unit.target_project_path, item.name):
+        return
+    if dest_ready and source_ready:
+        replica = unit.target_project_path
+        clause = reason_clause(
+            REASON_CREATE_OVERWRITE,
+            path=item.name,
+            replica=replica.as_posix(),
+        )
+        slot = store_held_copy(
+            unit.managed_project_path,
+            rel_path=Path(item.name),
+            source=destination,
+            replica=replica,
+            reason=REASON_CREATE_OVERWRITE,
+        )
+        print(f"WARNING: {clause}", flush=True)
+        print(f"Held at {slot.as_posix()}", flush=True)
+    copy_projection(item.path, destination)
+
+
+def _item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
+    hub_tree = scan_items(hub_root, [item_name])
+    replica_tree = scan_items(replica_root, [item_name])
+    if set(hub_tree) != set(replica_tree):
+        return False
+    return all(state_equal(hub_tree[rel], replica_tree[rel]) for rel in hub_tree)
+
+
+def _item_recorded(tree: dict[str, PathState], item_name: str) -> bool:
+    return any(rel_in_items(rel, [item_name]) for rel in tree)
+
+
+def _install_unrecorded_items(unit: MappingUnit, working: BaselineTrees) -> list[str]:
+    """Install items this replica has never recorded, holding colliding bytes.
+
+    Returns:
+        Item names installed onto the replica.
+    """
+    replica_key = str(unit.target_project_path)
+    replica_tree = working.get(replica_key, {})
+    names: list[str] = []
+    for item in unit.items:
+        if _item_recorded(replica_tree, item.name):
+            continue
+        destination = unit.target_project_path / item.name
+        _install_projection(unit, item)
+        names.append(item.name)
+        print(f"catch-up: copied {item.name} -> {destination}", flush=True)
+    if not names:
+        return names
+    hub_key = str(unit.managed_project_path)
+    hub_new = [name for name in names if not _item_recorded(working.get(hub_key, {}), name)]
+    if hub_new:
+        _merge_tree(working, unit.managed_project_path, scan_items(unit.managed_project_path, hub_new))
+    _merge_tree(working, unit.target_project_path, scan_items(unit.target_project_path, names))
+    return names
 
 
 def _emit_unit_items(

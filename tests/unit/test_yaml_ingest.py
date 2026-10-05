@@ -7,11 +7,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
+from beyond_local_file.held import list_held_copies
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
-from tests.unit.test_daemon import _pid_alive, _read_pid, _snapshot_path
+from tests.unit.test_daemon import _baseline_dir, _pid_alive, _read_pid, _snapshot_path
 
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
@@ -24,6 +26,25 @@ def _wait_until(predicate, *, timeout: float = _READY_WAIT_S) -> None:
             return
         time.sleep(_POLL_S)
     raise TimeoutError("condition was not met")
+
+
+def _disk_baseline(config_path: Path) -> dict:
+    """Read persisted item documents, bypassing this process's baseline cache."""
+    trees: dict = {}
+    root = _baseline_dir(config_path)
+    if not root.is_dir():
+        return trees
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        part = data.get("trees") if isinstance(data, dict) else None
+        if not isinstance(part, dict):
+            continue
+        for replica, paths in part.items():
+            if isinstance(paths, dict):
+                trees.setdefault(str(replica), {}).update(paths)
+    return trees
 
 
 def _write_selective_workspace(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Path]:
@@ -218,30 +239,73 @@ def test_adding_a_target_fans_hub_onto_that_replica_only(
     ingest_env: dict[str, str],
 ) -> None:
     """A new target gets a fresh catch-up; other replicas are not reset."""
-    managed = tmp_path / "proj-0"
-    target_a = tmp_path / "target-a"
-    target_b = tmp_path / "target-b"
-    for path in (managed, target_a, target_b):
+    managed = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for path in (managed, alpha, example):
         path.mkdir()
-    (managed / "shared.txt").write_text("hub-0")
+    (managed / "notes.md").write_text("canonical")
     config_path = tmp_path / "config.yml"
-    config_path.write_text(f"proj-0: {target_a}\n")
+    config_path.write_text(f"lab-app: {alpha}\n")
     try:
         start_daemon(config_path, ingest_env)
         stopped = invoke_cli(["--config", str(config_path), "daemon", "stop"], env=ingest_env)
         assert stopped.exit_code == 0, stopped.output
-        (target_a / "shared.txt").write_text("target-a-edit")
+        (alpha / "notes.md").write_text("alpha-edit")
+        (example / "notes.md").write_text("example-draft")
 
-        config_path.write_text(f"proj-0:\n  - {target_a}\n  - {target_b}\n")
+        config_path.write_text(f"lab-app:\n  - {alpha}\n  - {example}\n")
         result = _invoke_start(config_path, ingest_env)
         assert result.exit_code == 0, result.output
         pid = _read_pid(config_path)
         assert pid is not None
         assert _pid_alive(pid)
-        _wait_until((target_b / "shared.txt").is_file)
-        assert (target_b / "shared.txt").read_text() == "hub-0"
-        assert (target_a / "shared.txt").read_text() == "target-a-edit"
-        assert (managed / "shared.txt").read_text() == "hub-0"
+        _wait_until((example / "notes.md").is_file)
+        assert (alpha / "notes.md").read_text() == "alpha-edit"
+        copies = list_held_copies(managed)
+        assert len(copies) == 1
+        assert copies[0].reason == "create-overwrite"
+        assert copies[0].path == "notes.md"
+        assert copies[0].replica == example.as_posix()
+        assert (copies[0].slot / "content").read_text() == "example-draft"
+        assert (example / "notes.md").read_text() == (managed / "notes.md").read_text()
+    finally:
+        stop_daemon(config_path, ingest_env)
+
+
+def test_adding_a_target_overwrites_with_hub_when_existing_replica_matches(
+    tmp_path: Path,
+    ingest_env: dict[str, str],
+) -> None:
+    """Target-add holds colliding bytes on the new replica, then writes the hub copy."""
+    managed = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for path in (managed, alpha, example):
+        path.mkdir()
+    (managed / "notes.md").write_text("canonical")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app: {alpha}\n")
+    try:
+        start_daemon(config_path, ingest_env)
+        stopped = invoke_cli(["--config", str(config_path), "daemon", "stop"], env=ingest_env)
+        assert stopped.exit_code == 0, stopped.output
+        (example / "notes.md").write_text("example-draft")
+
+        config_path.write_text(f"lab-app:\n  - {alpha}\n  - {example}\n")
+        result = _invoke_start(config_path, ingest_env)
+        assert result.exit_code == 0, result.output
+        _wait_until(lambda: (example / "notes.md").is_file and (example / "notes.md").read_text() == "canonical")
+        assert (example / "notes.md").read_text() == "canonical"
+        assert (alpha / "notes.md").read_text() == "canonical"
+        assert (managed / "notes.md").read_text() == "canonical"
+        copies = list_held_copies(managed)
+        assert len(copies) == 1
+        assert copies[0].reason == "create-overwrite"
+        assert (copies[0].slot / "content").read_text() == "example-draft"
+        status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=ingest_env)
+        assert "create-overwrite" in status.output
+        assert "notes.md" in status.output
     finally:
         stop_daemon(config_path, ingest_env)
 
@@ -297,6 +361,122 @@ def test_adding_subpath_with_hub_file_fans_out_without_prompt(
         assert (target / "extra.txt").read_text() == "extra-hub"
         assert (target / "shared.txt").read_text() == "hub-0"
         assert (managed / "extra.txt").read_text() == "extra-hub"
+        assert list_held_copies(managed) == ()
+    finally:
+        stop_daemon(config_path, ingest_env)
+
+
+def test_adding_subpath_holds_colliding_replica_bytes_then_overwrites(
+    tmp_path: Path,
+    ingest_env: dict[str, str],
+) -> None:
+    """Item-add holds different replica bytes, then writes the hub copy at generation 0."""
+    managed = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    managed.mkdir()
+    alpha.mkdir()
+    (managed / "shared.txt").write_text("hub-0")
+    (managed / "notes.md").write_text("canonical")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "lab-app:",
+                f"  target: {alpha}",
+                "  subpath:",
+                "    - shared.txt",
+                "",
+            ]
+        )
+    )
+    try:
+        start_daemon(config_path, ingest_env)
+        stopped = invoke_cli(["--config", str(config_path), "daemon", "stop"], env=ingest_env)
+        assert stopped.exit_code == 0, stopped.output
+        (alpha / "notes.md").write_text("my draft")
+
+        config_path.write_text(
+            "\n".join(
+                [
+                    "lab-app:",
+                    f"  target: {alpha}",
+                    "  subpath:",
+                    "    - shared.txt",
+                    "    - notes.md",
+                    "",
+                ]
+            )
+        )
+        result = _invoke_start(config_path, ingest_env)
+        assert result.exit_code == 0, result.output
+        _wait_until(lambda: (alpha / "notes.md").is_file and (alpha / "notes.md").read_text() == "canonical")
+        assert (alpha / "notes.md").read_text() == "canonical"
+        assert (managed / "notes.md").read_text() == "canonical"
+        assert (alpha / "shared.txt").read_text() == "hub-0"
+        copies = list_held_copies(managed)
+        assert len(copies) == 1
+        assert copies[0].reason == "create-overwrite"
+        assert copies[0].path == "notes.md"
+        assert (copies[0].slot / "content").read_text() == "my draft"
+        trees = _disk_baseline(config_path)
+        assert trees[str(alpha.resolve())]["notes.md"]["gen"] == 0
+        assert trees[str(managed.resolve())]["notes.md"]["gen"] == 0
+        status = invoke_cli(["--config", str(config_path), "daemon", "status"], env=ingest_env)
+        assert "Held copies:" in status.output
+        assert "create-overwrite" in status.output
+    finally:
+        stop_daemon(config_path, ingest_env)
+
+
+def test_adding_subpath_leaves_equal_replica_bytes_without_hold(
+    tmp_path: Path,
+    ingest_env: dict[str, str],
+) -> None:
+    """Item-add of equal replica bytes leaves them in place with no hold."""
+    managed = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    managed.mkdir()
+    alpha.mkdir()
+    (managed / "shared.txt").write_text("hub-0")
+    (managed / "notes.md").write_text("canonical")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "lab-app:",
+                f"  target: {alpha}",
+                "  subpath:",
+                "    - shared.txt",
+                "",
+            ]
+        )
+    )
+    try:
+        start_daemon(config_path, ingest_env)
+        stopped = invoke_cli(["--config", str(config_path), "daemon", "stop"], env=ingest_env)
+        assert stopped.exit_code == 0, stopped.output
+        (alpha / "notes.md").write_text("canonical")
+
+        config_path.write_text(
+            "\n".join(
+                [
+                    "lab-app:",
+                    f"  target: {alpha}",
+                    "  subpath:",
+                    "    - shared.txt",
+                    "    - notes.md",
+                    "",
+                ]
+            )
+        )
+        result = _invoke_start(config_path, ingest_env)
+        assert result.exit_code == 0, result.output
+        _wait_until((alpha / "notes.md").is_file)
+        assert (alpha / "notes.md").read_text() == "canonical"
+        assert (managed / "notes.md").read_text() == "canonical"
+        assert list_held_copies(managed) == ()
+        trees = _disk_baseline(config_path)
+        assert trees[str(alpha.resolve())]["notes.md"]["gen"] == 0
     finally:
         stop_daemon(config_path, ingest_env)
 

@@ -17,6 +17,7 @@ from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
 from beyond_local_file.daemon.process import singleton_set_id, state_dir
+from beyond_local_file.held import list_held_copies
 
 _WORKER_FLAG = "--worker"
 _READY_WAIT_S = 15.0
@@ -362,6 +363,7 @@ def test_fresh_catch_up_copies_hub_trees_and_records_baseline(
     assert (managed / "shared.txt").read_text() == "hub-0"
     assert _baseline_dir(config_path).is_dir()
     assert any(_baseline_dir(config_path).rglob("*"))
+    assert list_held_copies(managed) == ()
 
 
 def test_fresh_catch_up_preserves_nested_symlinks_in_directory_item(
@@ -512,7 +514,7 @@ def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
     daemon_workspace: tuple[Path, list[Path], list[Path]],
     daemon_env: dict[str, str],
 ) -> None:
-    """No baseline means hub is truth: target edits are not reverse-synced."""
+    """No baseline means hub is truth: colliding replica bytes are held, then overwritten."""
     config_path, managed_dirs, target_dirs = daemon_workspace
     managed = managed_dirs[0]
     target = target_dirs[0]
@@ -525,6 +527,74 @@ def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
     assert (managed / "shared.txt").read_text() == "hub-0"
     assert projection.read_text() == "hub-0"
     assert not (_state_dir(config_path) / "sync-state.yml").exists()
+    copies = list_held_copies(managed)
+    assert len(copies) == 1
+    assert copies[0].reason == "create-overwrite"
+    assert copies[0].path == "shared.txt"
+    assert (copies[0].slot / "content").read_text() == "from-target"
+    status = _invoke(["--config", str(config_path), "daemon", "status"], env=daemon_env)
+    assert status.exit_code == 0, status.output
+    assert "Held copies:" in status.output
+    assert "create-overwrite" in status.output
+    assert "shared.txt" in status.output
+
+
+def test_fresh_catch_up_leaves_equal_replica_bytes_without_hold(
+    tmp_path: Path,
+    daemon_env: dict[str, str],
+) -> None:
+    """Equal replica bytes stay in place; missing files are copied with no hold."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    (hub / "notes.md").write_text("canonical")
+    (hub / "extra.md").write_text("also-hub")
+    (alpha / "notes.md").write_text("canonical")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app: {alpha}\n")
+    try:
+        started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+        assert started.exit_code == 0, started.output
+        assert (alpha / "notes.md").read_text() == "canonical"
+        assert (alpha / "extra.md").read_text() == "also-hub"
+        assert list_held_copies(hub) == ()
+        status = _invoke(["--config", str(config_path), "daemon", "status"], env=daemon_env)
+        assert "Held copies:" not in status.output
+    finally:
+        _stop_daemon(config_path, daemon_env)
+
+
+def test_fresh_catch_up_holds_one_copy_for_a_directory_item(
+    tmp_path: Path,
+    daemon_env: dict[str, str],
+) -> None:
+    """A differing directory item is one held tree, not a slot per nested file."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    (hub / "notes").mkdir()
+    (hub / "notes" / "a.md").write_text("hub-a")
+    (hub / "notes" / "b.md").write_text("hub-b")
+    (alpha / "notes").mkdir()
+    (alpha / "notes" / "a.md").write_text("alpha-a")
+    (alpha / "notes" / "b.md").write_text("alpha-b")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app: {alpha}\n")
+    try:
+        started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+        assert started.exit_code == 0, started.output
+        assert (alpha / "notes" / "a.md").read_text() == "hub-a"
+        assert (alpha / "notes" / "b.md").read_text() == "hub-b"
+        copies = list_held_copies(hub)
+        assert len(copies) == 1
+        assert copies[0].reason == "create-overwrite"
+        assert copies[0].path == "notes"
+        assert (copies[0].slot / "content" / "a.md").read_text() == "alpha-a"
+        assert (copies[0].slot / "content" / "b.md").read_text() == "alpha-b"
+    finally:
+        _stop_daemon(config_path, daemon_env)
 
 
 def test_update_catch_up_applies_only_paths_that_differ_from_baseline(

@@ -27,6 +27,9 @@ from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
 _DELETE_GAP_CLAUSE = "delete applied past the generation window; kept hub bytes of shared.txt (reason: delete-gap)"
+_CREATE_OVERWRITE_CLAUSE = (
+    "installing an item replaced different bytes at shared.txt in /tmp/target-b (reason: create-overwrite)"
+)
 _STALE_BASE_CLAUSE = (
     "update lost compare-and-swap at shared.txt on /tmp/target-b; "
     "hub generation 1 from /tmp/target-a (reason: stale-base)"
@@ -501,6 +504,11 @@ def test_out_of_sync_reason_survives_save_load_and_spawned_status(
 def test_reason_clause_delete_gap_is_stable() -> None:
     """Hold-reason clause text is the same string status and WARNINGs must show."""
     assert reason_clause("delete-gap", path="shared.txt", replica="/tmp/target-b") == _DELETE_GAP_CLAUSE
+
+
+def test_reason_clause_create_overwrite_is_stable() -> None:
+    """create-overwrite names install, not a revlink create command."""
+    assert reason_clause("create-overwrite", path="shared.txt", replica="/tmp/target-b") == _CREATE_OVERWRITE_CLAUSE
 
 
 def test_oos_reason_clause_stale_base_is_stable() -> None:

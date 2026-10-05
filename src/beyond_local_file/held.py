@@ -69,7 +69,7 @@ def reason_clause(reason: str, *, path: str, replica: str) -> str:
         Text for WARNINGs and the later resolve UI.
     """
     if reason == REASON_CREATE_OVERWRITE:
-        return f"revlink create replaced different bytes at {path} in {replica} (reason: {reason})"
+        return f"installing an item replaced different bytes at {path} in {replica} (reason: {reason})"
     if reason == REASON_DELETE_GAP:
         return f"delete applied past the generation window; kept hub bytes of {path} (reason: {reason})"
     return f"{reason}: {path} from {replica}"
