@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from beyond_local_file.config import Config
-from beyond_local_file.daemon.catchup import run_catch_up
+from beyond_local_file.daemon.catchup import record_baseline, run_catch_up
 from beyond_local_file.daemon.live import DELETE_WINDOW, LiveSync
 from beyond_local_file.daemon.store import get_generation
 from tests.daemon_support import daemon_running
@@ -151,6 +151,152 @@ def test_create_under_directory_item_appears_on_hub_and_other_targets(tmp_path: 
     assert (target_b / "nested" / "new.txt").read_text() == "created"
     assert (target_a / "nested" / "keep.txt").read_text() == "keep"
     assert (managed / "nested" / "keep.txt").read_text() == "keep"
+
+
+def test_update_catch_up_applies_target_create_under_directory_item(tmp_path: Path) -> None:
+    """A target-only create while down is applied by update catch-up, as a live tick would."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+    nested = managed / "nested"
+    nested.mkdir()
+    (nested / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, tmp_path, None)
+
+    (target_a / "nested" / "new-task.md").write_text("added-on-target")
+    run_catch_up(projects, tmp_path, baseline)
+
+    assert (managed / "nested" / "new-task.md").read_text() == "added-on-target"
+    assert (target_b / "nested" / "new-task.md").read_text() == "added-on-target"
+
+
+def test_update_catch_up_applies_target_create_already_recorded_in_baseline(
+    tmp_path: Path,
+) -> None:
+    """A mismatch already snapshotted into the baseline is still applied on the next start."""
+    managed = tmp_path / "proj"
+    target = tmp_path / "target"
+    for directory in (managed, target):
+        directory.mkdir()
+    nested = managed / "nested"
+    nested.mkdir()
+    (nested / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj: {target}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, tmp_path, None)
+
+    (target / "nested" / "new-task.md").write_text("added-on-target")
+    frozen = record_baseline(projects, previous=baseline)
+    run_catch_up(projects, tmp_path, frozen)
+
+    assert (managed / "nested" / "new-task.md").read_text() == "added-on-target"
+
+
+def test_update_catch_up_applies_oos_create_that_never_landed_on_hub(tmp_path: Path) -> None:
+    """A replica-only create marked out-of-sync at hub gen 0 is applied on the next start."""
+    managed = tmp_path / "proj"
+    target = tmp_path / "target"
+    for directory in (managed, target):
+        directory.mkdir()
+    nested = managed / "nested"
+    nested.mkdir()
+    (nested / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj: {target}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, tmp_path, None)
+
+    (target / "nested" / "new-task.md").write_text("added-on-target")
+    frozen = record_baseline(projects, previous=baseline)
+    rel = "nested/new-task.md"
+    replica_key = next(key for key, paths in frozen.items() if rel in paths)
+    frozen[replica_key][rel]["oos"] = True
+    frozen[replica_key][rel]["reason"] = "stale-base"
+    run_catch_up(projects, tmp_path, frozen)
+
+    assert (managed / "nested" / "new-task.md").read_text() == "added-on-target"
+
+
+def test_update_catch_up_does_not_overwrite_hub_for_oos_content_conflict(tmp_path: Path) -> None:
+    """An out-of-sync content conflict stays on the replica until resolve."""
+    managed = tmp_path / "proj"
+    target = tmp_path / "target"
+    for directory in (managed, target):
+        directory.mkdir()
+    (managed / "shared.txt").write_text("hub-now")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj: {target}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, tmp_path, None)
+
+    (target / "shared.txt").write_text("from-target")
+    frozen = record_baseline(projects, previous=baseline)
+    rel = "shared.txt"
+    hub_keys = {str(project.managed_project_path) for project in projects.values()}
+    replica_key = next(key for key, paths in frozen.items() if rel in paths and key not in hub_keys)
+    frozen[replica_key][rel]["oos"] = True
+    frozen[replica_key][rel]["reason"] = "stale-base"
+    run_catch_up(projects, tmp_path, frozen)
+
+    assert (managed / "shared.txt").read_text() == "hub-now"
+    assert (target / "shared.txt").read_text() == "from-target"
+
+
+def test_update_catch_up_then_idle_tick_still_applies_target_create(tmp_path: Path) -> None:
+    """If catch-up records the mismatch as baseline, a later idle tick still applies it."""
+    managed = tmp_path / "proj"
+    target = tmp_path / "target"
+    for directory in (managed, target):
+        directory.mkdir()
+    nested = managed / "nested"
+    nested.mkdir()
+    (nested / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj: {target}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, tmp_path, None)
+
+    (target / "nested" / "new-task.md").write_text("added-on-target")
+    baseline = run_catch_up(projects, tmp_path, baseline)
+    LiveSync(projects, baseline).tick()
+
+    assert (managed / "nested" / "new-task.md").read_text() == "added-on-target"
+
+
+def test_update_catch_up_applies_target_edit_of_existing_file(tmp_path: Path) -> None:
+    """A target-only edit while down is applied by update catch-up, as a live tick would."""
+    managed = tmp_path / "proj"
+    target = tmp_path / "target"
+    for directory in (managed, target):
+        directory.mkdir()
+    (managed / "shared.txt").write_text("v0")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj: {target}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, tmp_path, None)
+
+    (target / "shared.txt").write_text("from-target")
+    run_catch_up(projects, tmp_path, baseline)
+
+    assert (managed / "shared.txt").read_text() == "from-target"
 
 
 def test_five_quick_saves_become_one_hub_apply(

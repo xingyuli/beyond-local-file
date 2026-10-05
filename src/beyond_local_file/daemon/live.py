@@ -66,12 +66,21 @@ class _WatchRoot:
 class LiveSync:
     """Observe item trees, coalesce per (path, replica), apply at the hub, fan out."""
 
-    def __init__(self, projects: dict[str, ConfigProject], baseline: BaselineTrees) -> None:
+    def __init__(
+        self,
+        projects: dict[str, ConfigProject],
+        baseline: BaselineTrees,
+        *,
+        last_seen_from_baseline: bool = False,
+    ) -> None:
         """Start observing committed mappings from an existing baseline.
 
         Args:
             projects: Committed mappings to watch.
             baseline: Last applied hashes, presence, and generations.
+            last_seen_from_baseline: When True, treat *baseline* as the last
+                scan so the first tick queues downtime diffs (update catch-up).
+                When False, scan disks now and treat that as already seen.
         """
         self._projects = projects
         self._baseline = baseline
@@ -79,7 +88,10 @@ class LiveSync:
         self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
         self._last_source: dict[tuple[str, str], Path] = {}
         self._watch_roots = _build_watch_roots(projects)
-        self._last_seen = self._scan_all(reason="init")
+        if last_seen_from_baseline:
+            self._last_seen = _last_seen_from_baseline(baseline)
+        else:
+            self._last_seen = self._scan_all(reason="init")
 
     @property
     def baseline(self) -> BaselineTrees:
@@ -175,6 +187,61 @@ class LiveSync:
             self._apply_one(change)
             applied.append(change.rel)
         return tuple(applied)
+
+    def apply_frozen_mismatches(self) -> tuple[str, ...]:
+        """Apply replica paths that match baseline yet differ from hub.
+
+        Update catch-up records a new baseline after apply. A previous start
+        that skipped replica-side diffs can leave hub and replica matching
+        their own baseline rows while the live copies disagree. Those paths
+        are invisible to a baseline-seeded tick. A replica-only create marked
+        out-of-sync at hub generation 0 is applied (the create never landed).
+        Out-of-sync content conflicts stay isolated until resolve.
+
+        Returns:
+            Relative paths applied from this pass, in apply order.
+        """
+        hub_scans: dict[str, dict[str, PathState]] = {}
+        for watch in self._watch_roots:
+            if watch.is_hub:
+                hub_scans[str(watch.root)] = scan_items(watch.root, list(watch.item_names))
+        for watch in self._watch_roots:
+            if watch.is_hub:
+                continue
+            replica_now = scan_items(watch.root, list(watch.item_names))
+            hub_rels = {
+                rel
+                for hub_key, tree in hub_scans.items()
+                for rel in tree
+                if rel_in_items(rel, watch.item_names) and _owner_hub(watch, rel) == Path(hub_key)
+            }
+            for rel in set(replica_now) | hub_rels:
+                hub = _owner_hub(watch, rel)
+                hub_now = hub_scans.get(str(hub), {}).get(rel) or path_state(False, None)
+                replica_state = replica_now.get(rel) or path_state(False, None)
+                if state_equal(hub_now, replica_state):
+                    continue
+                hub_present = bool(hub_now.get("present"))
+                if self._is_oos(watch.root, rel) and hub_present:
+                    continue
+                if not state_equal(hub_now, get_state(self._baseline, hub, rel)):
+                    continue
+                if not state_equal(replica_state, get_state(self._baseline, watch.root, rel)):
+                    continue
+                if self._is_oos(watch.root, rel) and not hub_present:
+                    self._oos.discard((str(watch.root), rel))
+                self._mailbox[(rel, str(watch.root))] = PathChange(
+                    rel=rel,
+                    replica=watch.root,
+                    hub=hub,
+                    kind=_classify(hub_now, replica_state),
+                    base_present=bool(hub_now.get("present")),
+                    base_hash=hub_now.get("hash") if hub_now.get("present") else None,
+                    base_gen=get_generation(self._baseline, hub, rel),
+                )
+        if not self._mailbox:
+            return ()
+        return self.apply()
 
     def resolve(self, rel: str, content: bytes) -> None:
         """Write the confirmed fact as a new hub generation and overwrite every replica of that path.

@@ -20,9 +20,7 @@ from .log import log_duration
 from .store import (
     BaselineTrees,
     PathState,
-    get_state,
     path_state,
-    state_equal,
 )
 
 type ProgressFn = Callable[[int, int, str], None]
@@ -57,16 +55,17 @@ def run_catch_up(
     Returns:
         Newly recorded per-path baseline trees.
     """
+    del config_dir
     _mark_catchup_started(projects)
     units = translate_config_to_mapping_units(projects)
     _announce_waiting(units, on_line)
     if baseline is None:
         print("catch-up: fresh", flush=True)
-        _fresh_catch_up(config_dir, on_progress, on_line, units)
-    else:
-        print("catch-up: update", flush=True)
-        _update_catch_up(config_dir, baseline, on_progress, on_line, units)
-    return record_baseline(projects, previous=baseline)
+        _fresh_catch_up(on_progress, on_line, units)
+        return record_baseline(projects, previous=None)
+    print("catch-up: update", flush=True)
+    applied = _update_catch_up(baseline, on_progress, on_line, units, projects)
+    return record_baseline(projects, previous=applied)
 
 
 def record_baseline(
@@ -241,7 +240,6 @@ def _item_progress(
 
 
 def _fresh_catch_up(
-    config_dir: Path,
     on_progress: ProgressFn | None,
     on_line: LineFn | None,
     units: list[MappingUnit],
@@ -250,7 +248,6 @@ def _fresh_catch_up(
     for index, unit in enumerate(units, start=1):
         _fresh_catch_up_unit(
             unit,
-            config_dir,
             index=index,
             total=total,
             on_progress=_item_progress(unit, on_progress, on_line),
@@ -259,33 +256,41 @@ def _fresh_catch_up(
 
 
 def _update_catch_up(
-    config_dir: Path,
     baseline: BaselineTrees,
     on_progress: ProgressFn | None,
     on_line: LineFn | None,
     units: list[MappingUnit],
-) -> None:
+    projects: dict[str, ConfigProject],
+) -> BaselineTrees:
+    from .live import LiveSync  # noqa: PLC0415 -- avoid import cycle with live observe
+
+    working: BaselineTrees = {root: dict(paths) for root, paths in baseline.items()}
     total = len(units)
     for index, unit in enumerate(units, start=1):
         emit = _item_progress(unit, on_progress, on_line)
-        if str(unit.target_project_path) not in baseline:
+        replica_key = str(unit.target_project_path)
+        if replica_key not in working:
             print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
-            _fresh_catch_up_unit(unit, config_dir, index=index, total=total, on_progress=emit)
+            _fresh_catch_up_unit(unit, index=index, total=total, on_progress=emit)
+            item_names = [item.name for item in unit.items]
+            working[replica_key] = scan_items(unit.target_project_path, item_names)
         else:
             _emit_unit_items(unit, index, total, emit)
-            _apply_update_unit(unit, baseline)
+    live = LiveSync(projects, working, last_seen_from_baseline=True)
+    live.tick(reason="catch-up")
+    live.apply_frozen_mismatches()
+    for index in range(1, len(units) + 1):
         _mark_unit_done(units, index, on_line)
+    return live.baseline
 
 
 def _fresh_catch_up_unit(
     unit: MappingUnit,
-    config_dir: Path,
     *,
     index: int = 1,
     total: int = 1,
     on_progress: ProgressFn | None = None,
 ) -> None:
-    del config_dir
     if not unit.managed_project_path.exists():
         print(f"Project directory does not exist: {unit.managed_project_path}", flush=True)
         return
@@ -311,45 +316,6 @@ def _emit_unit_items(
         return
     for item in unit.items:
         on_progress(index, total, item.name)
-
-
-def _apply_update_unit(unit: MappingUnit, baseline: BaselineTrees) -> None:
-    hub = unit.managed_project_path
-    replica = unit.target_project_path
-    item_names = [item.name for item in unit.items]
-    hub_now = scan_items(hub, item_names)
-    replica_now = scan_items(replica, item_names)
-    paths = set(hub_now) | set(replica_now)
-    paths |= _baseline_paths_for_items(baseline, hub, item_names)
-    paths |= _baseline_paths_for_items(baseline, replica, item_names)
-
-    deletes: list[str] = []
-    writes: list[tuple[str, PathState]] = []
-    for rel in paths:
-        hub_state = hub_now.get(rel) or path_state(False, None)
-        replica_state = replica_now.get(rel) or path_state(False, None)
-        hub_changed = not state_equal(hub_state, get_state(baseline, hub, rel))
-        replica_at_baseline = state_equal(replica_state, get_state(baseline, replica, rel))
-        if not (hub_changed and replica_at_baseline):
-            continue
-        if hub_state.get("present"):
-            writes.append((rel, hub_state))
-        else:
-            deletes.append(rel)
-
-    for rel in sorted(deletes, key=_path_depth, reverse=True):
-        remove_path(replica / rel)
-        print(f"catch-up: removed {rel} from {replica}", flush=True)
-    for rel, hub_state in sorted(writes, key=lambda item: _path_depth(item[0])):
-        _apply_hub_state(hub / rel, replica / rel, hub_state)
-        print(f"catch-up: applied {rel} -> {replica / rel}", flush=True)
-
-
-def _apply_hub_state(source: Path, destination: Path, hub_state: PathState) -> None:
-    if hub_state.get("hash") is None:
-        destination.mkdir(parents=True, exist_ok=True)
-        return
-    copy_projection(source, destination)
 
 
 def _add_git_excludes(unit: MappingUnit) -> None:
@@ -444,11 +410,6 @@ def _scan_path(
             _scan_path(root, child, scanned, stats)
 
 
-def _baseline_paths_for_items(baseline: BaselineTrees, root: Path, item_names: list[str]) -> set[str]:
-    stored = baseline.get(str(root), {})
-    return {rel for rel in stored if rel_in_items(rel, item_names)}
-
-
 def rel_in_items(rel: str, item_names: list[str] | tuple[str, ...]) -> bool:
     """Return whether *rel* is one of *item_names* or a path under one.
 
@@ -460,10 +421,6 @@ def rel_in_items(rel: str, item_names: list[str] | tuple[str, ...]) -> bool:
         True when *rel* belongs to a watched item.
     """
     return any(rel == name or rel.startswith(f"{name}/") for name in item_names)
-
-
-def _path_depth(rel: str) -> int:
-    return rel.count("/")
 
 
 def _merge_tree(trees: BaselineTrees, root: Path, scanned: dict[str, PathState]) -> None:

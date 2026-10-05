@@ -531,7 +531,7 @@ def test_update_catch_up_applies_only_paths_that_differ_from_baseline(
     daemon_workspace: tuple[Path, list[Path], list[Path]],
     daemon_env: dict[str, str],
 ) -> None:
-    """A later start with a baseline only applies paths that differ from that baseline."""
+    """A later start queues hub and replica paths that differ from the baseline."""
     config_path, managed_dirs, target_dirs = daemon_workspace
     managed = managed_dirs[0]
     target = target_dirs[0]
@@ -553,7 +553,51 @@ def test_update_catch_up_applies_only_paths_that_differ_from_baseline(
     assert (target / "nested" / "new.txt").read_text() == "added-on-hub"
     assert (target / "nested" / "keep.txt").read_text() == "keep"
     assert (target / "shared.txt").read_text() == "target-work"
-    assert (managed / "shared.txt").read_text() == "hub-0"
+    assert (managed / "shared.txt").read_text() == "target-work"
+
+
+def test_update_catch_up_discovers_target_create_while_daemon_was_down(
+    daemon_workspace: tuple[Path, list[Path], list[Path]],
+    daemon_env: dict[str, str],
+) -> None:
+    """A target-only create while the daemon is down is applied on the next start.
+
+    Live observe already copies that create onto the hub. Update catch-up must
+    do the same; otherwise record_baseline freezes the mismatch and only
+    ``link check`` can see it.
+    """
+    config_path, managed_dirs, target_dirs = daemon_workspace
+    managed = managed_dirs[0]
+    target = target_dirs[0]
+
+    first = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert first.exit_code == 0, first.output
+    stopped = _invoke(["--config", str(config_path), "daemon", "stop"], env=daemon_env)
+    assert stopped.exit_code == 0, stopped.output
+
+    created = target / "nested" / "new-task.md"
+    created.write_text("added-on-target")
+
+    second = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
+    assert second.exit_code == 0, second.output
+
+    check = _invoke(
+        ["--config", str(config_path), "link", "check", "--format", "verbose"],
+        env=daemon_env,
+    )
+    assert check.exit_code == 0, check.output
+    status = _invoke(["--config", str(config_path), "daemon", "status"], env=daemon_env)
+    assert status.exit_code == 0, status.output
+
+    hub_copy = managed / "nested" / "new-task.md"
+    assert hub_copy.is_file(), (
+        "update catch-up left a target-only create unapplied; "
+        f"check_has_target_changed={'target changed' in check.output.lower()} "
+        f"status_mentions_path={'new-task.md' in status.output}\n"
+        f"check:\n{check.output}\nstatus:\n{status.output}"
+    )
+    assert hub_copy.read_text() == "added-on-target"
+    assert "target changed" not in check.output.lower()
 
 
 def test_mapping_snapshot_survives_kill_and_start_does_not_delete_copies(
