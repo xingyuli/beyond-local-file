@@ -314,28 +314,41 @@ def _install_projection(unit: MappingUnit, item: ManagedProjectItem) -> None:
 
     Equal bytes are left in place. A missing projection is copied with no hold.
     """
-    destination = unit.target_project_path / item.name
-    source_ready = item.path.exists() or item.path.is_symlink()
+    copy_hub_onto_replica(unit.managed_project_path, unit.target_project_path, item.name)
+
+
+def copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
+    """Install hub bytes at *rel* onto *replica*, holding different replica bytes first.
+
+    Equal bytes are left in place. A missing projection is copied with no hold.
+
+    Args:
+        hub: Managed-project directory.
+        replica: Target-project directory.
+        rel: Item path relative to each root.
+    """
+    destination = replica / rel
+    source = hub / rel
+    source_ready = source.exists() or source.is_symlink()
     dest_ready = destination.exists() or destination.is_symlink()
-    if dest_ready and source_ready and item_matches(unit.managed_project_path, unit.target_project_path, item.name):
+    if dest_ready and source_ready and item_matches(hub, replica, rel):
         return
     if dest_ready and source_ready:
-        replica = unit.target_project_path
         clause = reason_clause(
             REASON_CREATE_OVERWRITE,
-            path=item.name,
+            path=rel,
             replica=replica.as_posix(),
         )
         slot = store_held_copy(
-            unit.managed_project_path,
-            rel_path=Path(item.name),
+            hub,
+            rel_path=Path(rel),
             source=destination,
             replica=replica,
             reason=REASON_CREATE_OVERWRITE,
         )
         print(f"WARNING: {clause}", flush=True)
         print(f"Held at {slot.as_posix()}", flush=True)
-    copy_projection(item.path, destination)
+    copy_projection(source, destination)
 
 
 def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
@@ -403,6 +416,19 @@ def _add_git_excludes(unit: MappingUnit) -> None:
     if not manager.is_git_repo():
         return
     manager.write_entries({item.name for item in unit.items})
+
+
+def add_git_exclude(root: Path, rel: str) -> None:
+    """Add *rel* to ``.git/info/exclude`` when *root* is a Git repository.
+
+    Args:
+        root: Target-project root that starts projecting *rel*.
+        rel: Item path relative to *root*.
+    """
+    manager = GitExcludeManager(root)
+    if not manager.is_git_repo():
+        return
+    manager.write_entries({rel})
 
 
 def remove_path(path: Path) -> None:

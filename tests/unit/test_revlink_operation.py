@@ -94,53 +94,41 @@ def _make_operation(
 # ---------------------------------------------------------------------------
 
 
-class TestGitExcludeIntegration:
-    """Tests for CreateOperation._git_exclude() behaviour."""
+class TestGitExcludePreview:
+    """CreateOperation formats git exclude; LiveSync writes the exclude file."""
 
-    def test_entry_added_when_in_git_repo(self, tmp_path: Path) -> None:
-        """Entry is written to .git/info/exclude when source is inside a git repo.
-
-        Requirements: 6.1
-        """
+    def test_preview_added_when_in_git_repo(self, tmp_path: Path) -> None:
+        """Preview reports an add when the entry is missing; the file is not written."""
         repo_dir = _make_git_repo(tmp_path / "repo")
         source = repo_dir / "myfile.txt"
         source.write_text("hello")
 
         context = _make_context(repo_dir, tmp_path / "config.yaml")
         op, formatter = _make_operation(source, tmp_path / "managed", context=context)
-        op._git_exclude()
+        op._git_exclude_preview()
 
         exclude_file = repo_dir / ".git" / "info" / "exclude"
-        assert exclude_file.exists(), "exclude file should have been created"
-        assert "myfile.txt" in exclude_file.read_text()
+        assert not exclude_file.exists()
         formatter.git_exclude_added.assert_called_once_with("myfile.txt")
         formatter.git_exclude_exists.assert_not_called()
 
     def test_skipped_when_not_in_git_repo(self, tmp_path: Path) -> None:
-        """No .git/info/exclude is created when source is not inside a git repo.
-
-        Requirements: 6.3
-        """
+        """No .git/info/exclude is created when source is not inside a git repo."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
         source = plain_dir / "myfile.txt"
         source.write_text("hello")
 
-        # context.cwd points to a plain (non-git) directory
         context = _make_context(plain_dir, tmp_path / "config.yaml")
         op, formatter = _make_operation(source, tmp_path / "managed", context=context)
-        result = op._git_exclude()
+        op._git_exclude_preview()
 
-        assert result == 0
         assert not (plain_dir / ".git").exists(), ".git dir should not be created"
         formatter.git_exclude_added.assert_not_called()
         formatter.git_exclude_exists.assert_not_called()
 
-    def test_idempotent_when_entry_already_present(self, tmp_path: Path) -> None:
-        """formatter.git_exclude_exists is called when entry is already in exclude file.
-
-        Requirements: 6.2
-        """
+    def test_preview_exists_when_entry_already_present(self, tmp_path: Path) -> None:
+        """Preview reports an existing entry without rewriting the file."""
         repo_dir = _make_git_repo(tmp_path / "repo")
         exclude_file = repo_dir / ".git" / "info" / "exclude"
         exclude_file.write_text("myfile.txt\n")
@@ -150,34 +138,11 @@ class TestGitExcludeIntegration:
 
         context = _make_context(repo_dir, tmp_path / "config.yaml")
         op, formatter = _make_operation(source, tmp_path / "managed", context=context)
-        op._git_exclude()
+        op._git_exclude_preview()
 
-        # File content should still contain the entry (unchanged)
-        assert "myfile.txt" in exclude_file.read_text()
+        assert exclude_file.read_text() == "myfile.txt\n"
         formatter.git_exclude_exists.assert_called_once_with("myfile.txt")
         formatter.git_exclude_added.assert_not_called()
-
-    def test_git_exclude_returns_zero(self, tmp_path: Path) -> None:
-        """_git_exclude always returns 0 regardless of outcome.
-
-        Requirements: 6.1, 6.2, 6.3
-        """
-        # In git repo — supply context so the git exclude step runs
-        repo_dir = _make_git_repo(tmp_path / "repo")
-        source = repo_dir / "f.txt"
-        source.write_text("x")
-        context = _make_context(repo_dir, tmp_path / "config.yaml")
-        op, _ = _make_operation(source, tmp_path / "managed", context=context)
-        assert op._git_exclude() == 0
-
-        # Not in git repo — supply context pointing at plain dir
-        plain_dir = tmp_path / "plain"
-        plain_dir.mkdir()
-        source2 = plain_dir / "f.txt"
-        source2.write_text("x")
-        context2 = _make_context(plain_dir, tmp_path / "config2.yaml")
-        op2, _ = _make_operation(source2, tmp_path / "managed2", context=context2)
-        assert op2._git_exclude() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -318,33 +283,10 @@ class TestCreateFormatterDryRun:
 
 
 class TestContextNoneSkipsGitExclude:
-    """Unit tests verifying that context=None causes git exclude to be silently skipped.
+    """context=None skips git exclude without writing or formatter calls."""
 
-    When ``context`` is ``None``, both ``CreateOperation._git_exclude`` and
-    ``RestoreOperation._git_exclude`` must return ``0`` without error and
-    without writing or removing any entry in ``.git/info/exclude``.
-
-    On unfixed code, ``context is None`` does not cause an early return, but
-    both methods still return ``0`` silently because ``source.parent`` is not
-    a git repository, so ``is_git_repo()`` returns ``False``.  After the fix,
-    the methods return ``0`` immediately due to the ``context is None`` guard.
-    Either way, the externally observable result is identical: exit code 0,
-    no exclude file written or modified, no formatter calls.
-
-    Requirements: 3.4
-    """
-
-    def test_create_operation_context_none_returns_zero_without_error(self, tmp_path: Path) -> None:
-        """CreateOperation._git_exclude returns 0 without error when context is None.
-
-        Source is placed in a plain directory (no .git) so that ``is_git_repo``
-        returns ``False`` regardless of whether the ``context is None`` guard
-        is present.  This exercises the observable contract: when context is
-        None, the step always exits cleanly with code 0 and no exclude entry
-        is written.
-
-        Requirements: 3.4
-        """
+    def test_create_operation_context_none_skips_git_exclude(self, tmp_path: Path) -> None:
+        """CreateOperation preview does not write exclude when context is None."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
         source = plain_dir / "myfile.txt"
@@ -358,13 +300,12 @@ class TestContextNoneSkipsGitExclude:
             dry_run=False,
             force=False,
             formatter=formatter,
-            context=None,  # explicitly None
+            context=None,
         )
 
-        result = op._git_exclude()
+        result = op.run()
 
-        assert result == 0, "Expected _git_exclude to return 0 when context is None"
-        # No entry was written — exclude file should not exist
+        assert result == 0
         assert not (plain_dir / ".git").exists(), ".git dir should not be created"
         formatter.git_exclude_added.assert_not_called()
         formatter.git_exclude_exists.assert_not_called()

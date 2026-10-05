@@ -1,11 +1,7 @@
 """Unit tests for dest path correctness with nested rel_path.
 
-Covers task 6.4:
-- CreateOperation.run() derives dest as dest_root / rel_path (not dest_root / rel_path.name)
-- CreateOperation._git_exclude() uses str(rel_path) as the entry name, not source.name
-- CreateOperation._update_config() uses str(rel_path) as the entry name, not source.name
-
-Requirements: 1.2, 1.4, 4.1, 4.2
+CreateOperation formats dest and exclude as the full rel_path. Disk writes
+are a LiveSync item-add job (see test_live_create).
 """
 
 from pathlib import Path
@@ -96,14 +92,10 @@ def _make_operation(  # noqa: PLR0913 -- test helper needs all six fields to bui
 
 
 class TestRunDestPathWithNestedRelPath:
-    """Tests that run() places the managed copy at dest_root / rel_path, not dest_root / basename."""
+    """CreateOperation formats dest as dest_root / rel_path and does not copy."""
 
-    def test_run_copies_to_full_rel_path_not_basename(self, tmp_path: Path) -> None:
-        """Managed copy is placed at dest_root / rel_path, not dest_root / source.name.
-
-        Requirements: 1.2, 1.4
-        """
-        # Set up source at a nested location
+    def test_run_formats_full_rel_path_not_basename(self, tmp_path: Path) -> None:
+        """Formatter dest is dest_root / rel_path; run does not write the hub copy."""
         source_dir = tmp_path / "target"
         source_dir.mkdir()
         source = source_dir / ".kiro" / "specs" / "foo"
@@ -113,68 +105,18 @@ class TestRunDestPathWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, _ = _make_operation(source, dest_root, _NESTED_REL_PATH)
+        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
         result = op.run()
 
         assert result == 0
-
-        # The copy must be at dest_root / .kiro/specs/foo — NOT dest_root / foo
-        correct_dest = dest_root / ".kiro" / "specs" / "foo"
-        wrong_dest = dest_root / "foo"
-
-        assert correct_dest.exists(), f"Managed copy must be at {correct_dest} (full rel_path), not at basename"
-        assert not wrong_dest.exists(), f"Managed copy must NOT be at {wrong_dest} (basename only)"
-
-    def test_run_creates_parent_dirs_for_nested_dest(self, tmp_path: Path) -> None:
-        """Parent directories of the nested managed destination are created automatically.
-
-        Requirements: 1.3
-        """
-        source_dir = tmp_path / "target"
-        source_dir.mkdir()
-        source = source_dir / ".kiro" / "specs" / "foo"
-        source.mkdir(parents=True)
-        (source / "readme.md").write_text("hello")
-
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-
-        op, _ = _make_operation(source, dest_root, _NESTED_REL_PATH)
-        result = op.run()
-
-        assert result == 0
-        assert (dest_root / ".kiro" / "specs").is_dir(), "Intermediate parent directories must be created"
-
-    def test_run_leaves_nested_source_and_copies_to_full_rel_path(self, tmp_path: Path) -> None:
-        """The nested source stays a real directory and the hub copy uses the full rel_path.
-
-        Requirements: 1.4
-        """
-        source_dir = tmp_path / "target"
-        source_dir.mkdir()
-        source = source_dir / ".kiro" / "specs" / "foo"
-        source.mkdir(parents=True)
-        (source / "data.txt").write_text("data")
-
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-
-        op, _ = _make_operation(source, dest_root, _NESTED_REL_PATH)
-        result = op.run()
-
-        assert result == 0
+        formatter.copying.assert_called_once_with(source, dest_root / _NESTED_REL_PATH)
+        assert not (dest_root / ".kiro" / "specs" / "foo").exists()
+        assert not (dest_root / "foo").exists()
         assert source.is_dir()
         assert not source.is_symlink()
-        expected_dest = dest_root / ".kiro" / "specs" / "foo"
-        assert expected_dest.is_dir()
-        assert not (dest_root / "foo").exists()
-        assert (expected_dest / "data.txt").read_text() == "data"
 
-    def test_run_file_at_nested_rel_path(self, tmp_path: Path) -> None:
-        """run() works correctly for a file (not directory) at a nested rel_path.
-
-        Requirements: 1.2
-        """
+    def test_run_file_at_nested_rel_path_formats_full_dest(self, tmp_path: Path) -> None:
+        """A nested file is formatted at dest_root / rel_path, not basename."""
         source_dir = tmp_path / "target"
         source_dir.mkdir()
         nested_dir = source_dir / ".kiro" / "specs"
@@ -185,69 +127,25 @@ class TestRunDestPathWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, _ = _make_operation(source, dest_root, _NESTED_REL_PATH)
+        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
         result = op.run()
 
         assert result == 0
-
-        correct_dest = dest_root / ".kiro" / "specs" / "foo"
-        wrong_dest = dest_root / "foo"
-
-        assert correct_dest.exists(), f"File must be at {correct_dest}"
-        assert not wrong_dest.exists(), f"File must NOT be at {wrong_dest}"
+        formatter.copying.assert_called_once_with(source, dest_root / _NESTED_REL_PATH)
+        assert source.is_file()
+        assert not (dest_root / "foo").exists()
 
 
 # ---------------------------------------------------------------------------
-# Task 6.4 — CreateOperation._git_exclude() entry name (Requirement 4.1)
+# Nested rel_path git-exclude preview uses the full entry name
 # ---------------------------------------------------------------------------
 
 
 class TestGitExcludeEntryNameWithNestedRelPath:
-    """Tests that _git_exclude() uses str(rel_path) as the entry name, not source.name.
-
-    Note: GitExcludeManager is initialised with source.parent and checks for .git
-    directly in that directory (no upward walk).  To exercise the git-repo branch,
-    the source must be a direct child of the git repo root so that source.parent
-    contains .git.  The rel_path is set to the nested value (.kiro/specs/foo) to
-    verify the entry name — the source location relative to the repo is irrelevant
-    for this test.
-    """
-
-    def test_git_exclude_entry_uses_full_rel_path_not_basename(self, tmp_path: Path) -> None:
-        """Entry written to .git/info/exclude is str(rel_path), not source.name.
-
-        Requirements: 4.1
-        """
-        # source.parent must contain .git — place source as a direct child of repo_dir
-        repo_dir = _make_git_repo(tmp_path / "repo")
-        source = repo_dir / "foo"
-        source.mkdir()
-
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-
-        # rel_path is the nested path — this is what the entry name must be
-        context = _make_context(repo_dir, tmp_path)
-        op, _formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        result = op._git_exclude()
-
-        assert result == 0
-
-        exclude_file = repo_dir / ".git" / "info" / "exclude"
-        assert exclude_file.exists(), "exclude file should have been created"
-        content = exclude_file.read_text()
-
-        # Full rel_path must appear in the exclude file
-        assert ".kiro/specs/foo" in content, "Exclude entry must be the full rel_path '.kiro/specs/foo'"
-        # Basename alone must NOT appear as a standalone entry
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-        assert "foo" not in lines, "Exclude entry must NOT be just the basename 'foo'"
+    """Preview uses str(rel_path) as the exclude entry name, not source.name."""
 
     def test_git_exclude_formatter_called_with_full_rel_path(self, tmp_path: Path) -> None:
-        """formatter.git_exclude_added is called with str(rel_path), not source.name.
-
-        Requirements: 4.1
-        """
+        """formatter.git_exclude_added is called with str(rel_path), not source.name."""
         repo_dir = _make_git_repo(tmp_path / "repo")
         source = repo_dir / "foo"
         source.mkdir()
@@ -257,15 +155,12 @@ class TestGitExcludeEntryNameWithNestedRelPath:
 
         context = _make_context(repo_dir, tmp_path)
         op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        op._git_exclude()
+        op._git_exclude_preview()
 
         formatter.git_exclude_added.assert_called_once_with(".kiro/specs/foo")
 
     def test_git_exclude_idempotent_with_full_rel_path(self, tmp_path: Path) -> None:
-        """formatter.git_exclude_exists is called with str(rel_path) when entry already present.
-
-        Requirements: 4.1
-        """
+        """formatter.git_exclude_exists is called with str(rel_path) when entry already present."""
         repo_dir = _make_git_repo(tmp_path / "repo")
         exclude_file = repo_dir / ".git" / "info" / "exclude"
         exclude_file.write_text(".kiro/specs/foo\n")
@@ -278,19 +173,15 @@ class TestGitExcludeEntryNameWithNestedRelPath:
 
         context = _make_context(repo_dir, tmp_path)
         op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        op._git_exclude()
+        op._git_exclude_preview()
 
         formatter.git_exclude_exists.assert_called_once_with(".kiro/specs/foo")
         formatter.git_exclude_added.assert_not_called()
 
     def test_git_exclude_basename_entry_not_treated_as_match(self, tmp_path: Path) -> None:
-        """An existing entry for just 'foo' does not satisfy the '.kiro/specs/foo' check.
-
-        Requirements: 4.1
-        """
+        """An existing entry for just 'foo' does not satisfy the '.kiro/specs/foo' check."""
         repo_dir = _make_git_repo(tmp_path / "repo")
         exclude_file = repo_dir / ".git" / "info" / "exclude"
-        # Only the basename is present — should NOT be treated as a match
         exclude_file.write_text("foo\n")
 
         source = repo_dir / "foo"
@@ -301,9 +192,8 @@ class TestGitExcludeEntryNameWithNestedRelPath:
 
         context = _make_context(repo_dir, tmp_path)
         op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        op._git_exclude()
+        op._git_exclude_preview()
 
-        # The full rel_path entry is missing, so it should be added
         formatter.git_exclude_added.assert_called_once_with(".kiro/specs/foo")
         formatter.git_exclude_exists.assert_not_called()
 

@@ -32,6 +32,7 @@ from beyond_local_file.project_processor import (
 from .catchup import record_baseline, record_item_baseline
 from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
+from .live import LiveSync
 from .log import log_duration, note_persist_ms
 from .process import state_dir
 from .store import BaselineTrees, load_baseline, load_snapshot, save_baseline, save_snapshot
@@ -44,6 +45,7 @@ def handle_request(
     request: Request,
     on_progress: ProgressCallback | None = None,
     previous_trees: BaselineTrees | None = None,
+    live: LiveSync | None = None,
 ) -> Response:
     """Run one daemon request and capture its stdout.
 
@@ -53,14 +55,19 @@ def handle_request(
         on_progress: Optional callback for streamed status lines.
         previous_trees: In-memory baseline to keep when persisting a mutating
             shell. When omitted, persist loads the on-disk baseline.
+        live: Worker-unit observer. Create splices yaml then names item-add
+            on this LiveSync. When omitted, create builds a throwaway observer.
 
     Returns:
         ``exit_code`` and captured ``stdout``.
     """
     op = request.get("op")
+    created: dict[str, LiveSync] = {}
+    if live is not None:
+        created["live"] = live
     dispatch: dict[str, Handler] = {
         "check": lambda path, req: _handle_check(path, req, on_progress),
-        "create": _handle_create,
+        "create": lambda path, req: _handle_create(path, req, created),
         "restore": _handle_restore,
         "remove": _handle_remove,
         "reload": _handle_reload,
@@ -77,11 +84,16 @@ def handle_request(
                 if on_progress is not None:
                     on_progress("Writing baseline …")
                 changed_rel = request.get("path")
-                _persist_committed_state(
-                    config_path,
-                    changed_rel=str(changed_rel) if changed_rel else None,
-                    previous=previous_trees,
-                )
+                rel = str(changed_rel) if changed_rel else None
+                observer = created.get("live")
+                if op == "create" and observer is not None:
+                    _persist_live_state(config_path, observer, changed_rel=rel)
+                else:
+                    _persist_committed_state(
+                        config_path,
+                        changed_rel=rel,
+                        previous=previous_trees,
+                    )
             except Exception as error:
                 click.echo(f"Warning: could not persist mapping snapshot: {error}")
     return {"exit_code": exit_code, "stdout": buffer.getvalue()}
@@ -187,7 +199,7 @@ def _mark_check_started(projects: dict[str, ConfigProject]) -> None:
         (root / project.managed_project_name).write_text("1", encoding="utf-8")
 
 
-def _handle_create(config_path: Path, request: Request) -> int:
+def _handle_create(config_path: Path, request: Request, created: dict[str, LiveSync]) -> int:
     cwd, path = _cwd_and_path(request)
     source = Path(path)
     source = source if source.is_absolute() else cwd / source
@@ -208,7 +220,7 @@ def _handle_create(config_path: Path, request: Request) -> int:
     if dest_root is None:
         click.echo("Error: managed project path is missing")
         return 1
-    return CreateOperation(
+    code = CreateOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
@@ -217,6 +229,19 @@ def _handle_create(config_path: Path, request: Request) -> int:
         formatter=CreateFormatter(dry_run=dry_run),
         context=context,
     ).run()
+    if code != 0 or dry_run:
+        return code
+    observer = created.get("live")
+    projects = load_set_projects(config_path)
+    subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
+    if observer is None:
+        trees = load_baseline(config_path) or {}
+        observer = LiveSync(subset or projects, trees, last_seen_from_baseline=True)
+        created["live"] = observer
+    elif subset:
+        observer.replace_projects(subset)
+    observer.install_item(cwd, rel_path.as_posix())
+    return 0
 
 
 def _handle_restore(config_path: Path, request: Request) -> int:
@@ -296,6 +321,18 @@ def _resolve_context(
             click.echo(result.message)
         return result.exit_code
     return result
+
+
+def _persist_live_state(config_path: Path, live: LiveSync, changed_rel: str | None) -> None:
+    """Persist snapshot and LiveSync baseline after a named create job."""
+    with log_duration("persist: done") as fields:
+        projects = load_set_projects(config_path)
+        save_snapshot(config_path, projects)
+        rels = [changed_rel] if changed_rel else None
+        save_baseline(config_path, live.baseline, projects, changed_rels=rels)
+    elapsed = fields.get("duration_ms")
+    if isinstance(elapsed, int):
+        note_persist_ms(elapsed)
 
 
 def _persist_committed_state(

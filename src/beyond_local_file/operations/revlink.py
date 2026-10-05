@@ -11,14 +11,8 @@ import click
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
-from beyond_local_file.held import (
-    REASON_CREATE_OVERWRITE,
-    reason_clause,
-    store_held_copy,
-)
 from beyond_local_file.model.config import Mapping
 from beyond_local_file.projection import copy_projection
-from beyond_local_file.sync_state import compute_item_hash
 
 # ---------------------------------------------------------------------------
 # CreateFormatter
@@ -338,11 +332,10 @@ class RevlinkContext:
 
 @dataclass
 class CreateOperation:
-    """Orchestrates the copy-register workflow for a single source path.
+    """Validates and formats revlink create; yaml splice stays in this wrapper.
 
-    The operation proceeds through internal steps — ``_validate``,
-    ``_copy``, and ``_git_exclude`` — each of which returns
-    early with exit code 1 on failure.  The public entry point is :meth:`run`.
+    Disk writes (hub copy, fan-out, git exclude, gen 0) are a LiveSync
+    item-add job. ``run`` does not copy, fan out, or git-exclude.
 
     Attributes:
         source: Absolute path to the file or directory in the target directory
@@ -374,14 +367,12 @@ class CreateOperation:
     # ------------------------------------------------------------------
 
     def run(self) -> int:
-        """Execute the full revlink workflow and return an exit code.
+        """Validate, format, and splice yaml. Disk writes are a LiveSync job.
 
-        Derives ``dest`` as ``dest_root / rel_path``, preserving the full
-        directory structure so the managed layout mirrors the target layout
-        exactly.  Runs the pre-flight validation step, then proceeds through
-        copy and git-exclude steps in order when
-        not in dry-run mode.  In dry-run mode, previews all steps via the
-        formatter without modifying the filesystem.
+        Derives ``dest`` as ``dest_root / rel_path``. Dry-run previews every
+        step without modifying the filesystem. A real run splices mapping yaml
+        and prints the intended copy, exclude, and fan-out; LiveSync item-add
+        then writes disks.
 
         Returns:
             ``0`` on success, ``1`` if any step fails.
@@ -395,20 +386,17 @@ class CreateOperation:
 
         if self.dry_run:
             self._preview(dest)
-        else:
-            with log_duration("create: copy"):
-                result = self._copy(dest)
-            if result != 0:
-                return result
+            return 0
 
-            self.formatter.target_left_in_place(self.source)
-            with log_duration("create: git-exclude"):
-                self._git_exclude(self.context.cwd if self.context is not None else None)
-            with log_duration("create: config"):
-                self._update_config()
-            with log_duration("create: fan-out"):
-                self._fan_out(dest)
-
+        if self.force and dest.exists():
+            self.formatter.force_warning(dest)
+        self.formatter.copying(self.source, dest)
+        self.formatter.target_left_in_place(self.source)
+        self._git_exclude_preview()
+        for replica_root in self._other_replica_roots():
+            self.formatter.fan_out_copying(dest, replica_root / self.rel_path)
+        with log_duration("create: config"):
+            self._update_config()
         return 0
 
     def _preview(self, dest: Path) -> None:
@@ -544,35 +532,6 @@ class CreateOperation:
 
         return 0
 
-    def _copy(self, dest: Path) -> int:
-        """Copy the source file or directory to the managed project destination.
-
-        When ``--force`` is active, emits a warning and removes any existing
-        destination before copying.  Always emits a progress message showing
-        the source and destination paths before the copy begins.
-
-        Copies files and directory trees while preserving nested symlink nodes.
-
-        Args:
-            dest: Derived destination path (``dest_root / rel_path``).
-
-        Returns:
-            ``0`` on success.
-        """
-        if self.force:
-            self.formatter.force_warning(dest)
-            if dest.exists():
-                if dest.is_dir():
-                    shutil.rmtree(dest)
-                else:
-                    dest.unlink()
-
-        self.formatter.copying(self.source, dest)
-
-        copy_projection(self.source, dest)
-
-        return 0
-
     def _other_replica_roots(self) -> list[Path]:
         """Return other target-project roots for this managed project.
 
@@ -593,47 +552,6 @@ class CreateOperation:
                 seen.add(resolved)
                 roots.append(target)
         return roots
-
-    def _copy_item(self, src: Path, dest: Path) -> None:
-        """Copy a file or directory tree from *src* to *dest*.
-
-        Args:
-            src: Existing file or directory.
-            dest: Destination path; parent directories are created.
-        """
-        copy_projection(src, dest)
-
-    def _fan_out(self, dest: Path) -> None:
-        """Copy the hub item onto every non-source replica.
-
-        Equal bytes are left in place. Different bytes are held with reason
-        ``create-overwrite``, then overwritten from the hub.
-
-        Args:
-            dest: Managed-project copy to fan out.
-        """
-        if self.context is None:
-            return
-        rel = self.rel_path.as_posix()
-        for replica_root in self._other_replica_roots():
-            replica_path = replica_root / self.rel_path
-            self.formatter.fan_out_copying(dest, replica_path)
-            if replica_path.exists() and compute_item_hash(replica_path) != compute_item_hash(dest):
-                clause = reason_clause(
-                    REASON_CREATE_OVERWRITE,
-                    path=rel,
-                    replica=replica_root.as_posix(),
-                )
-                slot = store_held_copy(
-                    self.dest_root,
-                    rel_path=self.rel_path,
-                    source=replica_path,
-                    replica=replica_root,
-                    reason=REASON_CREATE_OVERWRITE,
-                )
-                self.formatter.held_overwrite_warning(clause, slot)
-            self._copy_item(dest, replica_path)
-            self._git_exclude(replica_root)
 
     def _update_config(self) -> None:
         """Add the item to every selective mapping of this managed project.
@@ -680,35 +598,6 @@ class CreateOperation:
             self.formatter.git_exclude_exists(entry_name)
         else:
             self.formatter.git_exclude_added(entry_name)
-
-    def _git_exclude(self, replica_root: Path | None = None) -> int:
-        """Add the item to ``.git/info/exclude`` for *replica_root* if it is a Git repo.
-
-        If *replica_root* is omitted, the source replica (cwd) is used.
-
-        Args:
-            replica_root: Target-project root to exclude in.
-
-        Returns:
-            Always ``0``.
-        """
-        if self.context is None:
-            return 0
-        root = replica_root if replica_root is not None else self.context.cwd
-        manager = GitExcludeManager(root)
-
-        if not manager.is_git_repo():
-            return 0
-
-        entry_name = self.rel_path.as_posix()
-        added_count, already_existing = manager.write_entries({entry_name})
-
-        if added_count > 0:
-            self.formatter.git_exclude_added(entry_name)
-        elif entry_name in already_existing:
-            self.formatter.git_exclude_exists(entry_name)
-
-        return 0
 
 
 # ---------------------------------------------------------------------------

@@ -457,7 +457,7 @@ def _assert_create_request(messages: list[str], target: Path) -> None:
         assert _DURATION.search(step_line)
         assert "unit=managed" in step_line
     assert not any(line.startswith("live: tick reason=before-request ") for line in messages)
-    assert any(line.startswith("baseline: record ") and "paths=" in line for line in messages)
+    assert not any(line.startswith("baseline: record ") for line in messages)
     assert any(line.startswith("baseline: write ") and "bytes=" in line for line in messages)
     assert any(line.startswith("snapshot: write ") and "bytes=" in line for line in messages)
     assert any(line.startswith("persist: done ") for line in messages)

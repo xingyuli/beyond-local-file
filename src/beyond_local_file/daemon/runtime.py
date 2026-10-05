@@ -456,6 +456,7 @@ def _execute_unit_request(
         request,
         on_progress=on_progress,
         previous_trees=unit.live.baseline if mutating_shell else None,
+        live=unit.live if mutating_shell else None,
     )
     mutating = mutating_shell and not request.get("dry_run")
     if mutating and response.get("exit_code") == 0:
@@ -466,7 +467,7 @@ def _execute_unit_request(
                 unit.live.replace_projects(subset)
                 changed_rel = str(request.get("path") or "").strip()
                 recorded = load_baseline(request_config)
-                if changed_rel and recorded is not None:
+                if op != "create" and changed_rel and recorded is not None:
                     project = next(iter(subset.values()))
                     unit.live.merge_item_from_trees(changed_rel, trees_for_project(project, recorded))
     if before is not None:

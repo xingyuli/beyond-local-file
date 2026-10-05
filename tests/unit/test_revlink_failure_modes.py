@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from beyond_local_file.daemon.live import LiveSync
+from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.operations import revlink
 from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
 
@@ -58,25 +60,33 @@ def test_checksum_verifier_is_gone() -> None:
 
 
 class TestCreateCopyIoFailure:
-    """Create trusts copy_projection; I/O failure is OSError."""
+    """Create trusts copy_projection; I/O failure is OSError on the LiveSync job."""
 
     def test_copy_oserror_propagates_and_leaves_source(self, tmp_path: Path) -> None:
-        """copy_projection OSError propagates; source bytes are unchanged."""
-        source = tmp_path / "source.txt"
-        source.write_text("original content")
-        dest_root = tmp_path / "managed"
-        dest_root.mkdir()
-        op, _formatter = _make_operation(source, dest_root)
+        """copy_projection OSError on item-add propagates; source bytes are unchanged."""
+        hub = tmp_path / "lab-app"
+        alpha = tmp_path / "alpha"
+        example = tmp_path / "example"
+        for path in (hub, alpha, example):
+            path.mkdir()
+        (alpha / "notes.md").write_text("original content")
+        projects = {
+            str(hub): ConfigProject(
+                managed_project_name="lab-app",
+                managed_project_path=hub,
+                mappings=[Mapping(targets=[alpha, example], subpaths=["notes.md"])],
+            )
+        }
+        live = LiveSync(projects, {})
 
         with (
-            patch("beyond_local_file.operations.revlink.copy_projection", side_effect=OSError("disk full")),
+            patch("beyond_local_file.daemon.live.copy_projection", side_effect=OSError("disk full")),
             pytest.raises(OSError, match="disk full"),
         ):
-            op.run()
+            live.install_item(alpha, "notes.md")
 
-        assert source.exists()
-        assert source.read_text() == "original content"
-        assert not (dest_root / "source.txt").exists()
+        assert (alpha / "notes.md").read_text() == "original content"
+        assert not (hub / "notes.md").exists()
 
     def test_successful_copy_does_not_emit_checksum_steps(self, tmp_path: Path) -> None:
         """Create does not MD5-verify after copy."""
@@ -118,5 +128,5 @@ class TestCreateLeavesTargetInPlace:
         assert source.is_file()
         assert not source.is_symlink()
         assert source.read_text() == "data"
-        assert (dest_root / "source.txt").read_text() == "data"
+        assert not (dest_root / "source.txt").exists()
         formatter.target_left_in_place.assert_called_once_with(source)

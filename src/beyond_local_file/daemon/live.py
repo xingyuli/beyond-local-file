@@ -7,13 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from beyond_local_file.held import REASON_DELETE_GAP, reason_clause, store_held_copy
+from beyond_local_file.held import REASON_DELETE_GAP, is_held_item_name, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.model.processing import ManagedProjectItem
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.projection import copy_projection
 
 from .catchup import (
     ScanStats,
+    add_git_exclude,
+    copy_hub_onto_replica,
     rel_in_items,
     remove_path,
     scan_items,
@@ -172,6 +175,36 @@ class LiveSync:
                     base_gen=get_generation(self._baseline, watch.root, rel),
                 )
             self._last_seen[str(watch.root)] = scanned
+
+    def install_item(self, replica: Path, rel: str) -> None:
+        """Named item-add: copy *rel* from *replica* onto the hub, fan out, exclude, gen 0.
+
+        Does not drain the mailbox. Colliding replica bytes are held
+        ``create-overwrite`` then overwritten. Equal bytes stay. Generation 0
+        is the first version observed.
+
+        Args:
+            replica: Adopting replica that already has the bytes.
+            rel: Item path relative to the hub and replicas.
+        """
+        hub = self._hub_for_install(rel)
+        source = replica / rel
+        with log_duration("create: copy"):
+            copy_projection(source, hub / rel)
+        others = self._other_replica_roots(replica, rel)
+        with log_duration("create: fan-out"):
+            for other in others:
+                copy_hub_onto_replica(hub, other, rel)
+        with log_duration("create: git-exclude"):
+            for root in (replica, *others):
+                add_git_exclude(root, rel)
+        self._record_item(hub, rel, gen=0)
+        self._record_item(replica, rel, gen=0)
+        for other in others:
+            self._record_item(other, rel, gen=0)
+        self._last_source[(str(hub), rel)] = replica
+        self._watch_roots = _build_watch_roots(self._projects)
+        print(f"live: install {rel} gen 0", flush=True)
 
     def apply(self) -> tuple[str, ...]:
         """Apply pending mailbox entries one at a time, first-apply-wins per path.
@@ -432,6 +465,44 @@ class LiveSync:
                 return watch.root
         return None
 
+    def _hub_for_install(self, rel: str) -> Path:
+        hub = self._hub_for(rel)
+        if hub is not None:
+            return hub
+        return next(iter(self._projects.values())).managed_project_path
+
+    def _other_replica_roots(self, source: Path, rel: str) -> list[Path]:
+        """Return other mapping targets that declare *rel*.
+
+        Args:
+            source: Adopting replica to exclude.
+            rel: Item path relative to each replica.
+
+        Returns:
+            Unique target roots in first-seen order.
+        """
+        seen = {source.resolve()}
+        roots: list[Path] = []
+        for project in self._projects.values():
+            for mapping in project.mappings:
+                if mapping.subpaths is not None and rel not in mapping.subpaths:
+                    continue
+                for target in mapping.targets:
+                    resolved = target.resolve()
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    roots.append(target)
+        return roots
+
+    def _record_item(self, root: Path, item_name: str, gen: int) -> None:
+        scanned = scan_items(root, [item_name])
+        if not scanned:
+            self._record(root, item_name, path_state(False, None), gen)
+            return
+        for rel, state in scanned.items():
+            self._record(root, rel, state, gen)
+
     def _overwrite_replicas(self, hub: Path, rel: str, new_gen: int) -> None:
         source = hub / rel
         for watch in self._watch_roots:
@@ -602,10 +673,32 @@ def _merge_watch(
     return _WatchRoot(root, merged_names, is_hub, merged_hubs)
 
 
+def _watch_item_loader(managed_project_path: Path, subpaths: list[str] | None) -> list[ManagedProjectItem]:
+    """Load declared items, including selective subpaths not yet on the hub.
+
+    Create splices yaml then replace_projects before the hub copy exists.
+    Watch roots must still include that declared item.
+    """
+    if subpaths is None:
+        items: list[ManagedProjectItem] = []
+        if managed_project_path.exists() and managed_project_path.is_dir():
+            for item_path in managed_project_path.iterdir():
+                if is_held_item_name(item_path.name):
+                    continue
+                items.append(ManagedProjectItem(name=item_path.name, path=item_path))
+        return items
+    items_list: list[ManagedProjectItem] = []
+    for subpath in subpaths:
+        if is_held_item_name(Path(subpath).parts[0]):
+            continue
+        items_list.append(ManagedProjectItem(name=subpath, path=managed_project_path / subpath))
+    return items_list
+
+
 def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
     hubs: dict[str, _WatchRoot] = {}
     replicas: dict[str, _WatchRoot] = {}
-    for unit in translate_config_to_mapping_units(projects):
+    for unit in translate_config_to_mapping_units(projects, item_loader=_watch_item_loader):
         names = tuple(item.name for item in unit.items)
         item_hubs = dict.fromkeys(names, unit.managed_project_path)
         hub_key = str(unit.managed_project_path)
