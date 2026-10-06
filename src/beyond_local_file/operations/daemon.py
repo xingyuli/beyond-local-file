@@ -6,8 +6,12 @@ from pathlib import Path
 
 import click
 
-from beyond_local_file.blfrc import is_global_config_path
-from beyond_local_file.configuration_set import ConfigurationSet
+from beyond_local_file.configuration_set import (
+    ConfigError,
+    ConfigurationSet,
+    configuration_set_for_shell,
+    configuration_set_for_start,
+)
 from beyond_local_file.daemon.client import (
     DAEMON_DOWN_HINT,
     call_daemon,
@@ -26,7 +30,6 @@ from beyond_local_file.daemon.oos_held import list_oos_and_held
 from beyond_local_file.daemon.process import (
     follow_logs,
     is_running,
-    overlapping_running_set,
     print_status,
     read_pid,
     spawn_and_wait,
@@ -42,7 +45,6 @@ from beyond_local_file.daemon.screen import (
 )
 from beyond_local_file.daemon.store import load_baseline, load_snapshot
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.project_processor import load_config_projects, resolve_configuration_set
 
 
 def start_daemon(config: str | None, *, worker: bool) -> int:
@@ -55,23 +57,37 @@ def start_daemon(config: str | None, *, worker: bool) -> int:
     Returns:
         Process exit code.
     """
-    result = resolve_configuration_set(config)
-    if result is None:
+    asked = configuration_set_for_start(config)
+    if asked is None:
         return 1
     if worker:
-        return run_worker(result.config_file)
-    if is_running(result.config_file):
-        click.echo(f"Error: daemon is already running (pid {read_pid(result.config_file)})")
-        return 1
-    overlap = overlapping_running_set(list(result.mapping_files))
-    if overlap is not None:
-        identity, pid, mapping = overlap
-        owner = "global set" if is_global_config_path(identity) else f"set {identity}"
-        click.echo(f"Error: mapping file {mapping} is already loaded by the running {owner} (pid {pid})")
-        return 1
+        return run_worker(asked.identity)
+    refused = _refuse_start(asked)
+    if refused is not None:
+        return refused
     if shell_wants_screen():
-        return _start_on_screen(result.config_file)
-    return _start_off_screen(result.config_file)
+        return _start_on_screen(asked.identity)
+    return _start_off_screen(asked.identity)
+
+
+def _refuse_start(asked: ConfigurationSet) -> int | None:
+    """Return an exit code when this identity is running, overlapping, or unloadable."""
+    if is_running(asked.identity):
+        click.echo(f"Error: daemon is already running (pid {read_pid(asked.identity)})")
+        return 1
+    overlap = asked.running_overlap()
+    if overlap is not None:
+        owner = "global set" if ConfigurationSet(overlap.identity).is_global else f"set {overlap.identity}"
+        click.echo(
+            f"Error: mapping file {overlap.mapping_file} is already loaded by the running {owner} (pid {overlap.pid})"
+        )
+        return 1
+    try:
+        asked.projects()
+    except ConfigError as error:
+        _echo_config_error(asked, error)
+        return 1
+    return None
 
 
 def _start_off_screen(config_path: Path) -> int:
@@ -117,23 +133,27 @@ def reload_daemon(config: str | None) -> int:
     Returns:
         Process exit code.
     """
-    result = load_config_projects(config)
-    if result is None:
+    asked = configuration_set_for_shell(config)
+    if asked is None:
         return 1
-    if not is_running(result.config_file):
+    if not is_running(asked.identity):
         click.echo(DAEMON_DOWN_HINT)
         return 1
     on_screen = shell_wants_screen()
-    code, file_projects, snapshot_projects, diff = prepare_ingest(
-        result.config_file,
-        confirm=not on_screen,
-    )
+    try:
+        code, file_projects, snapshot_projects, diff = prepare_ingest(
+            asked.identity,
+            confirm=not on_screen,
+        )
+    except ConfigError as error:
+        _echo_config_error(asked, error)
+        code, file_projects, snapshot_projects, diff = 1, None, None, None
     if code != 0:
         return code
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
         return 1
-    _echo_oos_and_held(result.config_file, warning=True)
+    _echo_oos_and_held(asked.identity, warning=True)
     no_diff = diff is None or file_projects is None or snapshot_projects is None
     questions = []
     if on_screen and diff is not None and diff.removals:
@@ -161,7 +181,7 @@ def reload_daemon(config: str | None) -> int:
         return None
 
     return call_daemon(
-        result.config_file,
+        asked.identity,
         request,
         questions=tuple(questions),
         apply_answers=apply_answers if questions else None,
@@ -177,10 +197,10 @@ def stop_daemon(config: str | None) -> int:
     Returns:
         Process exit code.
     """
-    result = load_config_projects(config)
-    if result is None:
+    asked = configuration_set_for_shell(config)
+    if asked is None:
         return 1
-    return stop_process(result.config_file)
+    return stop_process(asked.identity)
 
 
 def status_daemon(config: str | None) -> int:
@@ -192,21 +212,25 @@ def status_daemon(config: str | None) -> int:
     Returns:
         Process exit code.
     """
-    result = load_config_projects(config)
-    if result is None:
+    asked = configuration_set_for_shell(config)
+    if asked is None:
         return 1
-    lines = _oos_and_held_lines(result.config_file, warning=False)
-    url = resolve_ui_url(result.config_file) if lines else None
+    try:
+        lines = _oos_and_held_lines(asked.identity, warning=False)
+    except ConfigError as error:
+        _echo_config_error(asked, error)
+        return 1
+    url = resolve_ui_url(asked.identity) if lines else None
     if url:
         lines.append(url)
     listing_lines = tuple(lines)
-    if shell_wants_screen() and is_running(result.config_file):
+    if shell_wants_screen() and is_running(asked.identity):
         return call_daemon(
-            result.config_file,
-            {"op": "status", "pid": read_pid(result.config_file)},
+            asked.identity,
+            {"op": "status", "pid": read_pid(asked.identity)},
             trailer=listing_lines,
         )
-    code = print_status(result.config_file)
+    code = print_status(asked.identity)
     for line in listing_lines:
         click.echo(line)
     return code
@@ -238,10 +262,10 @@ def follow_blf_logs(config: str | None, record: str | None = None) -> int:
     Returns:
         Process exit code.
     """
-    result = load_config_projects(config)
-    if result is None:
+    asked = configuration_set_for_shell(config)
+    if asked is None:
         return 1
-    return follow_logs(result.config_file, record)
+    return follow_logs(asked.identity, record)
 
 
 def _echo_oos_and_held(config_path: Path, *, warning: bool) -> bool:
@@ -299,3 +323,11 @@ def _committed_projects(config_path: Path) -> dict[str, ConfigProject]:
     if snapshot is not None:
         return snapshot
     return ConfigurationSet(config_path).projects()
+
+
+def _echo_config_error(asked: ConfigurationSet, error: ConfigError) -> None:
+    """Print a mapping-load error, matching the former load_config_projects strings."""
+    if asked.is_global:
+        click.echo(f"Error: {error}")
+        return
+    click.echo(str(error))

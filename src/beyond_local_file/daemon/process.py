@@ -17,9 +17,7 @@ import click
 
 from beyond_local_file.blfrc import (
     get_home_directory,
-    global_config_path,
     is_global_config_path,
-    resolve_global_mapping_files,
     runtime_home,
 )
 from beyond_local_file.configuration_set import ConfigurationSet
@@ -70,68 +68,6 @@ def set_id_for(config_path: Path) -> str:
     if is_global_config_path(config_path):
         return GLOBAL_SET_ID
     return singleton_set_id(config_path)
-
-
-def mapping_files_for(config_path: Path) -> list[Path]:
-    """Return the mapping files loaded by the set identified by *config_path*.
-
-    Args:
-        config_path: Set identity path (global config or a mapping yaml).
-
-    Returns:
-        Resolved mapping yaml paths.
-    """
-    return list(ConfigurationSet(config_path).mapping_files())
-
-
-def running_owner_of(mapping_file: Path) -> Path | None:
-    """Return the identity path of the running set that loaded *mapping_file*.
-
-    Args:
-        mapping_file: A mapping yaml path.
-
-    Returns:
-        Global config path or the singleton mapping path, or None.
-    """
-    resolved = mapping_file.resolve()
-    overlap = overlapping_running_set([resolved])
-    if overlap is None:
-        return None
-    identity, _pid, _mapping = overlap
-    return identity
-
-
-def overlapping_running_set(mapping_files: list[Path]) -> tuple[Path, int, Path] | None:
-    """Return a running set that already loaded one of *mapping_files*.
-
-    Args:
-        mapping_files: Mapping yaml paths the caller wants to load.
-
-    Returns:
-        ``(identity_path, pid, overlapping_mapping_file)`` or None.
-    """
-    wanted = {path.resolve() for path in mapping_files}
-    if not wanted:
-        return None
-    run_root = runtime_home() / "run"
-    if not run_root.is_dir():
-        return None
-    for entry in sorted(run_root.iterdir(), key=lambda path: path.name):
-        if not entry.is_dir():
-            continue
-        pid = read_pid_file(entry / PID_NAME)
-        if pid is None or not pid_is_alive(pid):
-            continue
-        loaded = _loaded_mapping_files(entry)
-        if not loaded and entry.name != GLOBAL_SET_ID:
-            loaded = [path for path in wanted if singleton_set_id(path) == entry.name]
-        for loaded_path in loaded:
-            if loaded_path.resolve() in wanted:
-                identity = _identity_path_for_run_dir(entry, loaded)
-                if identity is None:
-                    continue
-                return identity, pid, loaded_path.resolve()
-    return None
 
 
 def pid_path(config_path: Path) -> Path:
@@ -269,7 +205,7 @@ def spawn_worker(config_path: Path) -> int:
         click.echo(f"Error: daemon is already running (pid {read_pid(config_path)})")
         return 1
 
-    mapping_files = mapping_files_for(config_path)
+    mapping_files = list(ConfigurationSet(config_path).mapping_files())
     for mapping in mapping_files:
         for path in _remove_hub_local_state(mapping):
             click.echo(str(path))
@@ -590,32 +526,3 @@ def _write_mapping_files(config_path: Path, mapping_files: list[Path]) -> None:
     path = ConfigurationSet(config_path).run_directory / MAPPING_FILES_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(f"{item.resolve()}\n" for item in mapping_files), encoding="utf-8")
-
-
-def _read_mapping_files(run_dir: Path) -> list[Path]:
-    path = run_dir / MAPPING_FILES_NAME
-    if not path.exists():
-        return []
-    files: list[Path] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        text = line.strip()
-        if text:
-            files.append(Path(text))
-    return files
-
-
-def _loaded_mapping_files(run_dir: Path) -> list[Path]:
-    files = _read_mapping_files(run_dir)
-    if files:
-        return files
-    if run_dir.name == GLOBAL_SET_ID:
-        return list(resolve_global_mapping_files() or [])
-    return []
-
-
-def _identity_path_for_run_dir(run_dir: Path, loaded: list[Path]) -> Path | None:
-    if run_dir.name == GLOBAL_SET_ID:
-        return global_config_path()
-    if loaded:
-        return loaded[0].resolve()
-    return None

@@ -14,6 +14,7 @@ import click
 
 from . import __version__
 from .completion import complete_project_names
+from .configuration_set import ConfigError, ConfigurationSet, configuration_set_for_shell
 from .contribution import contribution_owner, projects_targeting
 from .daemon.client import call_daemon, shell_wants_screen
 from .daemon.screen import ScreenSkip, hub_choice_question
@@ -27,7 +28,6 @@ from .operations.daemon import (
 )
 from .operations.upgrade import run_upgrade
 from .options import OutputFormat
-from .project_processor import load_config_projects
 
 
 def _configure_windows_console_encoding() -> None:
@@ -251,18 +251,25 @@ def _choose_create_project(ctx: click.Context, cwd: Path, path: str) -> tuple[st
         create should interview on the shell screen, or ``(None, None)`` when
         no project targets ``cwd`` (the daemon still reports that).
     """
-    loaded = load_config_projects(ctx.obj["config"])
-    if loaded is None:
+    loaded = configuration_set_for_shell(ctx.obj["config"])
+    projects = None
+    if loaded is not None:
+        try:
+            projects = loaded.projects()
+        except ConfigError as error:
+            _echo_config_error(loaded, error)
+            loaded = None
+    if loaded is None or projects is None:
         ctx.exit(1)
         return None, None
-    matches = projects_targeting(loaded.projects, cwd)
+    matches = projects_targeting(projects, cwd)
     if not matches:
         return None, None
     if len(matches) == 1:
         return matches[0].managed_project_name, None
     source = Path(path).resolve()
     rel = source.relative_to(cwd).as_posix()
-    owner = contribution_owner(loaded.projects, cwd, rel)
+    owner = contribution_owner(projects, cwd, rel)
     if owner is not None:
         return owner.managed_project_name, None
     names = [project.managed_project_name for project in matches]
@@ -283,8 +290,14 @@ def _interview_or_exit(ctx: click.Context, names: list[str]) -> tuple[str | None
 
 def _call_create_with_hub_choice(ctx: click.Context, request: dict[str, Any], names: list[str]) -> None:
     """Open the shell screen, ask for a hub number, then send the create request."""
-    result = load_config_projects(ctx.obj["config"])
-    if result is None:
+    loaded = configuration_set_for_shell(ctx.obj["config"])
+    if loaded is None:
+        ctx.exit(1)
+        return
+    try:
+        loaded.projects()
+    except ConfigError as error:
+        _echo_config_error(loaded, error)
         ctx.exit(1)
         return
 
@@ -294,7 +307,7 @@ def _call_create_with_hub_choice(ctx: click.Context, request: dict[str, Any], na
 
     ctx.exit(
         call_daemon(
-            result.config_file,
+            loaded.identity,
             request,
             questions=(hub_choice_question(names),),
             apply_answers=apply_answers,
@@ -374,11 +387,25 @@ def _call_daemon(ctx: click.Context, request: dict[str, Any]) -> None:
         ctx: Active Click context carrying ``--config``.
         request: JSON-serialisable daemon request.
     """
-    result = load_config_projects(ctx.obj["config"])
-    if result is None:
+    loaded = configuration_set_for_shell(ctx.obj["config"])
+    if loaded is None:
         ctx.exit(1)
         return
-    ctx.exit(call_daemon(result.config_file, request))
+    try:
+        loaded.projects()
+    except ConfigError as error:
+        _echo_config_error(loaded, error)
+        ctx.exit(1)
+        return
+    ctx.exit(call_daemon(loaded.identity, request))
+
+
+def _echo_config_error(asked: ConfigurationSet, error: ConfigError) -> None:
+    """Print a mapping-load error, matching the former load_config_projects strings."""
+    if asked.is_global:
+        click.echo(f"Error: {error}")
+        return
+    click.echo(str(error))
 
 
 if __name__ == "__main__":

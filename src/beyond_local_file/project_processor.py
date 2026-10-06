@@ -17,10 +17,9 @@ from .blfrc import (
     is_global_config_path,
     resolve_global_mapping_files,
 )
-from .configuration_set import ConfigError, ConfigurationSet
+from .configuration_set import ConfigError, ConfigurationSet, configuration_set_for_shell
 from .constants import DEFAULT_CONFIG_FILE
 from .contribution import contribution_owner, projects_targeting
-from .daemon.process import running_owner_of
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_mapping_units
 from .operations import CmdOperation
@@ -56,8 +55,8 @@ class RevlinkResolveError:
 
     Attributes:
         message: Human-readable error message to display to the user.
-            ``None`` when :func:`load_config_projects` already printed the
-            diagnostic — the caller must skip ``click.echo`` in that case.
+            ``None`` when :func:`configuration_set_for_shell` already printed
+            the diagnostic — the caller must skip ``click.echo`` in that case.
         exit_code: Suggested process exit code (always 1 for errors).
     """
 
@@ -97,14 +96,23 @@ def resolve_revlink_context(
         :class:`RevlinkResolveError` when config loading fails, no project
         matches ``cwd``, ``rel_path`` is not a managed item, or multiple
         projects match ``cwd`` with no owner and no ``project_name``.
-        When the error message is empty, :func:`load_config_projects` has
-        already printed the diagnostic; callers must skip ``click.echo``.
+        When the error message is empty, :func:`configuration_set_for_shell`
+        has already printed the diagnostic; callers must skip ``click.echo``.
     """
-    result = load_config_projects(config)
-    if result is None:
+    asked = configuration_set_for_shell(config)
+    if asked is None:
+        return RevlinkResolveError(message=None)
+    try:
+        projects = asked.projects()
+        sources = asked.project_sources()
+    except ConfigError as error:
+        if asked.is_global:
+            click.echo(f"Error: {error}")
+        else:
+            click.echo(str(error))
         return RevlinkResolveError(message=None)
 
-    project = _resolve_project_from_cwd(result.projects, cwd)
+    project = _resolve_project_from_cwd(projects, cwd)
 
     if project is None:
         hint = (
@@ -114,12 +122,12 @@ def resolve_revlink_context(
         return RevlinkResolveError(message=f"No managed project found for current directory: {cwd}\n{hint}")
 
     if isinstance(project, list):
-        project = _disambiguate_revlink_project(project, result.projects, cwd, project_name, rel_path)
+        project = _disambiguate_revlink_project(project, projects, cwd, project_name, rel_path)
         if isinstance(project, RevlinkResolveError):
             return project
 
     matched_mapping = next(m for m in project.mappings if cwd in m.targets)
-    source = result.project_sources.get(project.managed_project_path, result.config_file)
+    source = sources.get(project.managed_project_path, asked.identity)
 
     return RevlinkContext(
         config_path=source,
@@ -230,16 +238,28 @@ def load_config_projects(config: str | None, project_name: str | None = None) ->
     Returns:
         A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
     """
-    result = resolve_configuration_set(config, project_name)
-    if result is None or config is None:
-        return result
-    path = Path(_get_absolute_path(config))
-    if is_global_config_path(path):
-        return result
-    owner = running_owner_of(path)
-    if owner is None or owner.resolve() == result.config_file.resolve():
-        return result
-    return resolve_configuration_set(str(owner), project_name)
+    asked = configuration_set_for_shell(config)
+    if asked is None:
+        return None
+    try:
+        projects = asked.projects(project_name)
+        sources = asked.project_sources(project_name)
+        mapping_files = asked.mapping_files()
+    except ConfigError as error:
+        if asked.is_global:
+            click.echo(f"Error: {error}")
+        else:
+            click.echo(str(error))
+        return None
+    if asked.is_global and project_name and not projects:
+        click.echo(f"Project '{project_name}' not found in config")
+        return None
+    return ConfigLoadResult(
+        projects=projects,
+        config_file=asked.identity,
+        mapping_files=mapping_files,
+        project_sources=sources,
+    )
 
 
 def resolve_configuration_set(config: str | None, project_name: str | None = None) -> ConfigLoadResult | None:

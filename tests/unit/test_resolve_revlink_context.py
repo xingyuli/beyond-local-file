@@ -7,15 +7,11 @@ project_processor boundary so these tests are pure unit tests.
 """
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.operations.revlink import RevlinkContext
-from beyond_local_file.project_processor import (
-    ConfigLoadResult,
-    RevlinkResolveError,
-    resolve_revlink_context,
-)
+from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,6 +20,7 @@ from beyond_local_file.project_processor import (
 _CONFIG_PATH = Path("/fake/config.yml")
 _MANAGED_PATH = Path("/fake/managed")
 _CWD = Path("/fake/target")
+_FOR_SHELL = "beyond_local_file.project_processor.configuration_set_for_shell"
 
 
 def _make_project(*, name: str = "test-project", targets: list[Path] | None = None) -> ConfigProject:
@@ -43,18 +40,32 @@ def _make_project(*, name: str = "test-project", targets: list[Path] | None = No
     )
 
 
+def _fake_set(
+    projects: dict[str, ConfigProject],
+    *,
+    identity: Path = _CONFIG_PATH,
+    sources: dict[Path, Path] | None = None,
+) -> MagicMock:
+    """Return a ConfigurationSet-like stub for resolve_revlink_context tests."""
+    asked = MagicMock()
+    asked.identity = identity
+    asked.projects.return_value = projects
+    asked.project_sources.return_value = sources or {}
+    return asked
+
+
 # ---------------------------------------------------------------------------
-# Failure mode 1: config loading fails (load_config_projects returns None)
+# Failure mode 1: config loading fails (configuration_set_for_shell returns None)
 # ---------------------------------------------------------------------------
 
 
 def test_returns_error_when_config_load_fails() -> None:
-    """When load_config_projects returns None, resolve_revlink_context returns a RevlinkResolveError.
+    """When configuration_set_for_shell returns None, resolve_revlink_context returns a RevlinkResolveError.
 
-    The message is None because load_config_projects already printed the
-    diagnostic; the caller should check and skip echo when message is None.
+    The message is None because the factory already printed the diagnostic;
+    the caller should check and skip echo when message is None.
     """
-    with patch("beyond_local_file.project_processor.load_config_projects", return_value=None):
+    with patch(_FOR_SHELL, return_value=None):
         result = resolve_revlink_context(config=None, cwd=_CWD)
 
     assert isinstance(result, RevlinkResolveError)
@@ -73,10 +84,10 @@ def test_returns_error_when_no_project_matches() -> None:
     The message must contain a human-readable description and a hint about
     how to fix the config.
     """
-    load_result = ConfigLoadResult(projects={}, config_file=_CONFIG_PATH)
+    asked = _fake_set({})
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch("beyond_local_file.project_processor._resolve_project_from_cwd", return_value=None),
     ):
         result = resolve_revlink_context(config=None, cwd=_CWD)
@@ -89,10 +100,10 @@ def test_returns_error_when_no_project_matches() -> None:
 
 def test_no_project_message_includes_hint() -> None:
     """The no-match error message must include the config hint text."""
-    load_result = ConfigLoadResult(projects={}, config_file=_CONFIG_PATH)
+    asked = _fake_set({})
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch("beyond_local_file.project_processor._resolve_project_from_cwd", return_value=None),
     ):
         result = resolve_revlink_context(config=None, cwd=_CWD)
@@ -121,13 +132,10 @@ def test_returns_error_when_multiple_projects_match() -> None:
         managed_project_path=Path("/managed-b"),
         mappings=[Mapping(targets=[_CWD], subpaths=None)],
     )
-    load_result = ConfigLoadResult(
-        projects={"a": project_a, "b": project_b},
-        config_file=_CONFIG_PATH,
-    )
+    asked = _fake_set({"a": project_a, "b": project_b})
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch(
             "beyond_local_file.project_processor._resolve_project_from_cwd",
             return_value=[project_a, project_b],
@@ -154,13 +162,10 @@ def test_returns_revlink_context_on_unique_match() -> None:
     matched_mapping, cwd, and managed_project_path.
     """
     project = _make_project()
-    load_result = ConfigLoadResult(
-        projects={"test-project": project},
-        config_file=_CONFIG_PATH,
-    )
+    asked = _fake_set({"test-project": project})
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch("beyond_local_file.project_processor._resolve_project_from_cwd", return_value=project),
     ):
         result = resolve_revlink_context(config=None, cwd=_CWD)
@@ -176,16 +181,13 @@ def test_returns_revlink_context_on_unique_match() -> None:
 
 
 def test_context_config_path_matches_loaded_config() -> None:
-    """The RevlinkContext.config_path must equal the config_file from the load result."""
+    """The RevlinkContext.config_path falls back to the set identity when sources are empty."""
     custom_config = Path("/custom/path/config.yml")
     project = _make_project()
-    load_result = ConfigLoadResult(
-        projects={"test-project": project},
-        config_file=custom_config,
-    )
+    asked = _fake_set({"test-project": project}, identity=custom_config)
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch("beyond_local_file.project_processor._resolve_project_from_cwd", return_value=project),
     ):
         result = resolve_revlink_context(config="custom-config-arg", cwd=_CWD)
@@ -194,16 +196,13 @@ def test_context_config_path_matches_loaded_config() -> None:
     assert result.config_path == custom_config
 
 
-def test_load_config_projects_called_with_correct_config_arg() -> None:
-    """resolve_revlink_context must pass the config arg through to load_config_projects."""
+def test_configuration_set_for_shell_called_with_correct_config_arg() -> None:
+    """resolve_revlink_context must pass the config arg through to configuration_set_for_shell."""
     project = _make_project()
-    load_result = ConfigLoadResult(
-        projects={"test-project": project},
-        config_file=_CONFIG_PATH,
-    )
+    asked = _fake_set({"test-project": project})
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result) as mock_load,
+        patch(_FOR_SHELL, return_value=asked) as mock_load,
         patch("beyond_local_file.project_processor._resolve_project_from_cwd", return_value=project),
     ):
         resolve_revlink_context(config="/explicit/config.yml", cwd=_CWD)
@@ -215,10 +214,10 @@ def test__resolve_project_from_cwd_called_with_correct_args() -> None:
     """resolve_revlink_context must pass projects dict and cwd to _resolve_project_from_cwd."""
     project = _make_project()
     projects = {"test-project": project}
-    load_result = ConfigLoadResult(projects=projects, config_file=_CONFIG_PATH)
+    asked = _fake_set(projects)
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch(
             "beyond_local_file.project_processor._resolve_project_from_cwd",
             return_value=project,
@@ -237,13 +236,10 @@ def test_project_name_selects_among_multiple_cwd_matches() -> None:
         managed_project_path=Path("/managed-b"),
         mappings=[Mapping(targets=[_CWD], subpaths=None)],
     )
-    load_result = ConfigLoadResult(
-        projects={"a": project_a, "b": project_b},
-        config_file=_CONFIG_PATH,
-    )
+    asked = _fake_set({"a": project_a, "b": project_b})
 
     with (
-        patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result),
+        patch(_FOR_SHELL, return_value=asked),
         patch(
             "beyond_local_file.project_processor._resolve_project_from_cwd",
             return_value=[project_a, project_b],
@@ -268,12 +264,9 @@ def test_rel_path_selects_contribution_owner() -> None:
         managed_project_path=Path("/managed-b"),
         mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"])],
     )
-    load_result = ConfigLoadResult(
-        projects={"a": project_a, "b": project_b},
-        config_file=_CONFIG_PATH,
-    )
+    asked = _fake_set({"a": project_a, "b": project_b})
 
-    with patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result):
+    with patch(_FOR_SHELL, return_value=asked):
         result = resolve_revlink_context(config=None, cwd=_CWD, rel_path=".env")
 
     assert isinstance(result, RevlinkContext)
@@ -292,12 +285,9 @@ def test_rel_path_without_owner_is_not_managed() -> None:
         managed_project_path=Path("/managed-b"),
         mappings=[Mapping(targets=[_CWD], subpaths=[".vscode"])],
     )
-    load_result = ConfigLoadResult(
-        projects={"a": project_a, "b": project_b},
-        config_file=_CONFIG_PATH,
-    )
+    asked = _fake_set({"a": project_a, "b": project_b})
 
-    with patch("beyond_local_file.project_processor.load_config_projects", return_value=load_result):
+    with patch(_FOR_SHELL, return_value=asked):
         result = resolve_revlink_context(config=None, cwd=_CWD, rel_path="notes.txt")
 
     assert isinstance(result, RevlinkResolveError)

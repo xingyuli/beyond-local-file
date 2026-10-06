@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
 
 from beyond_local_file.blfrc import runtime_home
-from beyond_local_file.configuration_set import ConfigError, ConfigurationSet
+from beyond_local_file.configuration_set import (
+    ConfigError,
+    ConfigurationSet,
+    configuration_set_for_shell,
+    configuration_set_for_start,
+)
 
 
 def _write_mapping(path: Path, project: str, target: Path) -> Path:
@@ -138,3 +144,46 @@ def test_invalid_global_pointer_list_raises_config_error() -> None:
     identity.write_text("config_file: [\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="Invalid YAML"):
         ConfigurationSet(identity).mapping_files()
+
+
+def _write_live_global_run(mapping: Path, *, pid: int) -> None:
+    run_dir = runtime_home() / "run" / "global"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "daemon.pid").write_text(f"{pid}\n", encoding="utf-8")
+    (run_dir / "mapping-files").write_text(f"{mapping.resolve()}\n", encoding="utf-8")
+
+
+def test_for_shell_dash_c_attaches_to_live_global_owner(tmp_path: Path) -> None:
+    """-c of a yaml listed in a live global run dir returns the global identity."""
+    mapping = _write_mapping(tmp_path / "workspace" / "config.yml", "alpha-files", tmp_path / "target")
+    _write_live_global_run(mapping, pid=os.getpid())
+    loaded = configuration_set_for_shell(str(mapping))
+    assert loaded is not None
+    assert loaded.identity == runtime_home() / "config"
+    assert loaded.is_global is True
+
+
+def test_for_start_dash_c_does_not_attach_and_reports_global_overlap(tmp_path: Path) -> None:
+    """-c start keeps the singleton identity; overlap names the live global pid and yaml."""
+    mapping = _write_mapping(tmp_path / "workspace" / "config.yml", "alpha-files", tmp_path / "target")
+    pid = os.getpid()
+    _write_live_global_run(mapping, pid=pid)
+    asked = configuration_set_for_start(str(mapping))
+    assert asked is not None
+    assert asked.identity == mapping.resolve()
+    assert asked.is_global is False
+    overlap = asked.running_overlap()
+    assert overlap is not None
+    assert overlap.identity == runtime_home() / "config"
+    assert overlap.pid == pid
+    assert overlap.mapping_file == mapping.resolve()
+
+
+def test_running_overlap_is_none_when_pid_is_not_live(tmp_path: Path) -> None:
+    """A mapping-files listing with a dead pid is not an overlap."""
+    mapping = _write_mapping(tmp_path / "workspace" / "config.yml", "alpha-files", tmp_path / "target")
+    _write_live_global_run(mapping, pid=0)
+    asked = ConfigurationSet(mapping)
+    assert asked.running_overlap() is None
+    assert configuration_set_for_shell(str(mapping)) is not None
+    assert configuration_set_for_shell(str(mapping)).identity == mapping.resolve()
