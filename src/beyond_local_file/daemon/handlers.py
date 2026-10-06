@@ -15,6 +15,7 @@ from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import CheckOperation, MappingUnitResults
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
+from beyond_local_file.operations.result import FailedResult, to_ipc
 from beyond_local_file.operations.revlink import (
     CreateFormatter,
     CreateOperation,
@@ -59,7 +60,8 @@ def handle_request(
             the yaml drop. When omitted, mutating shells build a throwaway observer.
 
     Returns:
-        ``exit_code`` and captured ``stdout``.
+        ``exit_code`` and captured ``stdout``, or a failed envelope for an
+        unknown operation.
     """
     op = request.get("op")
     created: dict[str, LiveSync] = {}
@@ -74,7 +76,7 @@ def handle_request(
     }
     handler = dispatch.get(str(op) if op is not None else "")
     if handler is None:
-        return {"exit_code": 1, "stdout": f"Error: unknown daemon operation {op!r}\n"}
+        return to_ipc(FailedResult(1, (f"Error: unknown daemon operation {op!r}",)))
 
     buffer = StringIO()
     with redirect_stdout(buffer):

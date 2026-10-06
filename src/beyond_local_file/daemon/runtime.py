@@ -18,6 +18,7 @@ from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import MappingUnitResults
+from beyond_local_file.operations.result import FailedResult, to_ipc
 
 from .catchup import catch_up_live, run_catch_up
 from .handlers import collect_check_results, handle_request, render_check_results
@@ -352,7 +353,7 @@ def _merge_unit_checks(selected: list[WorkerUnit], fanout: _CheckFanout) -> Resp
         if part_stdout:
             verbose.append(part_stdout)
     if fanout.skipped and _is_cancelled(fanout.request):
-        return {"exit_code": 1, "stdout": "Stopped\n"}
+        return to_ipc(FailedResult(1, ("Stopped",)))
     table = render_check_results(rows, fanout.request)
     return {"exit_code": 0, "stdout": "".join(verbose) + table}
 
@@ -440,7 +441,7 @@ def _execute_unit_request(
     unit: WorkerUnit,
 ) -> Response:
     if _is_cancelled(request):
-        return {"exit_code": 1, "stdout": "Stopped\n"}
+        return to_ipc(FailedResult(1, ("Stopped",)))
     op = request.get("op")
     skip_notice = bool(request.get("tty"))
     before = (

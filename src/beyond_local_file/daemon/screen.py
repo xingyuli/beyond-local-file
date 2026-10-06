@@ -190,6 +190,12 @@ def _fallback_project(request: Request) -> str:
     return ""
 
 
+def _payload_text(response: Request) -> str:
+    from beyond_local_file.operations.result import payload_text  # noqa: PLC0415
+
+    return payload_text(response)
+
+
 def _print_transcript(stdout: str) -> None:
     if not stdout:
         return
@@ -345,7 +351,7 @@ class _ShellScreen:
                 code = int(response.get("exit_code", 1))
             except (TypeError, ValueError):
                 code = 1
-            text = str(response.get("stdout") or "")
+            text = _payload_text(response)
             if self._op == "wait" and code == 0:
                 text = f"{_READY_MESSAGE.format(pid=response.get('pid'))}\n"
             if self._op == "status":

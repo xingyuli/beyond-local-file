@@ -137,9 +137,11 @@ def _call_with_status_line(config_path: Path, request: dict[str, Any]) -> int:
 
 
 def _print_response(response: Response) -> int:
-    stdout = response.get("stdout") or ""
+    from beyond_local_file.operations.result import payload_text  # noqa: PLC0415
+
+    stdout = payload_text(response)
     if stdout:
-        click.echo(stdout, nl=not str(stdout).endswith("\n"))
+        click.echo(stdout, nl=not stdout.endswith("\n"))
     try:
         return int(response.get("exit_code", 1))
     except (TypeError, ValueError):
