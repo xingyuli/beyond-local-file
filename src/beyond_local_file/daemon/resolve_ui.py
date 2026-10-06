@@ -16,14 +16,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from beyond_local_file.held import list_held_copies
+from beyond_local_file.held import HeldCopy, held_dir_for
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import rel_in_items
 from .merge import is_binary
+from .oos_held import OosAndHeld, list_oos_and_held
 from .process import resolve_port_path, resolve_token_path
-from .store import BaselineTrees, get_state, is_out_of_sync, iter_out_of_sync, load_baseline, load_snapshot
+from .store import BaselineTrees, get_state, is_out_of_sync, load_baseline, load_snapshot
 
 _HOST = "127.0.0.1"
 _TOKEN_BYTES = 32
@@ -266,7 +267,7 @@ def _first_nav_selection(config_path: Path) -> tuple[str, str] | None:
     """
     projects = _projects(config_path)
     trees = load_baseline(config_path) or {}
-    rows = _nav_rows(projects, trees)
+    rows = _nav_rows(list_oos_and_held(trees, projects), projects)
     for row in rows:
         if row[2]:
             return row[0], row[1]
@@ -279,9 +280,10 @@ def _first_nav_selection(config_path: Path) -> tuple[str, str] | None:
 def _page_html(config_path: Path, *, token: str, project: str, rel: str) -> str:
     projects = _projects(config_path)
     trees = load_baseline(config_path) or {}
-    rows = _nav_rows(projects, trees)
+    listing = list_oos_and_held(trees, projects)
+    rows = _nav_rows(listing, projects)
     nav = _nav_html(rows, token, (project, rel))
-    detail = _detail_html(projects, trees, (project, rel))
+    detail = _detail_html(projects, trees, listing, (project, rel))
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resolve UI</title>'
         '<link rel="stylesheet" href="/static/vendor/codemirror.css">'
@@ -310,16 +312,18 @@ def _page_html(config_path: Path, *, token: str, project: str, rel: str) -> str:
     )
 
 
-def _nav_rows(projects: dict[str, ConfigProject], trees: BaselineTrees) -> list[tuple[str, str, bool, bool]]:
+def _nav_rows(listing: OosAndHeld, projects: dict[str, ConfigProject]) -> list[tuple[str, str, bool, bool]]:
     flags: dict[tuple[str, str], list[bool]] = {}
-    for replica, rel in iter_out_of_sync(trees):
-        project = _owner(projects, replica, rel)
+    for row in listing.oos:
+        project = _owner(projects, row.replica, row.rel)
         if project is None:
             continue
-        flags.setdefault((project.managed_project_name, rel), [False, False])[0] = True
-    for project in projects.values():
-        for copy in list_held_copies(project.managed_project_path):
-            flags.setdefault((project.managed_project_name, copy.path), [False, False])[1] = True
+        flags.setdefault((project.managed_project_name, row.rel), [False, False])[0] = True
+    for copy in listing.held:
+        name = _held_project_name(projects, copy)
+        if name is None:
+            continue
+        flags.setdefault((name, copy.path), [False, False])[1] = True
     return [(name, rel, oos, held) for (name, rel), (oos, held) in sorted(flags.items())]
 
 
@@ -403,6 +407,7 @@ def _project_section(name: str, items: list[str]) -> str:
 def _detail_html(
     projects: dict[str, ConfigProject],
     trees: BaselineTrees,
+    listing: OosAndHeld,
     selection: tuple[str, str],
 ) -> str:
     project_name, rel = selection
@@ -411,14 +416,18 @@ def _detail_html(
     project = _project_named(projects, project_name)
     if project is None:
         return ""
-    oos, held = _row_flags(trees, project, rel)
+    oos, held = _row_flags(listing, projects, project, rel)
     if not oos and not held:
         return ""
     parts: list[str] = []
     if oos:
         parts.append(_copy_view_html(project, trees, rel))
     if held:
-        clauses = [copy.clause for copy in list_held_copies(project.managed_project_path) if copy.path == rel]
+        clauses = [
+            copy.clause
+            for copy in listing.held
+            if copy.path == rel and _held_project_name(projects, copy) == project.managed_project_name
+        ]
         held_rows = "".join(f"<p>{html.escape(clause)}</p>" for clause in clauses)
         parts.append(f'<section class="held">{held_rows}</section>')
     return "".join(parts)
@@ -596,10 +605,31 @@ def _project_named(projects: dict[str, ConfigProject], name: str) -> ConfigProje
     return projects.get(name)
 
 
-def _row_flags(trees: BaselineTrees, project: ConfigProject, rel: str) -> tuple[bool, bool]:
-    oos = any(is_out_of_sync(get_state(trees, replica, rel)) for replica in _replicas_for(project, rel))
-    held = any(copy.path == rel for copy in list_held_copies(project.managed_project_path))
+def _row_flags(
+    listing: OosAndHeld,
+    projects: dict[str, ConfigProject],
+    project: ConfigProject,
+    rel: str,
+) -> tuple[bool, bool]:
+    oos = any(
+        row.rel == rel
+        and (owner := _owner(projects, row.replica, row.rel)) is not None
+        and owner.managed_project_name == project.managed_project_name
+        for row in listing.oos
+    )
+    held = any(
+        copy.path == rel and _held_project_name(projects, copy) == project.managed_project_name
+        for copy in listing.held
+    )
     return oos, held
+
+
+def _held_project_name(projects: dict[str, ConfigProject], copy: HeldCopy) -> str | None:
+    attic = copy.slot.parent
+    for project in projects.values():
+        if held_dir_for(project.managed_project_path) == attic:
+            return project.managed_project_name
+    return None
 
 
 def _detail_href(token: str, project: str, rel: str) -> str:

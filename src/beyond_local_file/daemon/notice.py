@@ -6,9 +6,7 @@ import os
 import threading
 from dataclasses import dataclass
 
-from beyond_local_file.held import list_held_copies
-
-from .live import LiveSync
+from .oos_held import OosAndHeld, new_rels
 
 _TITLE_OOS = "blf: out-of-sync"
 _TITLE_HELD = "blf: held copy"
@@ -22,14 +20,6 @@ class Banner:
 
     title: str
     body: str
-
-
-@dataclass(frozen=True)
-class IsolationSnapshot:
-    """Out-of-sync pairs and held slots observed at one moment."""
-
-    oos: frozenset[tuple[str, str]]
-    held: frozenset[tuple[str, str]]
 
 
 def banners_for(
@@ -58,64 +48,24 @@ def banners_for(
     return tuple(banners)
 
 
-def snapshot_isolation(live: LiveSync) -> IsolationSnapshot:
-    """Return the current out-of-sync pairs and held slots for *live*.
-
-    Args:
-        live: Observer for one managed project.
-
-    Returns:
-        Isolation keys that a later snapshot can diff against.
-    """
-    oos = frozenset((str(replica), rel) for replica, rel in live.out_of_sync)
-    held: set[tuple[str, str]] = set()
-    seen: set[str] = set()
-    for project in live.projects.values():
-        hub = str(project.managed_project_path)
-        if hub in seen:
-            continue
-        seen.add(hub)
-        for copy in list_held_copies(project.managed_project_path):
-            held.add((str(copy.slot), copy.path))
-    return IsolationSnapshot(oos=oos, held=frozenset(held))
-
-
-def new_isolation_rels(
-    before: IsolationSnapshot,
-    after: IsolationSnapshot,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return newly isolated relative paths, out-of-sync then held.
-
-    Args:
-        before: Snapshot from before persist.
-        after: Snapshot from after persist.
-
-    Returns:
-        Unique new out-of-sync rels and unique new held rels, each sorted.
-    """
-    oos_rels = {rel for _replica, rel in after.oos - before.oos}
-    held_rels = {rel for _slot, rel in after.held - before.held}
-    return tuple(sorted(oos_rels)), tuple(sorted(held_rels))
-
-
-def emit_isolation_notices(
+def emit_desktop_notices(
     *,
     project: str,
-    before: IsolationSnapshot,
-    after: IsolationSnapshot,
+    before: OosAndHeld,
+    after: OosAndHeld,
     skip: bool,
 ) -> None:
-    """Send desktop notices for isolation that appeared between two snapshots.
+    """Send desktop notices for out-of-sync marks or held copies that appeared between two listings.
 
     Args:
         project: Managed project name.
-        before: Snapshot from before persist.
-        after: Snapshot from after persist.
-        skip: True when this isolation was caused by a TTY shell.
+        before: Listing from before persist.
+        after: Listing from after persist.
+        skip: True when a TTY shell caused the new rows.
     """
     if skip or not _notices_enabled():
         return
-    oos_rels, held_rels = new_isolation_rels(before, after)
+    oos_rels, held_rels = new_rels(before, after)
     for banner in banners_for(project=project, oos_rels=oos_rels, held_rels=held_rels):
         _send(banner.title, banner.body)
 

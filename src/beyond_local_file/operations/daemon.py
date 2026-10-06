@@ -21,6 +21,7 @@ from beyond_local_file.daemon.ingest import (
     prepare_ingest,
 )
 from beyond_local_file.daemon.ipc import RequestSession
+from beyond_local_file.daemon.oos_held import list_oos_and_held
 from beyond_local_file.daemon.process import (
     follow_logs,
     is_running,
@@ -38,8 +39,7 @@ from beyond_local_file.daemon.screen import (
     removal_confirm_question,
     run_shell_screen,
 )
-from beyond_local_file.daemon.store import get_state, iter_out_of_sync, load_baseline, load_snapshot
-from beyond_local_file.held import list_held_copies
+from beyond_local_file.daemon.store import load_baseline, load_snapshot
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.project_processor import load_config_projects, load_set_projects, resolve_configuration_set
 
@@ -74,11 +74,11 @@ def start_daemon(config: str | None, *, worker: bool) -> int:
 
 
 def _start_off_screen(config_path: Path) -> int:
-    """Confirm ingest on stdin, print isolation WARNINGs, then spawn without a shell screen."""
+    """Confirm ingest on stdin, print out-of-sync and held-copy WARNINGs, then spawn without a shell screen."""
     ingest_code = ingest_before_start(config_path)
     if ingest_code != 0:
         return ingest_code
-    _echo_isolation(config_path, warning=True)
+    _echo_oos_and_held(config_path, warning=True)
     return spawn_and_wait(config_path)
 
 
@@ -132,7 +132,7 @@ def reload_daemon(config: str | None) -> int:
     if snapshot_projects is None:
         click.echo("Error: mapping snapshot is missing")
         return 1
-    _echo_isolation(result.config_file, warning=True)
+    _echo_oos_and_held(result.config_file, warning=True)
     no_diff = diff is None or file_projects is None or snapshot_projects is None
     questions = []
     if on_screen and diff is not None and diff.removals:
@@ -194,19 +194,19 @@ def status_daemon(config: str | None) -> int:
     result = load_config_projects(config)
     if result is None:
         return 1
-    iso_lines = _isolation_lines(result.config_file, warning=False)
-    url = resolve_ui_url(result.config_file) if iso_lines else None
+    lines = _oos_and_held_lines(result.config_file, warning=False)
+    url = resolve_ui_url(result.config_file) if lines else None
     if url:
-        iso_lines.append(url)
-    iso = tuple(iso_lines)
+        lines.append(url)
+    listing_lines = tuple(lines)
     if shell_wants_screen() and is_running(result.config_file):
         return call_daemon(
             result.config_file,
             {"op": "status", "pid": read_pid(result.config_file)},
-            trailer=iso,
+            trailer=listing_lines,
         )
     code = print_status(result.config_file)
-    for line in iso:
+    for line in listing_lines:
         click.echo(line)
     return code
 
@@ -243,7 +243,7 @@ def follow_blf_logs(config: str | None, record: str | None = None) -> int:
     return follow_logs(result.config_file, record)
 
 
-def _echo_isolation(config_path: Path, *, warning: bool) -> bool:
+def _echo_oos_and_held(config_path: Path, *, warning: bool) -> bool:
     """Print out-of-sync paths and held-copy clauses.
 
     Args:
@@ -253,46 +253,39 @@ def _echo_isolation(config_path: Path, *, warning: bool) -> bool:
     Returns:
         True when any out-of-sync path or held copy was printed.
     """
-    lines = _isolation_lines(config_path, warning=warning)
+    lines = _oos_and_held_lines(config_path, warning=warning)
     for line in lines:
         click.echo(line)
     return bool(lines)
 
 
-def _isolation_lines(config_path: Path, *, warning: bool) -> list[str]:
+def _oos_and_held_lines(config_path: Path, *, warning: bool) -> list[str]:
     """Return out-of-sync and held-copy lines for the shell or the screen."""
-    trees = load_baseline(config_path) or {}
-    oos = iter_out_of_sync(trees)
-    held = [
-        copy
-        for project in _projects_for_isolation(config_path).values()
-        for copy in list_held_copies(project.managed_project_path)
-    ]
+    listing = list_oos_and_held(load_baseline(config_path) or {}, _committed_projects(config_path))
     lines: list[str] = []
     prefix = "WARNING: " if warning else ""
-    if oos:
+    if listing.oos:
         if not warning:
             lines.append("Out-of-sync:")
-        for replica, rel in oos:
-            clause = str(get_state(trees, replica, rel).get("clause") or "")
+        for row in listing.oos:
             if warning:
-                lines.append(f"{prefix}out-of-sync {replica.as_posix()} {rel}")
-                if clause:
-                    lines.append(f"{prefix}{clause}")
+                lines.append(f"{prefix}out-of-sync {row.replica.as_posix()} {row.rel}")
+                if row.clause:
+                    lines.append(f"{prefix}{row.clause}")
             else:
-                lines.append(f"  {replica.as_posix()}  {rel}")
-                if clause:
-                    lines.append(f"  {clause}")
-    if held:
+                lines.append(f"  {row.replica.as_posix()}  {row.rel}")
+                if row.clause:
+                    lines.append(f"  {row.clause}")
+    if listing.held:
         if not warning:
             lines.append("Held copies:")
-        for copy in held:
+        for copy in listing.held:
             lines.append(f"{prefix}{copy.clause}" if warning else f"  {copy.clause}")
             lines.append(f"Held at {copy.slot.as_posix()}")
     return lines
 
 
-def _projects_for_isolation(config_path: Path) -> dict[str, ConfigProject]:
+def _committed_projects(config_path: Path) -> dict[str, ConfigProject]:
     """Return committed mappings, falling back to the config file.
 
     Args:

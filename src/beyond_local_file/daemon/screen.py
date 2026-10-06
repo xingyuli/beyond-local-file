@@ -19,7 +19,6 @@ if os.name != "nt":
     import termios
     import tty
 
-_HINT_ASK_ACK = "Enter: continue  Ctrl+C: interrupt"
 _HINT_ASK_YN = "Enter: y/n  Ctrl+C: interrupt"
 _HINT_RUNNING = "Ctrl+C: interrupt"
 _HINT_INTERRUPT = "Enter: interrupt  Esc: resume"
@@ -68,7 +67,6 @@ class ScreenQuestion:
     lines: tuple[str, ...]
     choices: tuple[str, ...] | None = None
     invalid: str = _ANSWER_LINE
-    ack: bool = False
 
 
 class ScreenSkip(Exception):
@@ -78,22 +76,6 @@ class ScreenSkip(Exception):
         super().__init__(stdout)
         self.stdout = stdout
         self.exit_code = exit_code
-
-
-def isolation_ack_question(lines: Sequence[str]) -> ScreenQuestion:
-    """Return the held-copy / out-of-sync ack asked on the shell screen.
-
-    Args:
-        lines: Warning lines already formatted for the screen.
-
-    Returns:
-        An ack. Enter continues; Ctrl+C interrupts and sends nothing.
-    """
-    return ScreenQuestion(
-        lines=(*lines, "Continue without resolving held copies and out-of-sync paths?"),
-        ack=True,
-        invalid="Press Enter to continue.",
-    )
 
 
 def removal_confirm_question(plan: str) -> ScreenQuestion:
@@ -567,12 +549,7 @@ class _ShellScreen:
             unit_lines = [row.text() for row in self._rows]
             hint = self._hint_text()
             output = list(self._output if self._phase == "finished" else self._notes)
-            typed = (
-                self._question
-                and self._phase == "asking"
-                and self._current_question is not None
-                and not self._current_question.ack
-            )
+            typed = self._question and self._phase == "asking" and self._current_question is not None
             buffer = self._buffer
         reserved = len(unit_lines) + 2 + (1 if typed else 0)
         body_height = max(0, rows - reserved)
@@ -631,16 +608,12 @@ class _Terminal:
 
 
 def _ask_hint(question: ScreenQuestion) -> str:
-    if question.ack:
-        return _HINT_ASK_ACK
     if question.choices is not None:
         return f"Enter: 1-{len(question.choices)}  Ctrl+C: interrupt"
     return _HINT_ASK_YN
 
 
 def _accepted_answer(question: ScreenQuestion, answer: str) -> str | None:
-    if question.ack:
-        return "y" if answer == "" else None
     if question.choices is not None:
         return answer if answer in question.choices else None
     lowered = answer.lower()

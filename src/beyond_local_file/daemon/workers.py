@@ -15,7 +15,8 @@ from beyond_local_file.model.config import ConfigProject
 
 from .live import LiveSync
 from .log import log_scope
-from .notice import emit_isolation_notices, snapshot_isolation
+from .notice import emit_desktop_notices
+from .oos_held import list_oos_and_held
 from .store import BaselineTrees, load_snapshot, save_baseline
 
 IDLE_OBSERVE_S = 15.0
@@ -130,13 +131,13 @@ class WorkerUnit:
         try:
             await_idle_hold(self.name)
             with log_scope("idle", self.name):
-                before = snapshot_isolation(self.live)
+                before = list_oos_and_held(self.live.baseline, self.live.projects)
                 if self.live.tick(reason="idle"):
                     save_baseline(self.config_path, self.live.baseline, self.live.projects)
-                    emit_isolation_notices(
+                    emit_desktop_notices(
                         project=self.name,
                         before=before,
-                        after=snapshot_isolation(self.live),
+                        after=list_oos_and_held(self.live.baseline, self.live.projects),
                         skip=False,
                     )
         finally:

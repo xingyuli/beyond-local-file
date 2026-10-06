@@ -43,6 +43,7 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/daemon/process.py",
     "beyond_local_file/daemon/runtime.py",
     "beyond_local_file/daemon/store.py",
+    "beyond_local_file/daemon/oos_held.py",
 ]
 
 # Directories that must never appear in the wheel.

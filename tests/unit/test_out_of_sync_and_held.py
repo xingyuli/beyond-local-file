@@ -417,7 +417,7 @@ def test_start_warns_without_blocking(
     stop_daemon(config_path, isolated_home)
 
 
-def test_reload_warns_and_acks_without_blocking(
+def test_reload_warns_without_blocking(
     daemon_workspace: tuple[Path, Path, Path, Path],
     isolated_home: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
