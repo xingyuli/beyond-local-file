@@ -17,10 +17,10 @@ from pathlib import Path
 
 import pytest
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.catchup import ScanStats, record_baseline, run_catch_up, scan_items
 from beyond_local_file.daemon.live import LiveSync
 from beyond_local_file.daemon.log import bind_worker_stream, worker_print
-from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.daemon.store import save_baseline, save_snapshot
 from beyond_local_file.model.config import ConfigProject, Mapping
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
@@ -48,7 +48,7 @@ def _messages(buffer: StringIO) -> list[str]:
 
 
 def _log_dir(config_path: Path) -> Path:
-    return state_dir(config_path) / "logs"
+    return ConfigurationSet(config_path).run_directory / "logs"
 
 
 def _stamped_log_messages(log_file: Path) -> list[str]:

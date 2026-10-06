@@ -22,7 +22,10 @@ from beyond_local_file.blfrc import (
     resolve_global_mapping_files,
     runtime_home,
 )
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.constants import HUB_LOCAL_DIR
+
+from .pid import _reap_if_child, pid_is_alive, read_pid_file
 
 PID_NAME = "daemon.pid"
 LOG_DIRECTORY = "logs"
@@ -67,18 +70,6 @@ def set_id_for(config_path: Path) -> str:
     if is_global_config_path(config_path):
         return GLOBAL_SET_ID
     return singleton_set_id(config_path)
-
-
-def state_dir(config_path: Path) -> Path:
-    """Return the set run directory for the configuration set of *config_path*.
-
-    Args:
-        config_path: Set identity path (global config or a mapping yaml).
-
-    Returns:
-        Directory that holds pid, log, port, snapshot, and item-document baseline.
-    """
-    return runtime_home() / "run" / set_id_for(config_path)
 
 
 def mapping_files_for(config_path: Path) -> list[Path]:
@@ -130,7 +121,7 @@ def overlapping_running_set(mapping_files: list[Path]) -> tuple[Path, int, Path]
     for entry in sorted(run_root.iterdir(), key=lambda path: path.name):
         if not entry.is_dir():
             continue
-        pid = _read_pid_file(entry / PID_NAME)
+        pid = read_pid_file(entry / PID_NAME)
         if pid is None or not pid_is_alive(pid):
             continue
         loaded = _loaded_mapping_files(entry)
@@ -154,7 +145,7 @@ def pid_path(config_path: Path) -> Path:
     Returns:
         Path to ``daemon.pid``.
     """
-    return state_dir(config_path) / PID_NAME
+    return ConfigurationSet(config_path).run_directory / PID_NAME
 
 
 def logs_dir(config_path: Path) -> Path:
@@ -166,7 +157,7 @@ def logs_dir(config_path: Path) -> Path:
     Returns:
         ``logs`` inside the set run directory.
     """
-    return state_dir(config_path) / LOG_DIRECTORY
+    return ConfigurationSet(config_path).run_directory / LOG_DIRECTORY
 
 
 def log_path(config_path: Path) -> Path:
@@ -203,7 +194,7 @@ def ready_path(config_path: Path) -> Path:
     Returns:
         Path to ``daemon.ready``.
     """
-    return state_dir(config_path) / READY_NAME
+    return ConfigurationSet(config_path).run_directory / READY_NAME
 
 
 def port_path(config_path: Path) -> Path:
@@ -215,7 +206,7 @@ def port_path(config_path: Path) -> Path:
     Returns:
         Path to ``daemon.port``.
     """
-    return state_dir(config_path) / PORT_NAME
+    return ConfigurationSet(config_path).run_directory / PORT_NAME
 
 
 def resolve_port_path(config_path: Path) -> Path:
@@ -227,7 +218,7 @@ def resolve_port_path(config_path: Path) -> Path:
     Returns:
         Path to ``resolve.port``.
     """
-    return state_dir(config_path) / RESOLVE_PORT_NAME
+    return ConfigurationSet(config_path).run_directory / RESOLVE_PORT_NAME
 
 
 def resolve_token_path(config_path: Path) -> Path:
@@ -239,7 +230,7 @@ def resolve_token_path(config_path: Path) -> Path:
     Returns:
         Path to ``resolve.token``.
     """
-    return state_dir(config_path) / RESOLVE_TOKEN_NAME
+    return ConfigurationSet(config_path).run_directory / RESOLVE_TOKEN_NAME
 
 
 def read_pid(config_path: Path) -> int | None:
@@ -251,34 +242,7 @@ def read_pid(config_path: Path) -> int | None:
     Returns:
         The stored pid, or None when missing or invalid.
     """
-    return _read_pid_file(pid_path(config_path))
-
-
-def pid_is_alive(pid: int) -> bool:
-    """Return whether *pid* currently names a live process.
-
-    Reaps *pid* when it is a zombie child of this process so a dead worker
-    is not reported as running.
-
-    Args:
-        pid: Process id to probe.
-
-    Returns:
-        True if the process exists and is not a reaped zombie child.
-    """
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        return _pid_is_alive_windows(pid)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return not _reap_if_child(pid)
+    return read_pid_file(pid_path(config_path))
 
 
 def is_running(config_path: Path) -> bool:
@@ -593,24 +557,6 @@ def _wait_for_port(config_path: Path, proc: subprocess.Popen[bytes]) -> bool:
     return False
 
 
-def _reap_if_child(pid: int) -> bool:
-    """Reap *pid* when it is a dead child of this process.
-
-    Args:
-        pid: Process id that may be a zombie child.
-
-    Returns:
-        True if the child was reaped (and is therefore not running).
-    """
-    if os.name == "nt":
-        return False
-    try:
-        waited_pid, _status = os.waitpid(pid, os.WNOHANG)
-    except (ChildProcessError, OSError):
-        return False
-    return waited_pid == pid
-
-
 def _terminate_pid(pid: int) -> None:
     try:
         os.kill(pid, signal.SIGTERM)
@@ -643,7 +589,7 @@ def _echo_log_tail(path: Path, *, lines: int = 20) -> None:
 
 
 def _write_mapping_files(config_path: Path, mapping_files: list[Path]) -> None:
-    path = state_dir(config_path) / MAPPING_FILES_NAME
+    path = ConfigurationSet(config_path).run_directory / MAPPING_FILES_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(f"{item.resolve()}\n" for item in mapping_files), encoding="utf-8")
 
@@ -675,26 +621,3 @@ def _identity_path_for_run_dir(run_dir: Path, loaded: list[Path]) -> Path | None
     if loaded:
         return loaded[0].resolve()
     return None
-
-
-def _read_pid_file(path: Path) -> int | None:
-    if not path.exists():
-        return None
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return None
-    try:
-        return int(text.splitlines()[0])
-    except ValueError:
-        return None
-
-
-def _pid_is_alive_windows(pid: int) -> bool:
-    import ctypes  # noqa: PLC0415
-
-    synch = 0x00100000
-    handle = ctypes.windll.kernel32.OpenProcess(synch, 0, pid)  # type: ignore[attr-defined]
-    if handle:
-        ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
-        return True
-    return False

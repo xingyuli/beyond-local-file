@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
@@ -15,7 +16,6 @@ from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
 from .live import LiveSync
-from .process import state_dir
 from .store import (
     BaselineTrees,
     drop_removed_baseline_projects,
@@ -279,7 +279,7 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     file_projects = load_set_projects(config_path)
     subset = {key: project for key, project in file_projects.items() if project.managed_project_name in affected}
     if subset:
-        trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path))
+        trees = run_catch_up(subset, ConfigurationSet(config_path).run_directory, load_baseline(config_path))
         save_baseline(config_path, trees, subset)
     return 0
 

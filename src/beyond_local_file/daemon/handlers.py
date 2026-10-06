@@ -10,6 +10,7 @@ from pathlib import Path
 
 import click
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import CheckOperation, MappingUnitResults
@@ -34,7 +35,6 @@ from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
 from .live import LiveSync
 from .log import log_duration, note_persist_ms
-from .process import state_dir
 from .store import BaselineTrees, load_baseline, load_snapshot, save_baseline, save_snapshot
 
 type Handler = Callable[[Path, Request], int]
@@ -127,7 +127,7 @@ def _handle_check(
             return
         on_progress(format_status_line("Checking", index, total, item))
 
-    operation = CheckOperation(state_dir(config_path), extra_exclude, output_format)
+    operation = CheckOperation(ConfigurationSet(config_path).run_directory, extra_exclude, output_format)
     operation.baseline = load_baseline(config_path)
     operation.on_progress = emit_item
     operation.unit_count = len(units)
@@ -160,7 +160,7 @@ def collect_check_results(
     _mark_check_started(projects)
     buffer = StringIO()
     with redirect_stdout(buffer):
-        operation = CheckOperation(state_dir(config_path), extra_exclude, output_format)
+        operation = CheckOperation(ConfigurationSet(config_path).run_directory, extra_exclude, output_format)
         operation.baseline = load_baseline(config_path)
         operation.on_progress = on_item
         operation.unit_count = unit_count

@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.client import send_when_up
 from beyond_local_file.daemon.handlers import handle_request
-from beyond_local_file.daemon.process import state_dir
 from tests.daemon_support import daemon_running, invoke_cli, start_daemon, stop_daemon
 
 _READY_WAIT_S = 15.0
@@ -85,7 +85,7 @@ def _read_pty(master: int, chunks: list[bytes], *, until: str | None, proc: subp
 
 
 def _sync_state_paths(config_path: Path) -> list[Path]:
-    run_dir = state_dir(config_path)
+    run_dir = ConfigurationSet(config_path).run_directory
     return [
         run_dir / "sync-state.yml",
         config_path.parent / "sync-state.yml",
@@ -195,7 +195,7 @@ def test_daemon_check_labels_mismatch_from_baseline_not_sync_state(
 
     (managed / "shared.txt").write_text("managed-new")
     (target / "nested" / "keep.txt").write_text("target-new")
-    lying = state_dir(config_path) / "sync-state.yml"
+    lying = ConfigurationSet(config_path).run_directory / "sync-state.yml"
     lying.write_text("synced_files: []\n", encoding="utf-8")
 
     progress: list[str] = []

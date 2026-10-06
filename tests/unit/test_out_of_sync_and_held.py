@@ -17,9 +17,9 @@ from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
 from beyond_local_file.config import Config
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.catchup import run_catch_up
 from beyond_local_file.daemon.live import LiveSync
-from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.daemon.store import load_baseline, oos_reason_clause, save_baseline, save_snapshot
 from beyond_local_file.held import REASON_DELETE_GAP, list_held_copies, reason_clause, store_held_copy
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
@@ -483,7 +483,7 @@ def test_out_of_sync_reason_survives_save_load_and_spawned_status(
 
     start_daemon(config_path, isolated_home)
     try:
-        document = state_dir(config_path) / "baseline" / "proj" / "files"
+        document = ConfigurationSet(config_path).run_directory / "baseline" / "proj" / "files"
         data = yaml.safe_load(document.read_text(encoding="utf-8"))
         row = data["trees"][str(target_b)]["shared.txt"]
         assert row["reason"] == "stale-base"

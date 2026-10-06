@@ -16,7 +16,8 @@ import pytest
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
-from beyond_local_file.daemon.process import singleton_set_id, state_dir
+from beyond_local_file.configuration_set import ConfigurationSet
+from beyond_local_file.daemon.process import singleton_set_id
 from beyond_local_file.held import list_held_copies
 
 _WORKER_FLAG = "--worker"
@@ -62,17 +63,17 @@ def _write_workspace(tmp_path: Path, *, projects: int = 1) -> tuple[Path, list[P
     return config_path, managed_dirs, target_dirs
 
 
-def _state_dir(config_path: Path) -> Path:
+def _run_directory(config_path: Path) -> Path:
     """Return the set run directory for the loaded mapping file."""
-    return state_dir(config_path)
+    return ConfigurationSet(config_path).run_directory
 
 
 def _pid_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "daemon.pid"
+    return _run_directory(config_path) / "daemon.pid"
 
 
 def _log_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "logs" / "daemon.log"
+    return _run_directory(config_path) / "logs" / "daemon.log"
 
 
 def _stamped_log_messages(log_file: Path) -> list[str]:
@@ -89,11 +90,11 @@ def _stamped_log_messages(log_file: Path) -> list[str]:
 
 
 def _snapshot_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "mapping-snapshot.yml"
+    return _run_directory(config_path) / "mapping-snapshot.yml"
 
 
 def _baseline_dir(config_path: Path) -> Path:
-    return _state_dir(config_path) / "baseline"
+    return _run_directory(config_path) / "baseline"
 
 
 def _wait_until(predicate, *, timeout: float = _READY_WAIT_S) -> None:
@@ -526,7 +527,7 @@ def test_fresh_catch_up_overwrites_target_even_when_sync_state_matches_hub(
 
     assert (managed / "shared.txt").read_text() == "hub-0"
     assert projection.read_text() == "hub-0"
-    assert not (_state_dir(config_path) / "sync-state.yml").exists()
+    assert not (_run_directory(config_path) / "sync-state.yml").exists()
     copies = list_held_copies(managed)
     assert len(copies) == 1
     assert copies[0].reason == "create-overwrite"

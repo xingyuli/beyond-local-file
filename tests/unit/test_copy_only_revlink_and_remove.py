@@ -3,7 +3,7 @@
 import hashlib
 from pathlib import Path
 
-from beyond_local_file.daemon.process import state_dir
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.sync_state import compute_item_hash
 from tests.daemon_support import invoke_with_daemon, start_daemon, stop_daemon
 
@@ -88,7 +88,7 @@ def test_revlink_create_records_pair_as_in_sync(tmp_path: Path, monkeypatch, iso
     assert result.exit_code == 0, result.output
     hub_copy = managed / "item.txt"
     assert compute_item_hash(hub_copy) == compute_item_hash(source)
-    assert not (state_dir(config_path) / "sync-state.yml").exists()
+    assert not (ConfigurationSet(config_path).run_directory / "sync-state.yml").exists()
 
     start_daemon(config_path, isolated_home)
     try:
@@ -125,7 +125,7 @@ def test_revlink_create_fans_out_to_other_replicas(tmp_path: Path, monkeypatch, 
     updated = config_path.read_text()
     assert updated.count("- item.txt") == updated.count("target:")
     assert compute_item_hash(managed / "item.txt") == compute_item_hash(replica)
-    assert not (state_dir(config_path) / "sync-state.yml").exists()
+    assert not (ConfigurationSet(config_path).run_directory / "sync-state.yml").exists()
 
 
 def test_revlink_create_holds_divergent_replica_then_overwrites(

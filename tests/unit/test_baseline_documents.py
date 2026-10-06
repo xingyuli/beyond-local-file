@@ -8,11 +8,15 @@ from pathlib import Path
 import pytest
 import yaml
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.catchup import record_baseline
-from beyond_local_file.daemon.process import state_dir
 from beyond_local_file.daemon.store import load_baseline, save_baseline
 from beyond_local_file.model.config import ConfigProject, Mapping
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
+
+
+def _run_directory(config_path: Path) -> Path:
+    return ConfigurationSet(config_path).run_directory
 
 
 def test_save_uses_managed_project_name_when_projects_are_keyed_by_hub_path(tmp_path: Path) -> None:
@@ -33,7 +37,7 @@ def test_save_uses_managed_project_name_when_projects_are_keyed_by_hub_path(tmp_
 
     save_baseline(config_path, trees, {str(managed): project})
 
-    document = state_dir(config_path) / "baseline" / "alpha" / "files"
+    document = _run_directory(config_path) / "baseline" / "alpha" / "files"
     assert document.is_file()
     data = yaml.safe_load(document.read_text(encoding="utf-8"))
     assert "shared.txt" in data["trees"][str(managed)]
@@ -60,7 +64,7 @@ def test_save_omits_ancestor_bytes_from_path_rows(tmp_path: Path) -> None:
 
     save_baseline(config_path, trees, projects)
 
-    document = state_dir(config_path) / "baseline" / "alpha" / "files"
+    document = _run_directory(config_path) / "baseline" / "alpha" / "files"
     data = yaml.safe_load(document.read_text(encoding="utf-8"))
     assert "ancestor" not in data["trees"][str(managed)]["shared.txt"]
 
@@ -86,7 +90,7 @@ def test_save_writes_file_items_under_managed_project_files_document(tmp_path: P
 
     save_baseline(config_path, trees, projects)
 
-    run_dir = state_dir(config_path)
+    run_dir = _run_directory(config_path)
     assert not (run_dir / "baseline.yml").exists()
     document = run_dir / "baseline" / "alpha" / "files"
     assert document.is_file()
@@ -123,7 +127,7 @@ def test_save_writes_directory_item_as_nested_files_and_subtree_documents(tmp_pa
 
     save_baseline(config_path, trees, projects)
 
-    run_dir = state_dir(config_path)
+    run_dir = _run_directory(config_path)
     item_dir = run_dir / "baseline" / "alpha" / "local-file"
     files_doc = yaml.safe_load((item_dir / "files").read_text(encoding="utf-8"))
     requirements_doc = yaml.safe_load((item_dir / "requirements").read_text(encoding="utf-8"))
@@ -168,7 +172,7 @@ def test_load_baseline_reads_legacy_yaml_when_item_documents_are_absent(tmp_path
     trees = record_baseline(projects)
     save_baseline(config_path, trees)
 
-    run_dir = state_dir(config_path)
+    run_dir = _run_directory(config_path)
     assert (run_dir / "baseline.yml").is_file()
     assert not (run_dir / "baseline").exists()
     assert load_baseline(config_path) == trees
@@ -195,7 +199,7 @@ def test_save_with_projects_replaces_legacy_yaml_with_item_documents(tmp_path: P
     save_baseline(config_path, trees)
     save_baseline(config_path, trees, projects)
 
-    run_dir = state_dir(config_path)
+    run_dir = _run_directory(config_path)
     assert not (run_dir / "baseline.yml").exists()
     assert (run_dir / "baseline" / "alpha" / "files").is_file()
     assert load_baseline(config_path) == trees
@@ -232,7 +236,7 @@ def test_save_nested_declared_item_under_directory_item_roundtrips(tmp_path: Pat
 
     loaded = load_baseline(config_path)
     assert loaded == trees
-    assert not (state_dir(config_path) / "baseline.yml").exists()
+    assert not (_run_directory(config_path) / "baseline.yml").exists()
 
 
 def test_load_prefers_leftover_yaml_over_partial_item_documents(tmp_path: Path) -> None:
@@ -254,7 +258,7 @@ def test_load_prefers_leftover_yaml_over_partial_item_documents(tmp_path: Path) 
     }
     trees = record_baseline(projects)
     save_baseline(config_path, trees)
-    partial = state_dir(config_path) / "baseline" / "alpha" / "files"
+    partial = _run_directory(config_path) / "baseline" / "alpha" / "files"
     partial.parent.mkdir(parents=True)
     partial.write_text(
         "trees:\n  /tmp/partial:\n    shared.txt: {present: true, hash: aa, gen: 0}\n",
@@ -324,7 +328,7 @@ def test_save_writes_nested_directory_item_under_its_item_path(tmp_path: Path) -
 
     save_baseline(config_path, trees, projects)
 
-    item_dir = state_dir(config_path) / "baseline" / "alpha" / ".kiro" / "hooks"
+    item_dir = _run_directory(config_path) / "baseline" / "alpha" / ".kiro" / "hooks"
     files_doc = yaml.safe_load((item_dir / "files").read_text(encoding="utf-8"))
     extra_doc = yaml.safe_load((item_dir / "extra").read_text(encoding="utf-8"))
     hub_files = files_doc["trees"][str(managed)]
@@ -360,7 +364,7 @@ def test_save_rewrites_only_documents_covering_changed_paths(tmp_path: Path) -> 
     }
     trees = record_baseline(projects)
     save_baseline(config_path, trees, projects)
-    run_dir = state_dir(config_path)
+    run_dir = _run_directory(config_path)
     files_bytes = (run_dir / "baseline" / "alpha" / "files").read_bytes()
     requirements_bytes = (run_dir / "baseline" / "alpha" / "local-file" / "requirements").read_bytes()
     changed_hash = "ab" * 32
@@ -390,7 +394,7 @@ def test_daemon_start_writes_item_documents_not_baseline_yml(
     config_path.write_text(f"alpha: {target}\n")
     start_daemon(config_path, isolated_home)
     try:
-        run_dir = state_dir(config_path)
+        run_dir = _run_directory(config_path)
         assert not (run_dir / "baseline.yml").exists()
         document = run_dir / "baseline" / "alpha" / "files"
         assert document.is_file()
@@ -426,7 +430,7 @@ def test_create_rewrites_only_the_new_file_item_document(
     config_path.write_text(f"alpha: {target}\n")
     start_daemon(config_path, isolated_home)
     try:
-        run_dir = state_dir(config_path)
+        run_dir = _run_directory(config_path)
         sibling = run_dir / "baseline" / "alpha" / "local-file" / "requirements"
         assert sibling.is_file()
         os.utime(sibling, (0, 0))
@@ -463,7 +467,7 @@ def test_remove_drops_the_item_from_its_baseline_document(
     config_path.write_text(f"alpha:\n  target: {target}\n  subpath: [shared.txt, item.txt]\n")
     start_daemon(config_path, isolated_home)
     try:
-        run_dir = state_dir(config_path)
+        run_dir = _run_directory(config_path)
         files_path = run_dir / "baseline" / "alpha" / "files"
         before = yaml.safe_load(files_path.read_text(encoding="utf-8"))
         assert "item.txt" in before["trees"][str(managed.resolve())]

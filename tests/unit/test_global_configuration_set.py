@@ -13,10 +13,14 @@ import pytest
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
-from beyond_local_file.daemon.process import state_dir
+from beyond_local_file.configuration_set import ConfigurationSet
 
 _WORKER_FLAG = "--worker"
 _POLL_S = 0.05
+
+
+def _run_directory(config_path: Path) -> Path:
+    return ConfigurationSet(config_path).run_directory
 
 
 def _invoke(args: list[str], env: dict[str, str] | None = None) -> Result:
@@ -79,7 +83,7 @@ def _stop_global(env: dict[str, str], home: Path) -> None:
 
 def _stop_singleton(config_path: Path, env: dict[str, str]) -> None:
     _invoke(["--config", str(config_path), "daemon", "stop"], env=env)
-    pid = _read_pid_file(state_dir(config_path) / "daemon.pid")
+    pid = _read_pid_file(_run_directory(config_path) / "daemon.pid")
     if pid is not None and _pid_alive(pid):
         os.kill(pid, signal.SIGTERM)
         deadline = time.monotonic() + 5.0
@@ -134,7 +138,7 @@ def test_dot_blfrc_is_not_read(
     try:
         started = _invoke(["daemon", "start"], env=daemon_env)
         assert started.exit_code == 0, started.output
-        assert (state_dir(cwd_config) / "daemon.pid").is_file()
+        assert (_run_directory(cwd_config) / "daemon.pid").is_file()
         assert not _global_run_dir(home).exists()
         assert (cwd_target / "cwd.txt").read_text() == "yes"
         assert not (ignored_target / "ignored.txt").exists()
@@ -193,8 +197,8 @@ def test_one_process_loads_both_mapping_files_and_link_check_shows_both(
     assert str(pid) in workers[0]
     assert not _worker_lines(str(alpha_config))
     assert not _worker_lines(str(viclau_config))
-    assert not (state_dir(alpha_config) / "daemon.pid").exists()
-    assert not (state_dir(viclau_config) / "daemon.pid").exists()
+    assert not (_run_directory(alpha_config) / "daemon.pid").exists()
+    assert not (_run_directory(viclau_config) / "daemon.pid").exists()
 
 
 def test_resolution_order_explicit_config_beats_global(
@@ -209,7 +213,7 @@ def test_resolution_order_explicit_config_beats_global(
     try:
         started = _invoke(["--config", str(extra_config), "daemon", "start"], env=daemon_env)
         assert started.exit_code == 0, started.output
-        assert (state_dir(extra_config) / "daemon.pid").is_file()
+        assert (_run_directory(extra_config) / "daemon.pid").is_file()
         assert not _global_run_dir(home).exists()
         assert (extra_target / "extra.txt").read_text() == "e"
         assert not (alpha_target / "from-alpha.txt").exists()
@@ -234,7 +238,7 @@ def test_resolution_order_global_beats_cwd_config_yml(
     started = _invoke(["daemon", "start"], env=daemon_env)
     assert started.exit_code == 0, started.output
     assert (_global_run_dir(home) / "daemon.pid").is_file()
-    assert not (state_dir(cwd_config) / "daemon.pid").exists()
+    assert not (_run_directory(cwd_config) / "daemon.pid").exists()
     assert (alpha_target / "from-alpha.txt").read_text() == "q"
     assert not (cwd_target / "cwd.txt").exists()
 
@@ -256,7 +260,7 @@ def test_shell_dash_c_of_loaded_yaml_uses_running_owner(
     assert "viclau-local-files" in checked.output
     assert "alpha-files" in checked.output
     assert _read_pid_file(_global_run_dir(home) / "daemon.pid") == pid
-    assert not (state_dir(viclau_config) / "daemon.pid").exists()
+    assert not (_run_directory(viclau_config) / "daemon.pid").exists()
     assert len(_worker_lines(str(home / ".blf" / "config"))) == 1
 
 
@@ -279,7 +283,7 @@ def test_daemon_start_of_overlapping_set_errors_and_names_owner(
     assert str(pid) in overlapping.output
     assert _read_pid_file(_global_run_dir(home) / "daemon.pid") == pid
     assert _pid_alive(pid)
-    assert not (state_dir(viclau_config) / "daemon.pid").exists()
+    assert not (_run_directory(viclau_config) / "daemon.pid").exists()
 
 
 def test_global_start_errors_when_singleton_already_loaded_mapping_file(
@@ -298,7 +302,7 @@ def test_global_start_errors_when_singleton_already_loaded_mapping_file(
     try:
         started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
         assert started.exit_code == 0, started.output
-        pid = _read_pid_file(state_dir(config_path) / "daemon.pid")
+        pid = _read_pid_file(_run_directory(config_path) / "daemon.pid")
         assert pid is not None
 
         overlapping = _invoke(["daemon", "start"], env=daemon_env)

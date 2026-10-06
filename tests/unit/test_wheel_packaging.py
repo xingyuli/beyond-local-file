@@ -19,6 +19,7 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/blfrc.py",
     "beyond_local_file/cli.py",
     "beyond_local_file/config.py",
+    "beyond_local_file/configuration_set.py",
     "beyond_local_file/constants.py",
     "beyond_local_file/git_manager.py",
     "beyond_local_file/options.py",
@@ -40,6 +41,7 @@ REQUIRED_WHEEL_MODULES = [
     # daemon subpackage
     "beyond_local_file/daemon/__init__.py",
     "beyond_local_file/daemon/catchup.py",
+    "beyond_local_file/daemon/pid.py",
     "beyond_local_file/daemon/process.py",
     "beyond_local_file/daemon/runtime.py",
     "beyond_local_file/daemon/store.py",

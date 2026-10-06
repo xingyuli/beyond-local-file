@@ -17,7 +17,7 @@ import pytest
 from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
-from beyond_local_file.daemon.process import state_dir
+from beyond_local_file.configuration_set import ConfigurationSet
 
 _READY_WAIT_S = 15.0
 _POLL_S = 0.05
@@ -29,24 +29,24 @@ def _invoke(args: list[str], env: dict[str, str] | None = None) -> Result:
     return CliRunner().invoke(cli, args, env=env)
 
 
-def _state_dir(config_path: Path) -> Path:
-    return state_dir(config_path)
+def _run_directory(config_path: Path) -> Path:
+    return ConfigurationSet(config_path).run_directory
 
 
 def _pid_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "daemon.pid"
+    return _run_directory(config_path) / "daemon.pid"
 
 
 def _port_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "daemon.port"
+    return _run_directory(config_path) / "daemon.port"
 
 
 def _snapshot_path(config_path: Path) -> Path:
-    return _state_dir(config_path) / "mapping-snapshot.yml"
+    return _run_directory(config_path) / "mapping-snapshot.yml"
 
 
 def _baseline_dir(config_path: Path) -> Path:
-    return _state_dir(config_path) / "baseline"
+    return _run_directory(config_path) / "baseline"
 
 
 def _read_pid(config_path: Path) -> int | None:
@@ -248,7 +248,7 @@ def test_shell_does_not_copy_when_daemon_acks_without_work(  # noqa: PLR0915 -- 
     source = target / "item.txt"
     source.write_text("adopt me")
     exclude = _make_git_repo(target)
-    state = _state_dir(config_path)
+    state = _run_directory(config_path)
     state.mkdir(parents=True)
     placeholder = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],

@@ -13,6 +13,7 @@ from io import StringIO
 from pathlib import Path
 from types import FrameType
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
@@ -44,7 +45,7 @@ from .log import (
 )
 from .notice import emit_desktop_notices
 from .oos_held import list_oos_and_held
-from .process import state_dir, write_ready
+from .process import write_ready
 from .resolve_ui import ResolveHttp, start_resolve_ui, stop_resolve_ui
 from .store import BaselineTrees, load_baseline, load_snapshot, mappings_equal, save_baseline, save_snapshot
 from .workers import WorkerUnit, build_worker_units, route_worker_unit
@@ -84,7 +85,7 @@ def run_worker(config_path: Path) -> int:
     Returns:
         Process exit code.
     """
-    open_worker_logs(state_dir(config_path))
+    open_worker_logs(ConfigurationSet(config_path).run_directory)
     runtime = _LiveRuntime(
         config_path=config_path,
         shutdown=threading.Event(),
@@ -270,7 +271,9 @@ def _catch_up_new_unit(
 ) -> None:
     name = next(iter(subset.values())).managed_project_name if subset else None
     with log_scope("requests", name):
-        trees = run_catch_up(subset, state_dir(config_path), load_baseline(config_path), on_line=on_line)
+        trees = run_catch_up(
+            subset, ConfigurationSet(config_path).run_directory, load_baseline(config_path), on_line=on_line
+        )
         save_baseline(config_path, trees, subset)
         built = build_worker_units(subset, trees, config_path, runtime.shutdown)
         for unit in built.values():
@@ -612,7 +615,7 @@ def _catch_up_and_persist(
 
     trees = run_catch_up(
         projects,
-        state_dir(config_path),
+        ConfigurationSet(config_path).run_directory,
         load_baseline(config_path),
         on_progress=on_progress,
         on_line=on_line,

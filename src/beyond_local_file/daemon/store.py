@@ -9,12 +9,12 @@ from typing import Any
 
 import yaml
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.model.processing import ManagedProjectItem
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 from .log import log_duration
-from .process import state_dir
 
 SNAPSHOT_NAME = "mapping-snapshot.yml"
 BASELINE_NAME = "baseline.yml"
@@ -40,7 +40,7 @@ def snapshot_path(config_path: Path) -> Path:
     Returns:
         Path to ``mapping-snapshot.yml``.
     """
-    return state_dir(config_path) / SNAPSHOT_NAME
+    return ConfigurationSet(config_path).run_directory / SNAPSHOT_NAME
 
 
 def baseline_path(config_path: Path) -> Path:
@@ -52,7 +52,7 @@ def baseline_path(config_path: Path) -> Path:
     Returns:
         Path to ``baseline.yml``.
     """
-    return state_dir(config_path) / BASELINE_NAME
+    return ConfigurationSet(config_path).run_directory / BASELINE_NAME
 
 
 def baseline_dir(config_path: Path) -> Path:
@@ -64,7 +64,7 @@ def baseline_dir(config_path: Path) -> Path:
     Returns:
         Path to ``baseline/``.
     """
-    return state_dir(config_path) / BASELINE_DIR_NAME
+    return ConfigurationSet(config_path).run_directory / BASELINE_DIR_NAME
 
 
 def drop_removed_baseline_projects(config_path: Path, keep: set[str]) -> None:

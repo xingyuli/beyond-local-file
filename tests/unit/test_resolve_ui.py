@@ -21,8 +21,9 @@ from urllib.request import HTTPErrorProcessor, Request, build_opener, urlopen
 
 import pytest
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.live import LiveSync
-from beyond_local_file.daemon.process import port_path, state_dir
+from beyond_local_file.daemon.process import port_path
 from beyond_local_file.daemon.screen import _ShellScreen
 from beyond_local_file.held import REASON_DELETE_GAP, list_held_copies, store_held_copy
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
@@ -43,11 +44,11 @@ RESOLVE_TOKEN_NAME = "resolve.token"
 
 
 def _resolve_port_path(config_path: Path) -> Path:
-    return state_dir(config_path) / RESOLVE_PORT_NAME
+    return ConfigurationSet(config_path).run_directory / RESOLVE_PORT_NAME
 
 
 def _resolve_token_path(config_path: Path) -> Path:
-    return state_dir(config_path) / RESOLVE_TOKEN_NAME
+    return ConfigurationSet(config_path).run_directory / RESOLVE_TOKEN_NAME
 
 
 def _wait_until(predicate, *, timeout: float = _READY_WAIT_S) -> None:
