@@ -18,7 +18,6 @@ from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import MappingUnitResults
-from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import catch_up_live, run_catch_up
 from .handlers import collect_check_results, handle_request, render_check_results
@@ -252,7 +251,7 @@ def _timed_new_unit(
 
 
 def _catch_up_unit(config_path: Path, unit: WorkerUnit, on_line: ProgressCallback | None) -> None:
-    projects = load_set_projects(config_path)
+    projects = ConfigurationSet(config_path).projects()
     subset = {key: project for key, project in projects.items() if project.managed_project_name == unit.name}
     if not subset:
         if on_line is not None:
@@ -595,7 +594,7 @@ def _catch_up_and_persist(
     Returns:
         Projects and baseline trees, or None when start must not continue.
     """
-    file_projects = load_set_projects(config_path)
+    file_projects = ConfigurationSet(config_path).projects()
     snapshot_projects = load_snapshot(config_path)
     if snapshot_projects is None:
         projects = file_projects

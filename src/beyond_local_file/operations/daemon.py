@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 
 from beyond_local_file.blfrc import is_global_config_path
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.client import (
     DAEMON_DOWN_HINT,
     call_daemon,
@@ -41,7 +42,7 @@ from beyond_local_file.daemon.screen import (
 )
 from beyond_local_file.daemon.store import load_baseline, load_snapshot
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.project_processor import load_config_projects, load_set_projects, resolve_configuration_set
+from beyond_local_file.project_processor import load_config_projects, resolve_configuration_set
 
 
 def start_daemon(config: str | None, *, worker: bool) -> int:
@@ -297,4 +298,4 @@ def _committed_projects(config_path: Path) -> dict[str, ConfigProject]:
     snapshot = load_snapshot(config_path)
     if snapshot is not None:
         return snapshot
-    return load_set_projects(config_path)
+    return ConfigurationSet(config_path).projects()

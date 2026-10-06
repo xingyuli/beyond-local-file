@@ -81,9 +81,7 @@ def mapping_files_for(config_path: Path) -> list[Path]:
     Returns:
         Resolved mapping yaml paths.
     """
-    if is_global_config_path(config_path):
-        return list(resolve_global_mapping_files() or [])
-    return [Path(config_path).resolve()]
+    return list(ConfigurationSet(config_path).mapping_files())
 
 
 def running_owner_of(mapping_file: Path) -> Path | None:

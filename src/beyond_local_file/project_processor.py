@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-import yaml
 
 from .blfrc import (
     BlfrcError,
@@ -18,10 +17,10 @@ from .blfrc import (
     is_global_config_path,
     resolve_global_mapping_files,
 )
-from .config import Config, ConfigError
+from .configuration_set import ConfigError, ConfigurationSet
 from .constants import DEFAULT_CONFIG_FILE
 from .contribution import contribution_owner, projects_targeting
-from .daemon.process import mapping_files_for, running_owner_of
+from .daemon.process import running_owner_of
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_mapping_units
 from .operations import CmdOperation
@@ -287,15 +286,7 @@ def load_set_projects(config_path: Path, project_name: str | None = None) -> dic
     Raises:
         ConfigError: If mapping files conflict or cannot be loaded.
     """
-    paths = mapping_files_for(config_path)
-    if not paths:
-        raise ConfigError(f"No mapping files for {config_path}")
-    if len(paths) == 1:
-        cfg = Config(paths[0])
-        cfg.load()
-        return cfg.get_config_projects(project_name)
-    projects, _sources = combine_mapping_projects(paths, project_name)
-    return projects
+    return ConfigurationSet(config_path).projects(project_name)
 
 
 def _load_config_from_path(
@@ -336,17 +327,15 @@ def _load_single_config(config_path: Path | str, project_name: str | None) -> Co
     """
     try:
         resolved = Path(config_path).resolve()
-        cfg = Config(resolved)
-        cfg.load()
-        projects = cfg.get_config_projects(project_name)
-        sources = {project.managed_project_path: resolved for project in projects.values()}
+        configuration_set = ConfigurationSet(resolved)
+        projects = configuration_set.projects(project_name)
         return ConfigLoadResult(
             projects=projects,
             config_file=resolved,
-            mapping_files=(resolved,),
-            project_sources=sources,
+            mapping_files=configuration_set.mapping_files(),
+            project_sources=configuration_set.project_sources(project_name),
         )
-    except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
+    except ConfigError as e:
         click.echo(str(e))
         return None
 
@@ -360,20 +349,20 @@ def _load_global_set(project_name: str | None) -> ConfigLoadResult | None:
     Returns:
         The global set, or ``None`` if loading failed.
     """
+    configuration_set = ConfigurationSet(global_config_path())
     try:
-        paths = resolve_global_mapping_files()
-    except BlfrcError as e:
+        mapping_files = configuration_set.mapping_files()
+    except ConfigError as e:
         click.echo(f"Error: {e}")
         return None
-    if not paths:
+    if not mapping_files:
         click.echo(f"Error: no mapping files in {global_config_path()}")
         return None
     try:
-        projects, sources = _projects_for_global_paths(paths, project_name)
-    except (ConfigError, FileNotFoundError, ValueError, yaml.YAMLError) as e:
+        projects = configuration_set.projects(project_name)
+        sources = configuration_set.project_sources(project_name)
+    except ConfigError as e:
         click.echo(f"Error: {e}")
-        return None
-    if projects is None:
         return None
     if project_name and not projects:
         click.echo(f"Project '{project_name}' not found in config")
@@ -381,66 +370,9 @@ def _load_global_set(project_name: str | None) -> ConfigLoadResult | None:
     return ConfigLoadResult(
         projects=projects,
         config_file=global_config_path(),
-        mapping_files=tuple(paths),
+        mapping_files=mapping_files,
         project_sources=sources,
     )
-
-
-def _projects_for_global_paths(
-    paths: list[Path],
-    project_name: str | None,
-) -> tuple[dict[str, ConfigProject], dict[Path, Path]] | tuple[None, None]:
-    if len(paths) == 1:
-        loaded = _load_single_config(paths[0], project_name)
-        if loaded is None:
-            return None, None
-        return loaded.projects, loaded.project_sources
-    return combine_mapping_projects(paths, project_name)
-
-
-def combine_mapping_projects(
-    config_paths: list[Path],
-    project_name: str | None = None,
-) -> tuple[dict[str, ConfigProject], dict[Path, Path]]:
-    """Load and combine mapping files, erroring on duplicate managed paths.
-
-    Args:
-        config_paths: Mapping yaml paths to load.
-        project_name: Optional project name to filter.
-
-    Returns:
-        Combined projects and a map of managed-project path to source yaml.
-
-    Raises:
-        ConfigError: If the same managed project is defined in more than one file.
-    """
-    combined_projects: dict[str, ConfigProject] = {}
-    sources: dict[Path, Path] = {}
-
-    for path in config_paths:
-        cfg = Config(path)
-        cfg.load()
-        for proj in cfg.get_config_projects().values():
-            managed_path = proj.managed_project_path
-            if managed_path in sources:
-                existing = sources[managed_path]
-                raise ConfigError(
-                    f"Managed project '{managed_path}' defined in multiple config files: {existing}, {path}"
-                )
-            sources[managed_path] = path
-            combined_projects[str(managed_path)] = proj
-
-    if project_name:
-        combined_projects = {
-            key: project for key, project in combined_projects.items() if project.managed_project_name == project_name
-        }
-        sources = {
-            managed: source
-            for managed, source in sources.items()
-            if any(project.managed_project_path == managed for project in combined_projects.values())
-        }
-
-    return combined_projects, sources
 
 
 def _resolve_project_from_cwd(

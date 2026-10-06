@@ -26,7 +26,6 @@ from beyond_local_file.options import OutputFormat
 from beyond_local_file.project_processor import (
     ProjectProcessor,
     RevlinkResolveError,
-    load_set_projects,
     resolve_revlink_context,
 )
 
@@ -111,7 +110,7 @@ def _handle_check(
 ) -> int:
     projects = load_snapshot(config_path)
     if projects is None:
-        projects = load_set_projects(config_path)
+        projects = ConfigurationSet(config_path).projects()
     project_name = request.get("project_name")
     if project_name:
         projects = {key: project for key, project in projects.items() if project.managed_project_name == project_name}
@@ -353,7 +352,7 @@ def _observer_for(
     Returns:
         Observer and the committed mappings for this managed project.
     """
-    projects = load_set_projects(config_path)
+    projects = ConfigurationSet(config_path).projects()
     subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
     observer = created.get("live")
     if observer is None:
@@ -381,7 +380,7 @@ def _replace_after_mapping_drop(
     observer = created.get("live")
     if observer is None:
         return 0
-    projects = load_set_projects(config_path)
+    projects = ConfigurationSet(config_path).projects()
     subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
     if subset:
         observer.replace_projects(subset)
@@ -391,7 +390,7 @@ def _replace_after_mapping_drop(
 def _persist_live_state(config_path: Path, live: LiveSync, changed_rel: str | None) -> None:
     """Persist snapshot and LiveSync baseline after a named mutating job."""
     with log_duration("persist: done") as fields:
-        projects = load_set_projects(config_path)
+        projects = ConfigurationSet(config_path).projects()
         save_snapshot(config_path, projects)
         rels = [changed_rel] if changed_rel else None
         save_baseline(config_path, live.baseline, projects, changed_rels=rels)
@@ -406,7 +405,7 @@ def _persist_committed_state(
     previous: BaselineTrees | None = None,
 ) -> None:
     with log_duration("persist: done") as fields:
-        projects = load_set_projects(config_path)
+        projects = ConfigurationSet(config_path).projects()
         save_snapshot(config_path, projects)
         if previous is None:
             previous = load_baseline(config_path)

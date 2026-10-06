@@ -16,9 +16,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.held import HeldCopy, held_dir_for
 from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import rel_in_items
 from .merge import is_binary
@@ -618,8 +618,7 @@ def _row_flags(
         for row in listing.oos
     )
     held = any(
-        copy.path == rel and _held_project_name(projects, copy) == project.managed_project_name
-        for copy in listing.held
+        copy.path == rel and _held_project_name(projects, copy) == project.managed_project_name for copy in listing.held
     )
     return oos, held
 
@@ -641,4 +640,4 @@ def _projects(config_path: Path) -> dict[str, ConfigProject]:
     snapshot = load_snapshot(config_path)
     if snapshot is not None:
         return snapshot
-    return load_set_projects(config_path)
+    return ConfigurationSet(config_path).projects()

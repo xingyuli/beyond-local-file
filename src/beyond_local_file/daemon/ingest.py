@@ -12,7 +12,6 @@ from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.project_processor import load_set_projects
 
 from .catchup import run_catch_up
 from .live import LiveSync
@@ -276,7 +275,7 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
     code, affected = prepare_reload(config_path, confirmed=confirmed)
     if code != 0 or not affected:
         return code
-    file_projects = load_set_projects(config_path)
+    file_projects = ConfigurationSet(config_path).projects()
     subset = {key: project for key, project in file_projects.items() if project.managed_project_name in affected}
     if subset:
         trees = run_catch_up(subset, ConfigurationSet(config_path).run_directory, load_baseline(config_path))
@@ -386,7 +385,7 @@ def _persist_pruned_baseline(
 def _load_file_and_snapshot(
     config_path: Path,
 ) -> tuple[dict[str, ConfigProject], dict[str, ConfigProject] | None]:
-    return load_set_projects(config_path), load_snapshot(config_path)
+    return ConfigurationSet(config_path).projects(), load_snapshot(config_path)
 
 
 def _index_projects(projects: dict[str, ConfigProject]) -> dict[str, _ProjectIndex]:
