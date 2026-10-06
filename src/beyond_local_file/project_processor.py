@@ -1,6 +1,6 @@
 """Project processing utilities for CLI commands.
 
-This module handles config loading, path resolution, and project orchestration.
+This module handles path resolution and project orchestration.
 Operation logic lives in the ``operations`` package — one module per subcommand.
 """
 
@@ -11,37 +11,12 @@ from pathlib import Path
 
 import click
 
-from .blfrc import (
-    BlfrcError,
-    global_config_path,
-    is_global_config_path,
-    resolve_global_mapping_files,
-)
-from .configuration_set import ConfigError, ConfigurationSet, configuration_set_for_shell
-from .constants import DEFAULT_CONFIG_FILE
+from .configuration_set import ConfigError, configuration_set_for_shell
 from .contribution import contribution_owner, projects_targeting
 from .model.config import ConfigProject
 from .model.translator import translate_config_to_mapping_units
 from .operations import CmdOperation
 from .operations.revlink import RevlinkContext
-
-
-@dataclass(frozen=True)
-class ConfigLoadResult:
-    """Result of a successful :func:`load_config_projects` call.
-
-    Attributes:
-        projects: Mapping of project key to :class:`~beyond_local_file.model.config.ConfigProject`.
-        config_file: Set identity path used to talk to the daemon. The global
-            set uses ``~/.blf/config``; a singleton set uses its mapping yaml.
-        mapping_files: Mapping yaml files this set loads.
-        project_sources: Managed-project path to the mapping yaml that defined it.
-    """
-
-    projects: dict[str, ConfigProject]
-    config_file: Path
-    mapping_files: tuple[Path, ...] = ()
-    project_sources: dict[Path, Path] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -218,183 +193,6 @@ class ProjectProcessor:
         return True
 
 
-def load_config_projects(config: str | None, project_name: str | None = None) -> ConfigLoadResult | None:
-    """Load configuration for shells, routing ``-c`` to a running owner set.
-
-    Config resolution order:
-    1. Explicit config parameter (from --config flag)
-    2. ``~/.blf/config`` pointer list (the global set)
-    3. Default to config.yml in current directory
-
-    When ``-c`` names a mapping yaml already loaded by a running set, the
-    result identifies that running set so shells do not start a second watcher.
-
-    Args:
-        config: Path to the YAML configuration file from --config flag,
-            or None if the flag was not provided.
-        project_name: Optional project name to filter. If provided, only
-            returns configuration for that project.
-
-    Returns:
-        A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
-    """
-    asked = configuration_set_for_shell(config)
-    if asked is None:
-        return None
-    try:
-        projects = asked.projects(project_name)
-        sources = asked.project_sources(project_name)
-        mapping_files = asked.mapping_files()
-    except ConfigError as error:
-        if asked.is_global:
-            click.echo(f"Error: {error}")
-        else:
-            click.echo(str(error))
-        return None
-    if asked.is_global and project_name and not projects:
-        click.echo(f"Project '{project_name}' not found in config")
-        return None
-    return ConfigLoadResult(
-        projects=projects,
-        config_file=asked.identity,
-        mapping_files=mapping_files,
-        project_sources=sources,
-    )
-
-
-def resolve_configuration_set(config: str | None, project_name: str | None = None) -> ConfigLoadResult | None:
-    """Resolve the configuration set the caller asked for, without overlap routing.
-
-    Args:
-        config: Path from ``--config``, or None to use global then CWD.
-        project_name: Optional project name to filter.
-
-    Returns:
-        A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
-    """
-    if config is not None:
-        path = Path(_get_absolute_path(config))
-        if is_global_config_path(path):
-            return _load_global_set(project_name)
-        return _load_config_from_path(config, project_name)
-
-    try:
-        global_files = resolve_global_mapping_files()
-    except BlfrcError as e:
-        click.echo(f"Error: {e}")
-        return None
-
-    if global_files:
-        return _load_global_set(project_name)
-
-    return _load_config_from_path(DEFAULT_CONFIG_FILE, project_name, show_hint=True)
-
-
-def load_set_projects(config_path: Path, project_name: str | None = None) -> dict[str, ConfigProject]:
-    """Load mapping projects for a configuration set identity path.
-
-    The global set loads every mapping file listed in ``~/.blf/config``.
-    A singleton set loads that one mapping yaml.
-
-    Args:
-        config_path: Set identity path (global config or a mapping yaml).
-        project_name: Optional project name to filter.
-
-    Returns:
-        Combined config projects.
-
-    Raises:
-        ConfigError: If mapping files conflict or cannot be loaded.
-    """
-    return ConfigurationSet(config_path).projects(project_name)
-
-
-def _load_config_from_path(
-    config: str, project_name: str | None, *, show_hint: bool = False
-) -> ConfigLoadResult | None:
-    """Resolve a config path string, check existence, and load it.
-
-    Args:
-        config: Path string to the YAML configuration file.
-        project_name: Optional project name to filter.
-        show_hint: When True, append a usage hint to the "not found" error
-            message. Set by callers that fall back to the default path so
-            users know how to specify a config explicitly.
-
-    Returns:
-        A :class:`ConfigLoadResult` on success, or ``None`` if the file does
-        not exist or loading failed.
-    """
-    config_path = Path(_get_absolute_path(config))
-    if not config_path.exists():
-        msg = f"Config file not found: {config_path}"
-        if show_hint:
-            msg += "\nHint: use --config <path> or add mapping files to ~/.blf/config"
-        click.echo(msg)
-        return None
-    return _load_single_config(config_path, project_name)
-
-
-def _load_single_config(config_path: Path | str, project_name: str | None) -> ConfigLoadResult | None:
-    """Load a single config file.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-        project_name: Optional project name to filter.
-
-    Returns:
-        A :class:`ConfigLoadResult` on success, or ``None`` if loading failed.
-    """
-    try:
-        resolved = Path(config_path).resolve()
-        configuration_set = ConfigurationSet(resolved)
-        projects = configuration_set.projects(project_name)
-        return ConfigLoadResult(
-            projects=projects,
-            config_file=resolved,
-            mapping_files=configuration_set.mapping_files(),
-            project_sources=configuration_set.project_sources(project_name),
-        )
-    except ConfigError as e:
-        click.echo(str(e))
-        return None
-
-
-def _load_global_set(project_name: str | None) -> ConfigLoadResult | None:
-    """Load every mapping file listed in the global pointer list.
-
-    Args:
-        project_name: Optional project name to filter.
-
-    Returns:
-        The global set, or ``None`` if loading failed.
-    """
-    configuration_set = ConfigurationSet(global_config_path())
-    try:
-        mapping_files = configuration_set.mapping_files()
-    except ConfigError as e:
-        click.echo(f"Error: {e}")
-        return None
-    if not mapping_files:
-        click.echo(f"Error: no mapping files in {global_config_path()}")
-        return None
-    try:
-        projects = configuration_set.projects(project_name)
-        sources = configuration_set.project_sources(project_name)
-    except ConfigError as e:
-        click.echo(f"Error: {e}")
-        return None
-    if project_name and not projects:
-        click.echo(f"Project '{project_name}' not found in config")
-        return None
-    return ConfigLoadResult(
-        projects=projects,
-        config_file=global_config_path(),
-        mapping_files=mapping_files,
-        project_sources=sources,
-    )
-
-
 def _resolve_project_from_cwd(
     config_projects: dict[str, ConfigProject],
     cwd: Path,
@@ -413,8 +211,7 @@ def _resolve_project_from_cwd(
       non-zero status code.
 
     Args:
-        config_projects: Dictionary of project key → ``ConfigProject`` as
-            returned by :func:`load_config_projects`.
+        config_projects: Dictionary of project key → ``ConfigProject``.
         cwd: The current working directory to match against each mapping's
             target paths.
 
@@ -430,15 +227,3 @@ def _resolve_project_from_cwd(
     if len(matches) == 0:
         return None
     return matches
-
-
-def _get_absolute_path(path: str) -> str:
-    """Resolve a path to its absolute form.
-
-    Args:
-        path: A file or directory path.
-
-    Returns:
-        Absolute path as a string.
-    """
-    return str(Path(path).resolve())

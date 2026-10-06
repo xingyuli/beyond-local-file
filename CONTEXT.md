@@ -29,7 +29,7 @@ The physical copy of a managed item that lives inside a target project.
 _Avoid_: Sync, deploy, copy
 
 **Configuration set**:
-The mapping yaml files one daemon process loads. The **global set** is the list in ``~/.blf/config``. ``-c PATH`` is a **singleton set** identified by that file's resolved path. With neither, ``config.yml`` in the current directory is a singleton set.
+The mapping yaml files one daemon process loads, identified by one path. The **global set** is identified by ``~/.blf/config`` (the pointer list). ``-c PATH`` is a **singleton set** identified by that mapping file's resolved path. With neither, ``config.yml`` in the current directory is a singleton set.
 _Avoid_: .blfrc, profile, config file (that name is the mapping yaml)
 
 **Global config**:
@@ -205,6 +205,8 @@ _Avoid_: Collision, conflict, duplicate mapping
 One daemon process loads one configuration set. Process state lives in the runtime home, not next to mapping files or inside managed projects.
 
 A yaml file already loaded by a running set is served by that process (``-c`` is not a second watcher). Starting a set that shares a mapping file with another running set is an error.
+
+Ready-path work uses the mapping snapshot and the worker's in-memory projects. Mapping files on disk are read at start, on reload, and after an internal splice. Shells resolve which set (attach on ``-c``) and send that identity; they do not re-read mapping yaml before IPC.
 
 ``link check`` hashes managed vs target now. A check with no project name is a job on every worker unit; the table is the merge. With a project name, that one unit. On a terminal the shell screen shows one row per worker unit that request uses, then the table. Closing the screen prints the table again. Non-TTY: table only.
 

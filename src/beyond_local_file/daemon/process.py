@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import shutil
@@ -15,11 +14,7 @@ from typing import TextIO
 
 import click
 
-from beyond_local_file.blfrc import (
-    get_home_directory,
-    is_global_config_path,
-    runtime_home,
-)
+from beyond_local_file.blfrc import get_home_directory, runtime_home
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.constants import HUB_LOCAL_DIR
 
@@ -36,38 +31,10 @@ PORT_NAME = "daemon.port"
 RESOLVE_PORT_NAME = "resolve.port"
 RESOLVE_TOKEN_NAME = "resolve.token"
 MAPPING_FILES_NAME = "mapping-files"
-GLOBAL_SET_ID = "global"
 _START_TIMEOUT_S = 30.0
 _STOP_TIMEOUT_S = 10.0
 _POLL_S = 0.05
 _FOLLOW_POLL_S = 0.2
-
-
-def singleton_set_id(config_path: Path) -> str:
-    """Return the run-directory name for the singleton set of *config_path*.
-
-    Args:
-        config_path: Path to the loaded mapping file.
-
-    Returns:
-        ``file-<sha256 of the resolved mapping yaml path>``.
-    """
-    digest = hashlib.sha256(str(config_path.resolve()).encode("utf-8")).hexdigest()
-    return f"file-{digest}"
-
-
-def set_id_for(config_path: Path) -> str:
-    """Return the run-directory name for the configuration set of *config_path*.
-
-    Args:
-        config_path: Set identity path (global config or a mapping yaml).
-
-    Returns:
-        ``global`` or ``file-<sha256 of the resolved mapping yaml path>``.
-    """
-    if is_global_config_path(config_path):
-        return GLOBAL_SET_ID
-    return singleton_set_id(config_path)
 
 
 def pid_path(config_path: Path) -> Path:

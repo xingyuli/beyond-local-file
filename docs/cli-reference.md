@@ -812,6 +812,8 @@ Pid, port, log, mapping snapshot, and baseline live under `~/.blf/run/global/` (
 
 A mapping file already loaded by a running set is served by that process — `-c` does not start a second watcher. Starting a set that shares a mapping file with another running set is an error and names the owner.
 
+`revlink`, `remove`, `link check`, and `daemon status|stop|logs` send that identity to the running daemon. They do not re-read mapping yaml; the worker uses last committed mappings. External yaml edits take effect through `daemon reload` (or classify-on-start).
+
 `revlink`, `remove`, and `link check` without `-c` use the global process when `~/.blf/config` exists.
 
 ### `~/.blf/config` — Global pointer list

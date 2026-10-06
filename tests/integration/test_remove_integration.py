@@ -145,7 +145,7 @@ def test_remove_dry_run_validates_every_projection_without_mutation(
 def test_remove_rejects_copy_true_config_without_mutation(
     tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
-    """A leftover copy: true config fails to load and leaves all state unchanged."""
+    """A leftover copy: true config fails to load at daemon start and leaves state unchanged."""
     managed = tmp_path / "managed"
     target = tmp_path / "target"
     managed.mkdir()
@@ -172,7 +172,7 @@ def test_remove_rejects_copy_true_config_without_mutation(
     }
 
     monkeypatch.chdir(target)
-    result = invoke_cli(["--config", str(config_path), "remove", "item.txt"], isolated_home)
+    result = invoke_cli(["--config", str(config_path), "daemon", "start"], isolated_home)
 
     assert result.exit_code == 1
     assert "project: managed" in result.output

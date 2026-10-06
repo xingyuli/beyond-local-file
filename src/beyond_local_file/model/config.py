@@ -72,14 +72,3 @@ class ConfigProject:
     managed_project_name: str
     managed_project_path: Path
     mappings: list[Mapping]
-
-
-@dataclass
-class Config:
-    """Top-level configuration containing all projects.
-
-    Attributes:
-        projects: Dictionary mapping project names to their configurations.
-    """
-
-    projects: dict[str, ConfigProject]

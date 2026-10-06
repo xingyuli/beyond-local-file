@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import yaml
 
-from beyond_local_file.blfrc import (
-    BlfrcError,
-    global_config_path,
-    resolve_global_mapping_files,
-    runtime_home,
-)
+from beyond_local_file.blfrc import get_home_directory, runtime_home
 from beyond_local_file.config import Config, ConfigError
 from beyond_local_file.constants import DEFAULT_CONFIG_FILE
 from beyond_local_file.daemon.pid import pid_is_alive, read_pid_file
@@ -68,7 +64,7 @@ class ConfigurationSet:
         Returns:
             True when identity is the global config under runtime home.
         """
-        return self.identity == runtime_home() / "config"
+        return _is_global_config_path(self.identity)
 
     @property
     def run_directory(self) -> Path:
@@ -94,10 +90,7 @@ class ConfigurationSet:
         """
         if not self.is_global:
             return (self.identity,)
-        try:
-            paths = resolve_global_mapping_files()
-        except BlfrcError as error:
-            raise ConfigError(str(error)) from error
+        paths = _resolve_global_mapping_files()
         if not paths:
             return ()
         return tuple(paths)
@@ -144,7 +137,7 @@ class ConfigurationSet:
                 sources = {project.managed_project_path: paths[0] for project in projects.values()}
                 return projects, sources
             return _combine_mapping_projects(paths, project_name)
-        except (FileNotFoundError, ValueError, yaml.YAMLError, BlfrcError) as error:
+        except (FileNotFoundError, ValueError, yaml.YAMLError) as error:
             raise ConfigError(str(error)) from error
 
     def running_overlap(self) -> RunningOverlap | None:
@@ -235,26 +228,27 @@ def _resolve_configuration_set_identity(config: str | None) -> ConfigurationSet 
             return None
         return asked
 
+    asked = ConfigurationSet(_global_config_path())
     try:
-        global_files = resolve_global_mapping_files()
-    except BlfrcError as error:
+        mapping_files = asked.mapping_files()
+    except ConfigError as error:
         click.echo(f"Error: {error}")
         return None
-    if global_files:
-        return ConfigurationSet(global_config_path())
+    if mapping_files:
+        return asked
     return _cwd_set_or_none()
 
 
 def _global_set_or_none() -> ConfigurationSet | None:
     """Return the global set when the pointer list names mapping files."""
-    asked = ConfigurationSet(global_config_path())
+    asked = ConfigurationSet(_global_config_path())
     try:
         mapping_files = asked.mapping_files()
     except ConfigError as error:
         click.echo(f"Error: {error}")
         return None
     if not mapping_files:
-        click.echo(f"Error: no mapping files in {global_config_path()}")
+        click.echo(f"Error: no mapping files in {_global_config_path()}")
         return None
     return asked
 
@@ -285,13 +279,13 @@ def _loaded_mapping_files(run_dir: Path) -> list[Path]:
     if files:
         return files
     if run_dir.name == _GLOBAL_RUN_NAME:
-        return list(resolve_global_mapping_files() or [])
+        return list(_resolve_global_mapping_files() or [])
     return []
 
 
 def _identity_path_for_run_dir(run_dir: Path, loaded: list[Path]) -> Path | None:
     if run_dir.name == _GLOBAL_RUN_NAME:
-        return runtime_home() / "config"
+        return _global_config_path()
     if loaded:
         return loaded[0].resolve()
     return None
@@ -340,3 +334,188 @@ def _combine_mapping_projects(
         }
 
     return combined_projects, sources
+
+
+def _global_config_path() -> Path:
+    """Return the global config pointer-list path.
+
+    Returns:
+        ``<home>/.blf/config``.
+    """
+    return runtime_home() / "config"
+
+
+def _is_global_config_path(path: Path) -> bool:
+    """Return whether *path* is the global config pointer list.
+
+    Args:
+        path: Candidate path.
+
+    Returns:
+        True when *path* resolves to ``~/.blf/config``.
+    """
+    try:
+        return Path(path).resolve() == _global_config_path().resolve()
+    except OSError:
+        return False
+
+
+def _resolve_global_mapping_files() -> list[Path] | None:
+    """Resolve mapping file path(s) from ``~/.blf/config``.
+
+    Returns:
+        List of mapping file paths if the global config exists and is valid.
+        None if it does not exist or the ``config_file`` field is missing.
+
+    Raises:
+        ConfigError: If the global config exists but is invalid.
+    """
+    pointer_path = _global_config_path()
+
+    if not pointer_path.exists():
+        return None
+
+    data = _load_pointer_file(pointer_path)
+    if data is None:
+        return None
+
+    config_files = _extract_config_files(data, pointer_path)
+    if config_files is None:
+        return None
+
+    return _resolve_config_paths(config_files, pointer_path)
+
+
+def _load_pointer_file(pointer_path: Path) -> dict | None:
+    """Load and parse the global config pointer list.
+
+    Args:
+        pointer_path: Path to ``~/.blf/config``.
+
+    Returns:
+        Parsed YAML data as dict, or None if file is empty.
+
+    Raises:
+        ConfigError: If file is not readable or contains invalid YAML.
+    """
+    if not os.access(pointer_path, os.R_OK):
+        raise ConfigError(f"Cannot read {pointer_path}: Permission denied")
+
+    try:
+        with open(pointer_path) as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Invalid YAML in {pointer_path}: {e}") from e
+    except OSError as e:
+        raise ConfigError(f"Error reading {pointer_path}: {e}") from e
+
+    if data is None or not isinstance(data, dict):
+        return None
+
+    return data
+
+
+def _extract_config_files(data: dict, pointer_path: Path) -> list[str] | None:
+    """Extract and validate config_file field from the pointer list.
+
+    Args:
+        data: Parsed YAML data.
+        pointer_path: Path to the pointer list (for error messages).
+
+    Returns:
+        List of config file path strings, or None if field is missing.
+
+    Raises:
+        ConfigError: If config_file field is invalid.
+    """
+    if "config_file" not in data:
+        return None
+
+    config_file = data["config_file"]
+
+    if isinstance(config_file, str):
+        config_files = [config_file]
+    elif isinstance(config_file, list):
+        config_files = config_file
+    else:
+        raise ConfigError(f"'config_file' in {pointer_path} must be a string or list of strings")
+
+    if not config_files:
+        raise ConfigError(f"'config_file' in {pointer_path} cannot be an empty list")
+
+    for i, item in enumerate(config_files, 1):
+        if not isinstance(item, str):
+            raise ConfigError(f"All items in 'config_file' list must be strings (item {i} is {type(item).__name__})")
+        if not item or not item.strip():
+            raise ConfigError(f"'config_file' in {pointer_path} cannot be empty")
+
+    return config_files
+
+
+def _resolve_config_paths(config_files: list[str], pointer_path: Path) -> list[Path]:
+    """Resolve and validate mapping file paths.
+
+    Args:
+        config_files: List of config file path strings.
+        pointer_path: Path to the pointer list (for error messages).
+
+    Returns:
+        List of resolved and validated Path objects.
+
+    Raises:
+        ConfigError: If any path is invalid or file doesn't exist.
+    """
+    resolved_paths = []
+    home_dir = get_home_directory()
+
+    for i, raw_path in enumerate(config_files, 1):
+        path_str = raw_path.strip()
+        resolved_path = _resolve_single_path(path_str, home_dir)
+        _validate_config_path(resolved_path, i, len(config_files), pointer_path)
+        resolved_paths.append(resolved_path)
+
+    return resolved_paths
+
+
+def _resolve_single_path(path_str: str, home_dir: Path) -> Path:
+    """Resolve a single config file path string.
+
+    Args:
+        path_str: Config file path string.
+        home_dir: Home directory path.
+
+    Returns:
+        Resolved absolute Path.
+    """
+    if path_str.startswith("/"):
+        return Path(path_str).resolve()
+    if path_str.startswith("~"):
+        path_without_tilde = path_str[1:]
+        if path_without_tilde.startswith("/"):
+            path_without_tilde = path_without_tilde[1:]
+        return (home_dir / path_without_tilde).resolve()
+    return (home_dir / path_str).resolve()
+
+
+def _validate_config_path(resolved_path: Path, index: int, total: int, pointer_path: Path) -> None:
+    """Validate that a resolved config path exists and is readable.
+
+    Args:
+        resolved_path: Resolved config file path.
+        index: Index of this file in the list (1-based).
+        total: Total number of config files.
+        pointer_path: Path to the pointer list (for error messages).
+
+    Raises:
+        ConfigError: If path doesn't exist, is a directory, or is not readable.
+    """
+    file_info = f"file {index} of {total}" if total > 1 else ""
+
+    if not resolved_path.exists():
+        raise ConfigError(f"Config file not found: {resolved_path} ({file_info} from {pointer_path})".strip())
+
+    if resolved_path.is_dir():
+        raise ConfigError(f"Config file is a directory: {resolved_path} ({file_info} from {pointer_path})".strip())
+
+    if not os.access(resolved_path, os.R_OK):
+        raise ConfigError(f"Cannot read config file: {resolved_path}: Permission denied")

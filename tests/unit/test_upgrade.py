@@ -1,10 +1,12 @@
 """Tests for upgrade detection logic."""
 
 import sys
+from pathlib import Path
 
 import pytest
 
-from beyond_local_file.operations.upgrade import InstallMethod, detect_install_method
+from beyond_local_file.blfrc import runtime_home
+from beyond_local_file.operations.upgrade import InstallMethod, _config_path_if_present, detect_install_method
 
 
 class TestDetectInstallMethod:
@@ -72,3 +74,24 @@ class TestDetectInstallMethod:
         monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
 
         assert detect_install_method() == InstallMethod.UNKNOWN
+
+
+def test_config_path_without_dash_c_uses_global_set_identity(tmp_path: Path) -> None:
+    """With no -c, a populated global pointer list identifies the global set."""
+    mapping = tmp_path / "workspace" / "config.yml"
+    mapping.parent.mkdir()
+    mapping.write_text("proj: /tmp/t\n")
+    pointer = runtime_home() / "config"
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(f"config_file:\n  - {mapping}\n", encoding="utf-8")
+    assert _config_path_if_present(None) == runtime_home() / "config"
+    assert _config_path_if_present(None) != mapping.resolve()
+
+
+def test_config_path_without_dash_c_falls_back_to_cwd_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no -c and no global mapping files, identity is CWD config.yml."""
+    mapping = tmp_path / "config.yml"
+    mapping.write_text("proj: /tmp/t\n")
+    monkeypatch.chdir(tmp_path)
+    assert _config_path_if_present(None) == mapping.resolve()
+

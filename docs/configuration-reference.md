@@ -4,7 +4,7 @@ Complete reference for a **mapping file** (typically `config.yml`).
 
 Every projection is a physical copy (file or directory). `copy: true` is not a valid option.
 
-One daemon process loads one **configuration set** of mapping files: `-c PATH` is a singleton set; `~/.blf/config` is the global set (a pointer list, not a mapping document); with neither, `config.yml` in CWD is a singleton set. See [Configuration set](cli-reference.md#configuration-set).
+One daemon process loads one **configuration set** of mapping files, identified by one path: `-c PATH` is a singleton set; `~/.blf/config` is the global set (a pointer list, not a mapping document); with neither, `config.yml` in CWD is a singleton set. See [Configuration set](cli-reference.md#configuration-set).
 
 ---
 

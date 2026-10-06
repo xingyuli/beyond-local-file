@@ -17,7 +17,8 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from beyond_local_file.blfrc import BlfrcError, resolve_global_mapping_files
+from beyond_local_file.blfrc import runtime_home
+from beyond_local_file.configuration_set import ConfigError, ConfigurationSet
 from beyond_local_file.constants import DEFAULT_CONFIG_FILE
 from beyond_local_file.daemon.client import DAEMON_RUNNING_HINT
 from beyond_local_file.daemon.process import is_running
@@ -165,22 +166,24 @@ def run_upgrade(*, dry_run: bool = False, config: str | None = None) -> int:
 
 
 def _config_path_if_present(config: str | None) -> Path | None:
-    """Return a readable config path without printing load errors.
+    """Return a configuration-set identity path without printing load errors.
 
     Args:
         config: Optional explicit ``--config`` value.
 
     Returns:
-        Resolved config path when it exists, otherwise None.
+        Set identity when it exists, otherwise None. With no ``-c``, a
+        populated global pointer list identifies the global set.
     """
     if config is not None:
         path = Path(config).expanduser().resolve()
         return path if path.exists() else None
+    asked = ConfigurationSet(runtime_home() / "config")
     try:
-        global_files = resolve_global_mapping_files()
-    except BlfrcError:
-        global_files = []
-    if global_files:
-        return global_files[0]
+        mapping_files = asked.mapping_files()
+    except ConfigError:
+        mapping_files = ()
+    if mapping_files:
+        return asked.identity
     default = Path(DEFAULT_CONFIG_FILE).resolve()
     return default if default.exists() else None

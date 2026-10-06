@@ -6,7 +6,8 @@ import click
 import click.shell_completion
 import yaml
 
-from .blfrc import resolve_global_mapping_files
+from .blfrc import runtime_home
+from .configuration_set import ConfigurationSet
 from .constants import DEFAULT_CONFIG_FILE
 
 
@@ -45,9 +46,9 @@ def complete_project_names(
 
 
 def _resolve_mapping_files(ctx: click.Context) -> list[Path]:
-    """Resolve mapping files from context, the global config, or CWD.
+    """Resolve mapping files from context, the global set, or CWD.
 
-    Mirrors the resolution order of load_config_projects but stays silent.
+    Mirrors the configuration-set resolution order but stays silent.
 
     Args:
         ctx: The current Click context.
@@ -61,9 +62,9 @@ def _resolve_mapping_files(ctx: click.Context) -> list[Path]:
         return [Path(explicit).resolve()]
 
     try:
-        global_files = resolve_global_mapping_files()
-        if global_files:
-            return global_files
+        mapping_files = ConfigurationSet(runtime_home() / "config").mapping_files()
+        if mapping_files:
+            return list(mapping_files)
     except Exception:
         pass
 

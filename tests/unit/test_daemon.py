@@ -17,7 +17,6 @@ from click.testing import CliRunner, Result
 
 from beyond_local_file.cli import cli
 from beyond_local_file.configuration_set import ConfigurationSet
-from beyond_local_file.daemon.process import singleton_set_id
 from beyond_local_file.held import list_held_copies
 
 _WORKER_FLAG = "--worker"
@@ -745,7 +744,7 @@ def test_daemon_start_does_not_write_under_real_home(
 ) -> None:
     """A test daemon must not create ``~/.blf/run/file-<hash>/`` on the real home."""
     config_path, _managed, _targets = daemon_workspace
-    real_run = Path.home() / ".blf" / "run" / singleton_set_id(config_path)
+    real_run = Path.home() / ".blf" / "run" / ConfigurationSet(config_path).run_directory.name
 
     started = _invoke(["--config", str(config_path), "daemon", "start"], env=daemon_env)
     assert started.exit_code == 0, started.output

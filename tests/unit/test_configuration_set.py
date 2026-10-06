@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
-from beyond_local_file.blfrc import runtime_home
+from beyond_local_file.blfrc import get_home_directory, runtime_home
 from beyond_local_file.configuration_set import (
     ConfigError,
     ConfigurationSet,
@@ -177,6 +178,138 @@ def test_for_start_dash_c_does_not_attach_and_reports_global_overlap(tmp_path: P
     assert overlap.identity == runtime_home() / "config"
     assert overlap.pid == pid
     assert overlap.mapping_file == mapping.resolve()
+
+
+def _write_pointer(content: str) -> Path:
+    path = runtime_home() / "config"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+def _global_set() -> ConfigurationSet:
+    return ConfigurationSet(runtime_home() / "config")
+
+
+def test_global_pointer_list_ignores_leftover_dot_blfrc(tmp_path: Path) -> None:
+    """A leftover ``~/.blfrc`` is not the global pointer list."""
+    mapping = _write_mapping(tmp_path / "workspace" / "config.yml", "alpha-files", tmp_path / "target")
+    (get_home_directory() / ".blfrc").write_text(f"config_file: {mapping}\n")
+    assert _global_set().mapping_files() == ()
+
+
+def test_empty_global_pointer_list_has_no_mapping_files() -> None:
+    """An empty pointer list yields no mapping files."""
+    _write_pointer("")
+    assert _global_set().mapping_files() == ()
+    with pytest.raises(ConfigError, match="No mapping files"):
+        _global_set().projects()
+
+
+def test_global_pointer_list_resolves_absolute_relative_and_tilde_paths(tmp_path: Path) -> None:
+    """Pointer-list paths resolve as absolute, home-relative, and tilde paths."""
+    home = get_home_directory()
+    absolute = _write_mapping(tmp_path / "absolute.yml", "alpha-files", tmp_path / "target-alpha")
+    relative = _write_mapping(home / "configs" / "relative.yml", "beta-files", tmp_path / "target-beta")
+    tilde = _write_mapping(home / "tilde.yml", "gamma-files", tmp_path / "target-gamma")
+    _write_pointer(f"config_file:\n  - {absolute}\n  - configs/relative.yml\n  - ~/tilde.yml\n")
+    configuration_set = _global_set()
+    assert configuration_set.mapping_files() == (absolute.resolve(), relative.resolve(), tilde.resolve())
+    assert {project.managed_project_name for project in configuration_set.projects().values()} == {
+        "alpha-files",
+        "beta-files",
+        "gamma-files",
+    }
+
+
+def test_global_pointer_list_strips_whitespace_from_paths(tmp_path: Path) -> None:
+    """Whitespace around a pointer-list path is stripped."""
+    mapping = _write_mapping(tmp_path / "workspace" / "config.yml", "alpha-files", tmp_path / "target")
+    _write_pointer(f"config_file: '  {mapping}  '\n")
+    assert _global_set().mapping_files() == (mapping.resolve(),)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="chmod-based permission denial is ineffective on Windows")
+def test_unreadable_global_pointer_list_raises_config_error() -> None:
+    """An unreadable pointer list is a ConfigError."""
+    pointer = _write_pointer("config_file: test.yml\n")
+    pointer.chmod(0o000)
+    with pytest.raises(ConfigError, match=r"Cannot read.*Permission denied"):
+        _global_set().mapping_files()
+    pointer.chmod(0o644)
+
+
+def test_empty_config_file_string_raises_config_error() -> None:
+    """An empty config_file string is a ConfigError."""
+    _write_pointer('config_file: ""\n')
+    with pytest.raises(ConfigError, match="cannot be empty"):
+        _global_set().mapping_files()
+
+
+def test_whitespace_only_config_file_raises_config_error() -> None:
+    """A whitespace-only config_file string is a ConfigError."""
+    _write_pointer('config_file: "   "\n')
+    with pytest.raises(ConfigError, match="cannot be empty"):
+        _global_set().mapping_files()
+
+
+def test_empty_config_file_list_raises_config_error() -> None:
+    """An empty config_file list is a ConfigError."""
+    _write_pointer("config_file: []\n")
+    with pytest.raises(ConfigError, match="cannot be an empty list"):
+        _global_set().mapping_files()
+
+
+def test_config_file_wrong_type_raises_config_error() -> None:
+    """A non-string, non-list config_file field is a ConfigError."""
+    _write_pointer("config_file: 123\n")
+    with pytest.raises(ConfigError, match="must be a string or list of strings"):
+        _global_set().mapping_files()
+    _write_pointer("config_file:\n  key: value\n")
+    with pytest.raises(ConfigError, match="must be a string or list of strings"):
+        _global_set().mapping_files()
+
+
+def test_config_file_list_with_non_string_raises_config_error() -> None:
+    """A config_file list item that is not a string is a ConfigError."""
+    _write_pointer("config_file:\n  - test.yml\n  - 123\n")
+    with pytest.raises(ConfigError, match="must be strings"):
+        _global_set().mapping_files()
+
+
+def test_missing_mapping_file_in_pointer_list_raises_config_error() -> None:
+    """A listed mapping file that does not exist is a ConfigError."""
+    _write_pointer("config_file: nonexistent.yml\n")
+    with pytest.raises(ConfigError, match="Config file not found"):
+        _global_set().mapping_files()
+
+
+def test_pointer_list_directory_entry_raises_config_error(tmp_path: Path) -> None:
+    """A listed mapping path that is a directory is a ConfigError."""
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_pointer(f"config_file: {config_dir}\n")
+    with pytest.raises(ConfigError, match="is a directory"):
+        _global_set().mapping_files()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="chmod-based permission denial is ineffective on Windows")
+def test_unreadable_mapping_file_in_pointer_list_raises_config_error(tmp_path: Path) -> None:
+    """An unreadable listed mapping file is a ConfigError."""
+    mapping = _write_mapping(tmp_path / "workspace" / "config.yml", "alpha-files", tmp_path / "target")
+    mapping.chmod(0o000)
+    _write_pointer(f"config_file: {mapping}\n")
+    with pytest.raises(ConfigError, match=r"Cannot read config file.*Permission denied"):
+        _global_set().mapping_files()
+    mapping.chmod(0o644)
+
+
+def test_pointer_list_error_names_file_number_for_multiple_files(tmp_path: Path) -> None:
+    """A later missing file in a multi-file list is named by index."""
+    first = _write_mapping(tmp_path / "config1.yml", "alpha-files", tmp_path / "target")
+    _write_pointer(f"config_file:\n  - {first}\n  - nonexistent.yml\n")
+    with pytest.raises(ConfigError, match="file 2 of 2"):
+        _global_set().mapping_files()
 
 
 def test_running_overlap_is_none_when_pid_is_not_live(tmp_path: Path) -> None:

@@ -294,12 +294,6 @@ def _call_create_with_hub_choice(ctx: click.Context, request: dict[str, Any], na
     if loaded is None:
         ctx.exit(1)
         return
-    try:
-        loaded.projects()
-    except ConfigError as error:
-        _echo_config_error(loaded, error)
-        ctx.exit(1)
-        return
 
     def apply_answers(answers: tuple[str, ...], pending: dict[str, Any]) -> ScreenSkip | None:
         pending["project_name"] = names[int(answers[0]) - 1]
@@ -381,7 +375,10 @@ def _cwd_containing(ctx: click.Context, path: str, *, resolve_source: bool = Fal
 
 
 def _call_daemon(ctx: click.Context, request: dict[str, Any]) -> None:
-    """Load the config file and send *request* to the running daemon.
+    """Resolve the configuration set and send *request* to the running daemon.
+
+    Does not read mapping yaml. The daemon uses committed mappings (snapshot
+    and LiveSync.projects).
 
     Args:
         ctx: Active Click context carrying ``--config``.
@@ -389,12 +386,6 @@ def _call_daemon(ctx: click.Context, request: dict[str, Any]) -> None:
     """
     loaded = configuration_set_for_shell(ctx.obj["config"])
     if loaded is None:
-        ctx.exit(1)
-        return
-    try:
-        loaded.projects()
-    except ConfigError as error:
-        _echo_config_error(loaded, error)
         ctx.exit(1)
         return
     ctx.exit(call_daemon(loaded.identity, request))

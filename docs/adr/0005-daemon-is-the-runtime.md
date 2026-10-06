@@ -4,7 +4,7 @@ Copy, catch-up, fan-out, resolve, and every mapping edit that originates from bl
 
 The mapping snapshot is persisted on disk. After a crash or kill, start can still diff the config file against the last committed snapshot and see external mapping edits. A snapshot that lived only in memory could not.
 
-Manual edits of the config file remain an external source and still take effect only through reload (or the equivalent classify-on-start against the persisted snapshot). The daemon does not watch mapping files.
+Manual edits of the config file remain an external source and still take effect only through reload (or the equivalent classify-on-start against the persisted snapshot). The daemon does not watch mapping files. A running daemon's shells send the set identity; they do not re-read mapping yaml. The worker uses the committed snapshot and in-memory projects.
 
 ## Status
 

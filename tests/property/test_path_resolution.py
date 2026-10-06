@@ -13,7 +13,7 @@ from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from beyond_local_file.config import Config
-from beyond_local_file.project_processor import _get_absolute_path
+from beyond_local_file.configuration_set import ConfigurationSet
 from tests.path_strategies import is_safe_fs_name, is_safe_relative_path
 
 
@@ -64,13 +64,13 @@ def test_config_file_path_resolved_relative_to_cwd(
             os.chdir(test_cwd)
 
             # Resolve the config path using the tool's function
-            resolved_path = _get_absolute_path(relative_config_path)
+            resolved_path = ConfigurationSet(Path(relative_config_path)).identity
 
             # Expected path: CWD + relative_config_path
             expected_path = (test_cwd / relative_config_path).resolve()
 
             # Verify the resolved path is relative to CWD
-            assert Path(resolved_path) == expected_path, (
+            assert resolved_path == expected_path, (
                 f"Config path not resolved relative to CWD. Expected: {expected_path}, Got: {resolved_path}"
             )
 
