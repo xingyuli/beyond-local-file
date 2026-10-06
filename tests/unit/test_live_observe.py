@@ -50,8 +50,12 @@ def _live_sync(config_path: Path) -> LiveSync:
 def _wait_until(predicate: Callable[[], bool], *, timeout: float = _READY_WAIT_S) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if predicate():
-            return
+        try:
+            if predicate():
+                return
+        except OSError:
+            # copy_projection unlinks the destination before the new copy exists
+            pass
         time.sleep(_POLL_S)
     raise TimeoutError("condition was not met")
 
