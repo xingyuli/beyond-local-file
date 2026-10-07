@@ -1,9 +1,8 @@
-"""Daemon log lines that bypass captured request stdout.
+"""Daemon log lines that must not mix into shell transcripts.
 
 Worker prints are stamped at write time and routed into the idle log, the
-request log, or the daemon log (0015, 0022). Shell-request stdout is captured
-with ``redirect_stdout`` for the CLI and must not steal these lines. Bind the
-routing stream at process start.
+request log, or the daemon log (0015, 0022). They must not be mixed into
+shell transcripts. Bind the routing stream at process start.
 """
 
 from __future__ import annotations
@@ -124,7 +123,7 @@ def open_worker_logs(directory: Path) -> None:
 
 
 def worker_print(message: str) -> None:
-    """Write one line to the daemon log, bypassing request stdout capture.
+    """Write one line to the bound worker log, not the shell transcript.
 
     No-op when no worker stream is bound, so in-process tests stay quiet.
 

@@ -12,6 +12,8 @@ Stop-syncing a path is three daemon operations, not one:
 
 Reload is plan → prompt on removals → commit. Path changes are create/update/delete. Mapping changes are item-add/item-remove/target-add/target-remove/project-add/project-remove. Trigger hooks attach to these types later.
 
+Daemon operations return structured results over IPC. The **shell** renders once (`from_ipc` → `render`). Progress stays streamed. Check is projects × baseline → rows. User-visible strings are unchanged. `CmdOperation` and stdout capture are gone.
+
 ## Status
 
 accepted

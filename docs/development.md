@@ -157,11 +157,11 @@ beyond-local-file/
 │       ├── projection.py            # copy_projection
 │       ├── sync_state.py            # Copy hash / baseline tracking
 │       ├── git_manager.py           # Git exclude management
-│       ├── project_processor.py     # Config loading and ProjectProcessor orchestrator
+│       ├── project_processor.py     # resolve_revlink_context
 │       ├── operations/
-│       │   ├── base.py              # CmdOperation ABC
+│       │   ├── result.py            # structured IPC results; shell render
 │       │   ├── daemon.py            # daemon start|stop|status|logs|reload
-│       │   ├── link_check.py        # CheckOperation + check formatters
+│       │   ├── link_check.py        # check rows + check formatters
 │       │   ├── revlink.py           # revlink create / restore
 │       │   └── remove.py            # remove operation
 │       ├── daemon/                  # Runtime process, catch-up, live observe

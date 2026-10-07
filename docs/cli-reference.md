@@ -221,7 +221,7 @@ A merged follow of a shell request:
 [requests] 2026-09-21T18:55:09.210+08:00 request: done op=create path=notes.md cwd=/Users/me/project unit=notes queue_ms=2 op_ms=11 persist_ms=14 exit=0
 ```
 
-`request: start` and `request: done` carry `queue_ms`, `op_ms`, and `persist_ms` (`persist_ms` is absent on a dry-run). For one worker unit, those three times are the wall. A check or reload on several worker units lists each unit's duration. Request stdout captured for the CLI is not written here.
+`request: start` and `request: done` carry `queue_ms`, `op_ms`, and `persist_ms` (`persist_ms` is absent on a dry-run). For one worker unit, those three times are the wall. A check or reload on several worker units lists each unit's duration. The shell transcript is not written here.
 
 `blf daemon logs` is retired. It prints a line naming `blf logs` and does not follow a file.
 

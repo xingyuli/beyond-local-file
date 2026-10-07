@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
@@ -81,8 +80,7 @@ def check(  # noqa: PLR0913
         Check rows for every mapping unit, including skipped directories.
     """
     _mark_check_started(projects)
-    with redirect_stdout(StringIO()):
-        units = translate_config_to_mapping_units(projects)
+    units = translate_config_to_mapping_units(projects)
     total = unit_count if unit_count else len(units)
     rows: list[CheckRow] = []
     unit_index = 0

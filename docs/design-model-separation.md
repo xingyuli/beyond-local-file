@@ -544,22 +544,7 @@ def get_config_projects(self, project_name: str | None = None) -> dict[str, Conf
 
 ### Processing
 
-**Old Method (Deprecated)**:
-```python
-def process_all(self, operation: CmdOperation, skip_invalid: bool = True) -> bool:
-    """Uses ProjectConfiguration (split at config load time)."""
-```
-
-**New Method**:
-```python
-@staticmethod
-def process_all_mapping_units(
-    config_projects: dict[str, ConfigProject],
-    operation: CmdOperation,
-    skip_invalid: bool = True,
-) -> bool:
-    """Uses MappingUnit (split at translation time)."""
-```
+Mapping expansion is `translate_config_to_mapping_units`. Check is projects × baseline → rows. Daemon operations return structured results over IPC; the shell renders once (`from_ipc` → `render`). There is no `CmdOperation` and no `process_all_mapping_units`.
 
 ### CLI Integration
 
@@ -572,8 +557,9 @@ config → get_projects() → dict[str, ProjectConfiguration] → process_all()
 ```python
 config → get_config_projects() → dict[str, ConfigProject]
        → translate_config_to_mapping_units() → list[MappingUnit]
-       → process_all_mapping_units()
 ```
+
+The daemon returns the result; the shell renders.
 
 ---
 

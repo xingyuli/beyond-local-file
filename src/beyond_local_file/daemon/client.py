@@ -58,7 +58,7 @@ def call_daemon(
     apply_answers: Callable[[tuple[str, ...], Request], ScreenSkip | None] | None = None,
     trailer: tuple[str, ...] = (),
 ) -> int:
-    """Send *request* to the daemon and print its captured stdout.
+    """Send *request* to the daemon and print the rendered result.
 
     Create, restore, remove, check, reload, and status on a terminal open the
     shell screen and leave it up until the user closes it. A shell with no

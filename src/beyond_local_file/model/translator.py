@@ -10,8 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import click
-
 from beyond_local_file.held import is_held_item_name
 
 from .config import ConfigProject
@@ -104,7 +102,7 @@ def translate_config_to_mapping_units(
       - Delegated to ``item_loader`` — the default is :func:`_load_items` which
         reads from the filesystem.  Pass a custom callable in tests to exercise
         display-name and mapping-expansion logic without touching the disk.
-      - Units whose item list is empty are skipped with an informational message.
+      - Units whose item list is empty are skipped.
 
     Args:
         config_projects: Dictionary of project name to ConfigProject.
@@ -158,9 +156,6 @@ def translate_config_to_mapping_units(
 
                 # Skip if no items found (empty managed project)
                 if not items:
-                    click.echo(
-                        f"Info: Skipping {display_name} - no items found in {config_project.managed_project_path}"
-                    )
                     continue
 
                 mapping_units.append(

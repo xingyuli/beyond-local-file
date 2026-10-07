@@ -173,7 +173,7 @@ class TestDisplayNameGeneration:
         assert units[120].display_name == "my-project#11-11"
 
     def test_empty_loader_result_skips_unit(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """Units whose item list is empty are skipped with an info message."""
+        """Units whose item list is empty are skipped with no message."""
         projects = _make_project(
             tmp_path,
             mappings=[Mapping(targets=[Path("/t1")], subpaths=None)],
@@ -185,7 +185,7 @@ class TestDisplayNameGeneration:
 
         assert units == []
         captured = capsys.readouterr()
-        assert "Skipping" in captured.out
+        assert captured.out == ""
 
 
 # ---------------------------------------------------------------------------
