@@ -10,6 +10,7 @@ from beyond_local_file.operations.link_check import CopyCheckDetails, GitExclude
 from beyond_local_file.operations.result import (
     CheckResult,
     CheckRow,
+    CreateResult,
     FailedResult,
     from_ipc,
     payload_text,
@@ -103,3 +104,94 @@ def test_unknown_op_returns_failed_result(tmp_path: Path) -> None:
     response = handle_request(tmp_path / "config.yml", {"op": "nope"})
     assert from_ipc(response) == FailedResult(1, ("Error: unknown daemon operation 'nope'",))
     assert render(from_ipc(response)) == "Error: unknown daemon operation 'nope'\n"
+
+
+def _create_result(**fields: object) -> CreateResult:
+    """Return a CreateResult with lab-app / alpha / example stand-ins."""
+    values: dict[str, object] = {
+        "exit_code": 0,
+        "dry_run": False,
+        "errors": (),
+        "already_managed": None,
+        "force_overwrite": None,
+        "source": "/tmp/alpha/example",
+        "dest": "/tmp/lab-app/example",
+        "git_exclude": "added",
+        "git_exclude_name": "example",
+        "fan_out": (("/tmp/lab-app/example", "/tmp/example/example"),),
+        "config_entry": "example",
+        "persist_warning": None,
+    }
+    values.update(fields)
+    return CreateResult(**values)  # type: ignore[arg-type]
+
+
+def test_create_result_round_trips_through_ipc() -> None:
+    """CreateResult survives to_ipc then from_ipc, with fan-out pairs as lists on the wire."""
+    result = _create_result()
+    payload = to_ipc(result)
+    assert payload["kind"] == "create"
+    assert payload["fan_out"] == [["/tmp/lab-app/example", "/tmp/example/example"]]
+    assert payload["git_exclude"] == "added"
+    assert payload["errors"] == []
+    assert from_ipc(payload) == result
+
+
+def test_render_create_success_story_matches_today_order() -> None:
+    """Create success prints force, copy, target, git, config, then fan-out."""
+    result = _create_result(force_overwrite="/tmp/lab-app/example")
+    assert render(result) == (
+        "Warning: overwriting existing managed copy at /tmp/lab-app/example\n"
+        "Copying /tmp/alpha/example -> /tmp/lab-app/example\n"
+        "✓ Target path left in place: /tmp/alpha/example\n"
+        "Added 'example' to .git/info/exclude\n"
+        "Added 'example' to config subpath list\n"
+        "Fan-out /tmp/lab-app/example -> /tmp/example/example\n"
+    )
+    assert payload_text(to_ipc(result)) == render(result)
+
+
+def test_render_create_dry_run_prefixes_each_line() -> None:
+    """Dry-run is data; render prefixes each story line with [dry-run]."""
+    result = _create_result(dry_run=True, force_overwrite=None, persist_warning=None)
+    assert render(result) == (
+        "[dry-run] Copying /tmp/alpha/example -> /tmp/lab-app/example\n"
+        "[dry-run] ✓ Target path left in place: /tmp/alpha/example\n"
+        "[dry-run] Added 'example' to .git/info/exclude\n"
+        "[dry-run] Added 'example' to config subpath list\n"
+        "[dry-run] Fan-out /tmp/lab-app/example -> /tmp/example/example\n"
+    )
+
+
+def test_render_create_errors_and_already_managed() -> None:
+    """Errors take Error: prefix; already-managed is the info line at exit 0."""
+    missing = _create_result(
+        exit_code=1,
+        errors=("Path does not exist: /tmp/alpha/example",),
+        git_exclude=None,
+        git_exclude_name=None,
+        fan_out=(),
+        config_entry=None,
+    )
+    assert render(missing) == "Error: Path does not exist: /tmp/alpha/example\n"
+    dry_err = _create_result(exit_code=1, dry_run=True, errors=("Path is already a symlink: /tmp/alpha/example",))
+    assert render(dry_err) == "[dry-run] Error: Path is already a symlink: /tmp/alpha/example\n"
+    managed = _create_result(
+        already_managed=(
+            "'.kiro' is a managed symlink — '.kiro/specs/foo.txt' is already managed through it. Nothing to do."
+        ),
+        git_exclude=None,
+        git_exclude_name=None,
+        fan_out=(),
+        config_entry=None,
+    )
+    assert render(managed) == (
+        "'.kiro' is a managed symlink — '.kiro/specs/foo.txt' is already managed through it. Nothing to do.\n"
+    )
+
+
+def test_render_create_persist_warning_is_last_and_keeps_exit_zero() -> None:
+    """Persist failure is a field; the warning is last and exit_code stays 0."""
+    result = _create_result(persist_warning="disk full")
+    assert result.exit_code == 0
+    assert render(result).endswith("Warning: could not persist mapping snapshot: disk full\n")

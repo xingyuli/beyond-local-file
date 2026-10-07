@@ -5,10 +5,10 @@ are a LiveSync item-add job (see test_live_create).
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation, RevlinkContext
+from beyond_local_file.operations.revlink import CreateOperation, RevlinkContext
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,8 +41,7 @@ def _make_context(cwd: Path, tmp_path: Path) -> RevlinkContext:
     Returns:
         A :class:`RevlinkContext` with a stub ``matched_mapping``.
     """
-    mapping = MagicMock(spec=Mapping)
-    mapping.subpaths = []
+    mapping = Mapping(targets=[cwd], subpaths=[])
     return RevlinkContext(
         config_path=tmp_path / "config.yaml",
         project_name="project",
@@ -51,7 +50,7 @@ def _make_context(cwd: Path, tmp_path: Path) -> RevlinkContext:
     )
 
 
-def _make_operation(  # noqa: PLR0913 -- test helper needs all six fields to build CreateOperation
+def _make_operation(  # noqa: PLR0913 -- test helper needs the CreateOperation fields
     source: Path,
     dest_root: Path,
     rel_path: Path,
@@ -59,8 +58,8 @@ def _make_operation(  # noqa: PLR0913 -- test helper needs all six fields to bui
     dry_run: bool = False,
     force: bool = False,
     context: RevlinkContext | None = None,
-) -> tuple[CreateOperation, MagicMock]:
-    """Build a CreateOperation with a mock formatter.
+) -> CreateOperation:
+    """Build a CreateOperation.
 
     Args:
         source: Source path for the operation.
@@ -69,21 +68,15 @@ def _make_operation(  # noqa: PLR0913 -- test helper needs all six fields to bui
         dry_run: Whether to enable dry-run mode.
         force: Whether to enable force mode.
         context: Optional RevlinkContext for config-aware validation.
-
-    Returns:
-        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=CreateFormatter)
-    op = CreateOperation(
+    return CreateOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
         dry_run=dry_run,
         force=force,
-        formatter=formatter,
         context=context,
     )
-    return op, formatter
 
 
 # ---------------------------------------------------------------------------
@@ -105,11 +98,11 @@ class TestRunDestPathWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
-        result = op.run()
+        result = _make_operation(source, dest_root, _NESTED_REL_PATH).run()
 
-        assert result == 0
-        formatter.copying.assert_called_once_with(source, dest_root / _NESTED_REL_PATH)
+        assert result.exit_code == 0
+        assert result.source == source.as_posix()
+        assert result.dest == (dest_root / _NESTED_REL_PATH).as_posix()
         assert not (dest_root / ".kiro" / "specs" / "foo").exists()
         assert not (dest_root / "foo").exists()
         assert source.is_dir()
@@ -127,11 +120,11 @@ class TestRunDestPathWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH)
-        result = op.run()
+        result = _make_operation(source, dest_root, _NESTED_REL_PATH).run()
 
-        assert result == 0
-        formatter.copying.assert_called_once_with(source, dest_root / _NESTED_REL_PATH)
+        assert result.exit_code == 0
+        assert result.source == source.as_posix()
+        assert result.dest == (dest_root / _NESTED_REL_PATH).as_posix()
         assert source.is_file()
         assert not (dest_root / "foo").exists()
 
@@ -154,10 +147,10 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root.mkdir()
 
         context = _make_context(repo_dir, tmp_path)
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        op._git_exclude_preview()
+        result = _make_operation(source, dest_root, _NESTED_REL_PATH, dry_run=True, context=context).run()
 
-        formatter.git_exclude_added.assert_called_once_with(".kiro/specs/foo")
+        assert result.git_exclude == "added"
+        assert result.git_exclude_name == ".kiro/specs/foo"
 
     def test_git_exclude_idempotent_with_full_rel_path(self, tmp_path: Path) -> None:
         """formatter.git_exclude_exists is called with str(rel_path) when entry already present."""
@@ -172,11 +165,10 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root.mkdir()
 
         context = _make_context(repo_dir, tmp_path)
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        op._git_exclude_preview()
+        result = _make_operation(source, dest_root, _NESTED_REL_PATH, dry_run=True, context=context).run()
 
-        formatter.git_exclude_exists.assert_called_once_with(".kiro/specs/foo")
-        formatter.git_exclude_added.assert_not_called()
+        assert result.git_exclude == "exists"
+        assert result.git_exclude_name == ".kiro/specs/foo"
 
     def test_git_exclude_basename_entry_not_treated_as_match(self, tmp_path: Path) -> None:
         """An existing entry for just 'foo' does not satisfy the '.kiro/specs/foo' check."""
@@ -191,11 +183,10 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         dest_root.mkdir()
 
         context = _make_context(repo_dir, tmp_path)
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
-        op._git_exclude_preview()
+        result = _make_operation(source, dest_root, _NESTED_REL_PATH, dry_run=True, context=context).run()
 
-        formatter.git_exclude_added.assert_called_once_with(".kiro/specs/foo")
-        formatter.git_exclude_exists.assert_not_called()
+        assert result.git_exclude == "added"
+        assert result.git_exclude_name == ".kiro/specs/foo"
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +209,7 @@ class TestUpdateConfigEntryNameWithNestedRelPath:
         """
         config_path = tmp_path / "config.yaml"
         config_path.write_text("project: {}\n")
-
-        mapping = MagicMock(spec=Mapping)
-        mapping.subpaths = subpaths if subpaths is not None else []
-
+        mapping = Mapping(targets=[tmp_path / "target"], subpaths=subpaths)
         return RevlinkContext(
             config_path=config_path,
             project_name="project",
@@ -241,18 +229,18 @@ class TestUpdateConfigEntryNameWithNestedRelPath:
 
         context = self._make_context(tmp_path, subpaths=[])
 
-        op, _formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
+        op = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
 
         with patch("beyond_local_file.operations.revlink.ConfigUpdater") as MockUpdater:
             mock_instance = MockUpdater.return_value
             mock_instance.add_subpath_entry.return_value = True
-
-            op._update_config()
+            entry = op._update_config()
 
         mock_instance.add_subpath_entry.assert_called_once()
         _, call_args, _ = mock_instance.add_subpath_entry.mock_calls[0]
         entry_name_arg = call_args[2]  # third positional arg is entry_name
 
+        assert entry == ".kiro/specs/foo"
         assert entry_name_arg == ".kiro/specs/foo", (
             f"add_subpath_entry must be called with '.kiro/specs/foo', got '{entry_name_arg}'"
         )
@@ -270,15 +258,14 @@ class TestUpdateConfigEntryNameWithNestedRelPath:
 
         context = self._make_context(tmp_path, subpaths=[])
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
+        op = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
 
         with patch("beyond_local_file.operations.revlink.ConfigUpdater") as MockUpdater:
             mock_instance = MockUpdater.return_value
             mock_instance.add_subpath_entry.return_value = True
+            entry = op._update_config()
 
-            op._update_config()
-
-        formatter.config_updated.assert_called_once_with(".kiro/specs/foo")
+        assert entry == ".kiro/specs/foo"
 
     def test_update_config_skipped_when_context_is_none(self, tmp_path: Path) -> None:
         """_update_config does nothing when context is None.
@@ -290,13 +277,13 @@ class TestUpdateConfigEntryNameWithNestedRelPath:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=None)
+        op = _make_operation(source, dest_root, _NESTED_REL_PATH, context=None)
 
         with patch("beyond_local_file.operations.revlink.ConfigUpdater") as MockUpdater:
-            op._update_config()
+            entry = op._update_config()
 
         MockUpdater.assert_not_called()
-        formatter.config_updated.assert_not_called()
+        assert entry is None
 
     def test_update_config_skipped_when_mapping_is_sync_all(self, tmp_path: Path) -> None:
         """_update_config does nothing when the matched mapping uses sync-all (subpaths is None).
@@ -309,12 +296,11 @@ class TestUpdateConfigEntryNameWithNestedRelPath:
         dest_root.mkdir()
 
         context = self._make_context(tmp_path, subpaths=None)
-        context.matched_mapping.subpaths = None  # sync-all
 
-        op, formatter = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
+        op = _make_operation(source, dest_root, _NESTED_REL_PATH, context=context)
 
         with patch("beyond_local_file.operations.revlink.ConfigUpdater") as MockUpdater:
-            op._update_config()
+            entry = op._update_config()
 
         MockUpdater.assert_not_called()
-        formatter.config_updated.assert_not_called()
+        assert entry is None

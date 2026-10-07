@@ -9,8 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import click
-
 from .configuration_set import ConfigError, configuration_set_for_shell
 from .contribution import contribution_owner, projects_targeting
 from .model.config import ConfigProject
@@ -70,7 +68,7 @@ def resolve_revlink_context(
         matches ``cwd``, ``rel_path`` is not a managed item, or multiple
         projects match ``cwd`` with no owner and no ``project_name``.
         When the error message is empty, :func:`configuration_set_for_shell`
-        has already printed the diagnostic; callers must skip ``click.echo``.
+        has already printed the diagnostic; callers must skip echoing.
     """
     asked = configuration_set_for_shell(config)
     if asked is None:
@@ -80,10 +78,8 @@ def resolve_revlink_context(
         sources = asked.project_sources()
     except ConfigError as error:
         if asked.is_global:
-            click.echo(f"Error: {error}")
-        else:
-            click.echo(str(error))
-        return RevlinkResolveError(message=None)
+            return RevlinkResolveError(message=f"Error: {error}")
+        return RevlinkResolveError(message=str(error))
 
     project = _resolve_project_from_cwd(projects, cwd)
 

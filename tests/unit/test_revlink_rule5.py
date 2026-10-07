@@ -11,10 +11,9 @@ Requirements: 8 (Requirement 8 in requirements.md — Selective Sync Mapping Sub
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation, RevlinkContext
+from beyond_local_file.operations.revlink import CreateOperation, RevlinkContext
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -28,8 +27,8 @@ def _make_operation(
     *,
     context: RevlinkContext | None = None,
     force: bool = False,
-) -> tuple[CreateOperation, MagicMock]:
-    """Build a CreateOperation with a mock formatter.
+) -> CreateOperation:
+    """Build a CreateOperation.
 
     Args:
         source: Source path for the operation.
@@ -37,21 +36,15 @@ def _make_operation(
         rel_path: Relative path from CWD to source.
         context: Optional RevlinkContext for config-aware validation.
         force: Whether to enable force mode.
-
-    Returns:
-        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=CreateFormatter)
-    op = CreateOperation(
+    return CreateOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
-        dry_run=False,
+        dry_run=True,
         force=force,
-        formatter=formatter,
         context=context,
     )
-    return op, formatter
 
 
 def _make_context(
@@ -109,13 +102,13 @@ class TestRule5aDeclaredAncestorCopyExists:
         managed_copy.write_text("hello")
 
         context = _make_context(cwd, dest_root, subpaths=["notes.txt"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "notes.txt" in msg
         assert "daemon" in msg
         assert managed_copy.as_posix() in msg
@@ -145,13 +138,13 @@ class TestRule5aDeclaredAncestorCopyExists:
 
         # Declared subpath "docs" is an ancestor of "docs/api/reference.md"
         context = _make_context(cwd, dest_root, subpaths=["docs"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "docs" in msg
         assert "daemon" in msg
 
@@ -173,11 +166,11 @@ class TestRule5aDeclaredAncestorCopyExists:
         managed_copy.write_text("key: value")
 
         context = _make_context(cwd, dest_root, subpaths=["config.yaml"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        msg = formatter.error.call_args[0][0]
+        msg = result.errors[0]
         assert managed_copy.as_posix() in msg
         assert "already exists" in msg
 
@@ -202,13 +195,13 @@ class TestRule5aDeclaredAncestorCopyMissing:
         # No managed copy created — dest_root / rel_path does not exist
 
         context = _make_context(cwd, dest_root, subpaths=["notes.txt"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "notes.txt" in msg
         assert "daemon" in msg
 
@@ -232,13 +225,13 @@ class TestRule5aDeclaredAncestorCopyMissing:
 
         # Declared subpath "src" is an ancestor of "src/utils/helpers.py"
         context = _make_context(cwd, dest_root, subpaths=["src"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "src" in msg
 
     def test_error_message_copy_missing_contains_source_and_managed_copy(self, tmp_path: Path) -> None:
@@ -259,11 +252,11 @@ class TestRule5aDeclaredAncestorCopyMissing:
         # managed_copy does NOT exist
 
         context = _make_context(cwd, dest_root, subpaths=["data.json"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        msg = formatter.error.call_args[0][0]
+        msg = result.errors[0]
         assert source.as_posix() in msg
         assert managed_copy.as_posix() in msg
         assert "manually" in msg
@@ -286,11 +279,11 @@ class TestRule5aDeclaredAncestorCopyMissing:
         rel_path = Path("readme.md")
 
         context = _make_context(cwd, dest_root, subpaths=["readme.md"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        msg = formatter.error.call_args[0][0]
+        msg = result.errors[0]
         assert "already exists" not in msg
 
 
@@ -320,13 +313,13 @@ class TestRule5bReverseConflict:
         rel_path = Path("docs")
 
         context = _make_context(cwd, dest_root, subpaths=["docs/api"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "docs/api" in msg
         assert "docs" in msg
 
@@ -346,11 +339,11 @@ class TestRule5bReverseConflict:
         rel_path = Path(".kiro")
 
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        msg = formatter.error.call_args[0][0]
+        msg = result.errors[0]
         assert ".kiro/specs" in msg
         assert ".kiro" in msg
         assert "conflict" in msg.lower() or "Remove" in msg
@@ -372,13 +365,13 @@ class TestRule5bReverseConflict:
 
         # Two declared subpaths under "src"
         context = _make_context(cwd, dest_root, subpaths=["src/lib", "src/tests"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
+        assert result.exit_code == 1
         # Only one error call — stops at first conflict
-        assert formatter.error.call_count == 1
+        assert len(result.errors) == 1
 
     def test_equal_path_is_not_reverse_conflict(self, tmp_path: Path) -> None:
         """When rel_path equals declared subpath, it is 5a (not 5b).
@@ -401,12 +394,12 @@ class TestRule5bReverseConflict:
         # Declared subpath equals rel_path — this is 5a, not 5b
         # No managed copy exists → 5a (copy missing) fires
         context = _make_context(cwd, dest_root, subpaths=["docs"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        msg = result.errors[0]
         # 5a message (copy missing) — not the 5b "conflict" message
         assert "conflict" not in msg.lower() or "Remove" not in msg
 
@@ -436,13 +429,13 @@ class TestRule5NoConflict:
 
         # Declared subpath "docs" is unrelated to "readme.md"
         context = _make_context(cwd, dest_root, subpaths=["docs"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
         # dest does not exist → Rule 6 passes too → overall exit 0
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.errors == ()
 
     def test_empty_subpath_list_passes_rule5(self, tmp_path: Path) -> None:
         """Empty declared subpath list → Rule 5 loop body never executes → passes.
@@ -460,12 +453,12 @@ class TestRule5NoConflict:
         rel_path = Path("file.txt")
 
         context = _make_context(cwd, dest_root, subpaths=[])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.errors == ()
 
     def test_sibling_subpath_does_not_conflict(self, tmp_path: Path) -> None:
         """A declared subpath that is a sibling (not ancestor/descendant) does not conflict.
@@ -485,12 +478,12 @@ class TestRule5NoConflict:
 
         # "docs/api" is a sibling of "docs/guide.md" — no ancestor relationship
         context = _make_context(cwd, dest_root, subpaths=["docs/api"])
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.errors == ()
 
 
 # ---------------------------------------------------------------------------
@@ -517,13 +510,13 @@ class TestRule5ContextNone:
         rel_path = Path("file.txt")
 
         # No context — Rule 5 must be skipped
-        op, formatter = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
         # dest does not exist → Rule 6 passes → overall exit 0
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.errors == ()
 
     def test_no_context_rule6_still_fires(self, tmp_path: Path) -> None:
         """When context is None, Rule 6 (dest exists) still fires after Rule 5 is skipped.
@@ -544,14 +537,14 @@ class TestRule5ContextNone:
         dest = dest_root / rel_path
         dest.write_text("existing")
 
-        op, formatter = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
-        result = op._validate(dest)
+        result = op.run()
 
         # Rule 6 fires (dest exists, no --force)
-        assert result == 1
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "Destination already exists" in msg
 
     def test_no_context_no_subpath_conflict_check(self, tmp_path: Path) -> None:
@@ -576,11 +569,11 @@ class TestRule5ContextNone:
         managed_copy.write_text("notes")
 
         # No context — Rule 5 cannot fire; Rule 6 fires instead
-        op, formatter = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
-        result = op._validate(managed_copy)
+        result = op.run()
 
         # Rule 6 fires (dest exists, no --force) — not a Rule 5 error
-        assert result == 1
-        msg = formatter.error.call_args[0][0]
+        assert result.exit_code == 1
+        msg = result.errors[0]
         assert "Destination already exists" in msg

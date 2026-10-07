@@ -17,6 +17,7 @@ from beyond_local_file.daemon.runtime import _execute_unit_request
 from beyond_local_file.daemon.store import get_generation, save_baseline, save_snapshot
 from beyond_local_file.daemon.workers import WorkerUnit
 from beyond_local_file.model.config import ConfigProject, Mapping
+from beyond_local_file.operations.result import CreateResult, payload_text
 from beyond_local_file.operations.revlink import CreateOperation
 from tests.daemon_support import daemon_running
 
@@ -634,7 +635,7 @@ def test_create_keeps_unrelated_mailbox_and_does_not_reload(
     unit = _worker_unit(live, config_path)
     original_run = CreateOperation.run
 
-    def run_and_queue(self: CreateOperation) -> int:
+    def run_and_queue(self: CreateOperation) -> CreateResult:
         (alpha / "shared.txt").write_text("queued")
         live.observe()
         return original_run(self)
@@ -649,7 +650,7 @@ def test_create_keeps_unrelated_mailbox_and_does_not_reload(
         unit=unit,
     )
 
-    assert response["exit_code"] == 0, response["stdout"]
+    assert response["exit_code"] == 0, payload_text(response)
     live.apply()
     assert (hub / "shared.txt").read_text() == "queued"
     assert (example / "shared.txt").read_text() == "queued"

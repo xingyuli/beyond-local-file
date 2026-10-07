@@ -10,10 +10,9 @@ Requirements: 5 (Requirement 6 in requirements.md)
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation, RevlinkContext
+from beyond_local_file.operations.revlink import CreateOperation, RevlinkContext
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,29 +45,23 @@ def _make_operation(
     dest_root: Path,
     rel_path: Path,
     context: RevlinkContext | None,
-) -> tuple[CreateOperation, MagicMock]:
-    """Build a CreateOperation with a mock formatter.
+) -> CreateOperation:
+    """Build a CreateOperation.
 
     Args:
         source: Absolute source path for the operation.
         dest_root: Destination root (managed project path).
         rel_path: Relative path from CWD to source.
         context: RevlinkContext to attach, or None.
-
-    Returns:
-        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=CreateFormatter)
-    op = CreateOperation(
+    return CreateOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
-        dry_run=False,
+        dry_run=True,
         force=False,
-        formatter=formatter,
         context=context,
     )
-    return op, formatter
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +99,11 @@ class TestRule3ManagedSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, _ = _make_operation(source, dest_root, rel_path, context)
+        op = _make_operation(source, dest_root, rel_path, context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
+        assert result.exit_code == 0
 
     def test_managed_ancestor_emits_info_message(self, tmp_path: Path) -> None:
         """formatter.info is called with the managed-symlink message.
@@ -132,17 +125,17 @@ class TestRule3ManagedSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, formatter = _make_operation(
+        op = _make_operation(
             source=cwd / ".kiro" / "specs" / "foo.txt",
             dest_root=dest_root,
             rel_path=rel_path,
             context=context,
         )
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.info.assert_called_once()
-        msg = formatter.info.call_args[0][0]
+        assert result.already_managed is not None
+        msg = result.already_managed
         assert "managed symlink" in msg
         assert "Nothing to do" in msg
 
@@ -165,11 +158,11 @@ class TestRule3ManagedSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, formatter = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        msg = formatter.info.call_args[0][0]
+        msg = result.already_managed
         assert ".kiro" in msg
         assert ".kiro/specs/foo.txt" in msg
 
@@ -192,11 +185,11 @@ class TestRule3ManagedSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, formatter = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.error.assert_not_called()
+        assert result.errors == ()
 
 
 # ---------------------------------------------------------------------------
@@ -228,11 +221,11 @@ class TestRule3ForeignSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, _ = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
+        assert result.exit_code == 1
 
     def test_foreign_ancestor_emits_error_message(self, tmp_path: Path) -> None:
         """formatter.error is called with the unmanaged-symlink message.
@@ -252,12 +245,12 @@ class TestRule3ForeignSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, formatter = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.error.assert_called_once()
-        msg = formatter.error.call_args[0][0]
+        assert len(result.errors) == 1
+        msg = result.errors[0]
         assert "not managed by blf" in msg
         assert "unmanaged symlink" in msg
 
@@ -279,11 +272,11 @@ class TestRule3ForeignSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, formatter = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        msg = formatter.error.call_args[0][0]
+        msg = result.errors[0]
         assert ".kiro" in msg
 
     def test_foreign_ancestor_does_not_call_info(self, tmp_path: Path) -> None:
@@ -304,11 +297,11 @@ class TestRule3ForeignSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[".kiro/specs/foo.txt"])
-        op, formatter = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.info.assert_not_called()
+        assert result.already_managed is None
 
 
 # ---------------------------------------------------------------------------
@@ -339,14 +332,14 @@ class TestRule3NoSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[])
-        op, formatter = _make_operation(source, dest_root, rel_path, context)
+        op = _make_operation(source, dest_root, rel_path, context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
         # Rule 3 did not fire — no info or error from it
-        formatter.info.assert_not_called()
+        assert result.already_managed is None
         # Rule 6 passes (dest does not exist) → overall result is 0
-        assert result == 0
+        assert result.exit_code == 0
 
     def test_no_symlink_ancestor_info_not_called(self, tmp_path: Path) -> None:
         """formatter.info is not called when no ancestor is a symlink.
@@ -364,11 +357,11 @@ class TestRule3NoSymlink:
 
         rel_path = Path(".kiro/specs/foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[])
-        op, formatter = _make_operation(source, dest_root, rel_path, context)
+        op = _make_operation(source, dest_root, rel_path, context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.info.assert_not_called()
+        assert result.already_managed is None
 
     def test_direct_child_rel_path_has_no_ancestors_to_check(self, tmp_path: Path) -> None:
         """A single-component rel_path has no ancestor directories — Rule 3 is a no-op.
@@ -385,12 +378,12 @@ class TestRule3NoSymlink:
 
         rel_path = Path("foo.txt")
         context = _make_context(cwd, dest_root, subpaths=[])
-        op, formatter = _make_operation(source, dest_root, rel_path, context)
+        op = _make_operation(source, dest_root, rel_path, context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.info.assert_not_called()
-        assert result == 0
+        assert result.already_managed is None
+        assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -420,18 +413,18 @@ class TestRule3ContextNone:
 
         rel_path = Path(".kiro/specs/foo.txt")
         # context=None — Rule 3 must be skipped
-        op, formatter = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context=None)
+        op = _make_operation(cwd / ".kiro" / "specs" / "foo.txt", dest_root, rel_path, context=None)
 
         # Rule 1 (source exists) passes because the file exists through the symlink.
         # Rule 2 (not a symlink) passes because the file itself is not a symlink.
         # Rule 3 is skipped.
         # Rule 4 and 5 are also skipped (context is None).
         # Rule 6: dest does not exist → passes.
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
-        formatter.info.assert_not_called()
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.already_managed is None
+        assert result.errors == ()
 
     def test_context_none_skips_rule3_no_symlink(self, tmp_path: Path) -> None:
         """Rule 3 is skipped when context is None and no symlinks exist.
@@ -448,13 +441,13 @@ class TestRule3ContextNone:
         source.write_text("data")
 
         rel_path = Path(".kiro/specs/foo.txt")
-        op, formatter = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 0
-        formatter.info.assert_not_called()
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.already_managed is None
+        assert result.errors == ()
 
     def test_context_none_does_not_raise(self, tmp_path: Path) -> None:
         """_validate does not raise when context is None.
@@ -470,8 +463,8 @@ class TestRule3ContextNone:
         source.write_text("data")
 
         rel_path = Path("foo.txt")
-        op, _ = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
         # Must not raise AttributeError or any other exception
-        result = op._validate(dest_root / rel_path)
-        assert result == 0
+        result = op.run()
+        assert result.exit_code == 0

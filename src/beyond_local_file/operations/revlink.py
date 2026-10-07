@@ -11,6 +11,7 @@ from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping
+from beyond_local_file.operations.result import CreateResult, GitExcludeAction
 from beyond_local_file.projection import copy_projection
 
 # ---------------------------------------------------------------------------
@@ -19,11 +20,9 @@ from beyond_local_file.projection import copy_projection
 
 
 class CreateFormatter:
-    """Formats and prints step-by-step progress for the revlink create operation.
+    """Render adapter for create: string builders used only by ``render``.
 
-    All output is emitted via ``click.echo``. When ``dry_run`` is ``True``
-    every output line is prefixed with ``[dry-run]`` so the user can
-    distinguish preview output from real output.
+    When ``dry_run`` is ``True`` every line is prefixed with ``[dry-run]``.
     """
 
     def __init__(self, dry_run: bool) -> None:
@@ -35,72 +34,63 @@ class CreateFormatter:
         """
         self._dry_run = dry_run
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _echo(self, message: str) -> None:
-        """Emit a single output line, prepending the dry-run prefix if active.
+    def _line(self, message: str) -> str:
+        """Return one output line, prepending the dry-run prefix if active.
 
         Args:
             message: The message text to display.
         """
         if self._dry_run:
-            click.echo(f"[dry-run] {message}")
-        else:
-            click.echo(message)
+            return f"[dry-run] {message}"
+        return message
 
-    # ------------------------------------------------------------------
-    # Public formatter methods
-    # ------------------------------------------------------------------
-
-    def copying(self, source: Path, dest: Path) -> None:
-        """Print a message showing the source and destination paths for the copy.
+    def copying(self, source: str, dest: str) -> str:
+        """Return the source and destination paths for the copy.
 
         Args:
             source: Path to the original file or directory in the target
                 directory.
             dest: Path to the destination location in the managed project.
         """
-        self._echo(f"Copying {source.as_posix()} -> {dest.as_posix()}")
+        return self._line(f"Copying {source} -> {dest}")
 
-    def target_left_in_place(self, path: Path) -> None:
-        """Print a confirmation that the target path remains a real file or directory.
+    def target_left_in_place(self, path: str) -> str:
+        """Return a confirmation that the target path remains a real file or directory.
 
         Args:
             path: Target-side path that was left in place as a projection.
         """
-        self._echo(f"✓ Target path left in place: {path.as_posix()}")
+        return self._line(f"✓ Target path left in place: {path}")
 
-    def git_exclude_added(self, name: str) -> None:
-        """Print a confirmation that *name* was added to ``.git/info/exclude``.
+    def git_exclude_added(self, name: str) -> str:
+        """Return a confirmation that *name* was added to ``.git/info/exclude``.
 
         Args:
             name: The filename or directory name that was added to the git
                 exclude file.
         """
-        self._echo(f"Added {name!r} to .git/info/exclude")
+        return self._line(f"Added {name!r} to .git/info/exclude")
 
-    def git_exclude_exists(self, name: str) -> None:
-        """Print a notice that *name* is already present in ``.git/info/exclude``.
+    def git_exclude_exists(self, name: str) -> str:
+        """Return a notice that *name* is already present in ``.git/info/exclude``.
 
         Args:
             name: The filename or directory name that already exists in the
                 git exclude file.
         """
-        self._echo(f"{name!r} already in .git/info/exclude")
+        return self._line(f"{name!r} already in .git/info/exclude")
 
-    def force_warning(self, dest: Path) -> None:
-        """Print a warning that the existing managed copy at *dest* will be overwritten.
+    def force_warning(self, dest: str) -> str:
+        """Return a warning that the existing managed copy at *dest* will be overwritten.
 
         Args:
             dest: Path to the existing file or directory in the managed project
                 that will be overwritten.
         """
-        self._echo(f"Warning: overwriting existing managed copy at {dest.as_posix()}")
+        return self._line(f"Warning: overwriting existing managed copy at {dest}")
 
-    def info(self, message: str) -> None:
-        """Print an informational message (no ``Error:`` prefix).
+    def info(self, message: str) -> str:
+        """Return an informational message (no ``Error:`` prefix).
 
         Used for non-error early exits such as the Rule 3 managed-symlink
         case where the path is already managed through an ancestor.
@@ -108,42 +98,41 @@ class CreateFormatter:
         Args:
             message: Human-readable informational text to display.
         """
-        self._echo(message)
+        return self._line(message)
 
-    def error(self, message: str) -> None:
-        """Print an error message.
+    def error(self, message: str) -> str:
+        """Return an error message.
 
         Args:
             message: Human-readable description of the error condition.
         """
-        self._echo(f"Error: {message}")
+        return self._line(f"Error: {message}")
 
-    def config_updated(self, entry_name: str) -> None:
-        """Print a confirmation that *entry_name* was added to the config subpath list.
+    def config_updated(self, entry_name: str) -> str:
+        """Return a confirmation that *entry_name* was added to the config subpath list.
 
         Args:
             entry_name: The filename or directory name added to the config.
         """
-        self._echo(f"Added {entry_name!r} to config subpath list")
+        return self._line(f"Added {entry_name!r} to config subpath list")
 
-    def fan_out_copying(self, hub: Path, replica: Path) -> None:
-        """Print that the hub copy is being fanned out to a replica.
+    def fan_out_copying(self, hub: str, replica: str) -> str:
+        """Return that the hub copy is being fanned out to a replica.
 
         Args:
             hub: Managed-project copy.
             replica: Path on another target project.
         """
-        self._echo(f"Fan-out {hub.as_posix()} -> {replica.as_posix()}")
+        return self._line(f"Fan-out {hub} -> {replica}")
 
-    def held_overwrite_warning(self, clause: str, held_slot: Path) -> None:
-        """Print the hold-reason clause and where the previous bytes were stored.
+    def held_overwrite_warning(self, clause: str, held_slot: str) -> str:
+        """Return the hold-reason clause and where the previous bytes were stored.
 
         Args:
             clause: Hold-reason clause for WARNINGs and the later resolve UI.
             held_slot: Directory under the runtime-home attic that now holds the bytes.
         """
-        self._echo(f"WARNING: {clause}")
-        self._echo(f"Held at {held_slot.as_posix()}")
+        return f"{self._line(f'WARNING: {clause}')}\n{self._line(f'Held at {held_slot}')}"
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +320,7 @@ class RevlinkContext:
 
 @dataclass
 class CreateOperation:
-    """Validates and formats revlink create; yaml splice stays in this wrapper.
+    """Validates and plans revlink create; yaml splice stays in this wrapper.
 
     Disk writes (hub copy, fan-out, git exclude, gen 0) are a LiveSync
     item-add job. ``run`` does not copy, fan out, or git-exclude.
@@ -348,7 +337,6 @@ class CreateOperation:
             happen without modifying the filesystem.
         force: When ``True``, overwrite an existing destination in the managed
             project.
-        formatter: Formatter instance used for all user-facing output.
         context: Config-resolution context used for the post-copy config
             update step.  ``None`` skips the update (useful in tests).
     """
@@ -358,71 +346,71 @@ class CreateOperation:
     rel_path: Path
     dry_run: bool
     force: bool
-    formatter: CreateFormatter
     context: RevlinkContext | None = field(default=None)
 
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
+    def run(self) -> CreateResult:
+        """Validate, plan, and splice yaml. Disk writes are a LiveSync job.
 
-    def run(self) -> int:
-        """Validate, format, and splice yaml. Disk writes are a LiveSync job.
-
-        Derives ``dest`` as ``dest_root / rel_path``. Dry-run previews every
-        step without modifying the filesystem. A real run splices mapping yaml
-        and prints the intended copy, exclude, and fan-out; LiveSync item-add
-        then writes disks.
+        Derives ``dest`` as ``dest_root / rel_path``. Dry-run is data on the
+        result. A real run splices mapping yaml; LiveSync item-add then writes
+        disks.
 
         Returns:
-            ``0`` on success, ``1`` if any step fails.
+            The create result the shell renders.
         """
         dest = self.dest_root / self.rel_path
 
         with log_duration("create: validate"):
-            result = self._validate(dest)
-        if result != 0:
-            return result
+            blocked = self._validate(dest)
+        if blocked is not None:
+            return blocked
 
+        git_exclude, git_exclude_name = self._git_exclude_status()
+        config_entry: str | None = None
         if self.dry_run:
-            self._preview(dest)
-            return 0
+            if self.context is not None and self.context.matched_mapping.subpaths is not None:
+                config_entry = self.rel_path.as_posix()
+        else:
+            with log_duration("create: config"):
+                config_entry = self._update_config()
+        return self._result(
+            dest,
+            force_overwrite=dest.as_posix() if self.force and dest.exists() else None,
+            git_exclude=git_exclude,
+            git_exclude_name=git_exclude_name,
+            fan_out=self._fan_out_pairs(dest),
+            config_entry=config_entry,
+        )
 
-        if self.force and dest.exists():
-            self.formatter.force_warning(dest)
-        self.formatter.copying(self.source, dest)
-        self.formatter.target_left_in_place(self.source)
-        self._git_exclude_preview()
-        for replica_root in self._other_replica_roots():
-            self.formatter.fan_out_copying(dest, replica_root / self.rel_path)
-        with log_duration("create: config"):
-            self._update_config()
-        return 0
+    def _result(  # noqa: PLR0913 -- CreateResult fields are the IPC shape
+        self,
+        dest: Path,
+        *,
+        exit_code: int = 0,
+        errors: tuple[str, ...] = (),
+        already_managed: str | None = None,
+        force_overwrite: str | None = None,
+        git_exclude: GitExcludeAction | None = None,
+        git_exclude_name: str | None = None,
+        fan_out: tuple[tuple[str, str], ...] = (),
+        config_entry: str | None = None,
+    ) -> CreateResult:
+        return CreateResult(
+            exit_code=exit_code,
+            dry_run=self.dry_run,
+            errors=errors,
+            already_managed=already_managed,
+            force_overwrite=force_overwrite,
+            source=self.source.as_posix(),
+            dest=dest.as_posix(),
+            git_exclude=git_exclude,
+            git_exclude_name=git_exclude_name,
+            fan_out=fan_out,
+            config_entry=config_entry,
+            persist_warning=None,
+        )
 
-    def _preview(self, dest: Path) -> None:
-        """Emit dry-run preview messages for all steps without touching the filesystem.
-
-        Called by :meth:`run` when ``dry_run=True`` and validation has passed.
-        Mirrors the output of the real steps so the user can see exactly what
-        would happen.
-
-        Args:
-            dest: Derived destination path (``dest_root / rel_path``).
-        """
-        if self.force and dest.exists():
-            self.formatter.force_warning(dest)
-        self.formatter.copying(self.source, dest)
-        self.formatter.target_left_in_place(self.source)
-        self._git_exclude_preview()
-        if self.context is not None and self.context.matched_mapping.subpaths is not None:
-            self.formatter.config_updated(self.rel_path.as_posix())
-        for replica_root in self._other_replica_roots():
-            self.formatter.fan_out_copying(dest, replica_root / self.rel_path)
-
-    # ------------------------------------------------------------------
-    # Internal steps
-    # ------------------------------------------------------------------
-
-    def _validate(self, dest: Path) -> int:  # noqa: PLR0911, PLR0912 -- each validation rule needs its own early return; six ordered rules require multiple branches
+    def _validate(self, dest: Path) -> CreateResult | None:  # noqa: PLR0911, PLR0912 -- each validation rule needs its own early return; six ordered rules require multiple branches
         """Run pre-flight validation checks before any filesystem mutation.
 
         Checks are performed in order:
@@ -431,8 +419,8 @@ class CreateOperation:
         2. ``source`` must not already be a symlink.
         3. No ancestor directory of ``rel_path`` may be a symlink (skipped when
            ``self.context is None``).  If an ancestor symlink resolves into the
-           managed project the path is already managed — print an info message
-           and return 0.  If it resolves elsewhere print an error and return 1.
+           managed project the path is already managed — return that info at
+           exit 0.  If it resolves elsewhere return an error.
         4. When the matched mapping uses sync-all (``subpaths is None``),
            ``rel_path`` must have exactly one component — nested paths are
            rejected with an error (skipped when ``self.context is None``).
@@ -441,12 +429,12 @@ class CreateOperation:
            ``self.context is None``):
 
            - 5a: if a declared subpath is an ancestor of (or equal to)
-             ``rel_path``, the path is already covered — print an error
+             ``rel_path``, the path is already covered — return an error
              directing the user to let the daemon project the copy (or copy
-             manually first) and return 1.
+             manually first).
            - 5b: if ``rel_path`` is an ancestor of a declared subpath (reverse
              conflict), adopting the broader path would shadow the narrower
-             declared entry — print an error and return 1.
+             declared entry — return an error.
 
         6. ``dest`` must not exist, unless ``--force`` is set.
 
@@ -454,18 +442,15 @@ class CreateOperation:
             dest: Derived destination path (``dest_root / rel_path``).
 
         Returns:
-            ``0`` if all checks pass, ``1`` on the first failing check, or
-            ``0`` for the Rule 3 managed-symlink early exit.
+            A result when validation stops the plan, or ``None`` when all
+            checks pass.
         """
         if not self.source.exists():
-            self.formatter.error(f"Path does not exist: {self.source}")
-            return 1
+            return self._result(dest, exit_code=1, errors=(f"Path does not exist: {self.source}",))
 
         if self.source.is_symlink():
-            self.formatter.error(f"Path is already a symlink: {self.source.as_posix()}")
-            return 1
+            return self._result(dest, exit_code=1, errors=(f"Path is already a symlink: {self.source.as_posix()}",))
 
-        # Rule 3 — no intermediate symlink in the path
         if self.context is not None:
             for anc in self.rel_path.parents:
                 if anc == Path("."):
@@ -474,62 +459,77 @@ class CreateOperation:
                 if candidate.is_symlink():
                     resolved = candidate.resolve()
                     if resolved.is_relative_to(self.dest_root):
-                        self.formatter.info(
-                            f"'{anc.as_posix()}' is a managed symlink — '{self.rel_path.as_posix()}' is already"
-                            " managed through it. Nothing to do."
+                        return self._result(
+                            dest,
+                            already_managed=(
+                                f"'{anc.as_posix()}' is a managed symlink — '{self.rel_path.as_posix()}' is already"
+                                " managed through it. Nothing to do."
+                            ),
                         )
-                        return 0
-                    else:
-                        self.formatter.error(
+                    return self._result(
+                        dest,
+                        exit_code=1,
+                        errors=(
                             f"'{anc.as_posix()}' is a symlink not managed by blf."
-                            " Cannot adopt a path through an unmanaged symlink."
-                        )
-                        return 1
+                            " Cannot adopt a path through an unmanaged symlink.",
+                        ),
+                    )
 
-        # Rule 4 — sync-all mapping rejects nested paths
         if self.context is not None and self.context.matched_mapping.subpaths is None and len(self.rel_path.parts) > 1:
-            self.formatter.error(
-                f"'{self.rel_path.as_posix()}' is a nested path. This mapping uses sync-all"
-                " — only top-level paths can be adopted directly."
-                " Add a 'subpath' entry to your config mapping first."
+            return self._result(
+                dest,
+                exit_code=1,
+                errors=(
+                    f"'{self.rel_path.as_posix()}' is a nested path. This mapping uses sync-all"
+                    " — only top-level paths can be adopted directly."
+                    " Add a 'subpath' entry to your config mapping first.",
+                ),
             )
-            return 1
 
-        # Rule 5 — selective sync mapping: no ancestor subpath conflict
         if self.context is not None and self.context.matched_mapping.subpaths is not None:
             managed_copy = self.dest_root / self.rel_path
             for declared in self.context.matched_mapping.subpaths:
                 declared_path = Path(declared)
-                # 5a — declared subpath is an ancestor of (or equal to) rel_path
                 if self.rel_path == declared_path or self.rel_path.is_relative_to(declared_path):
                     if managed_copy.exists():
-                        self.formatter.error(
-                            f"'{declared}' is already a declared subpath that covers this path,"
-                            f" and the managed copy already exists at '{managed_copy.as_posix()}'."
-                            " The daemon projects this copy."
+                        return self._result(
+                            dest,
+                            exit_code=1,
+                            errors=(
+                                f"'{declared}' is already a declared subpath that covers this path,"
+                                f" and the managed copy already exists at '{managed_copy.as_posix()}'."
+                                " The daemon projects this copy.",
+                            ),
                         )
-                    else:
-                        self.formatter.error(
+                    return self._result(
+                        dest,
+                        exit_code=1,
+                        errors=(
                             f"'{declared}' is already a declared subpath that covers this path."
                             f" Copy '{self.source.as_posix()}' to '{managed_copy.as_posix()}' manually;"
-                            " the daemon will project the copy."
-                        )
-                    return 1
-                # 5b — rel_path is an ancestor of a declared subpath (reverse conflict)
-                if declared_path.is_relative_to(self.rel_path) and declared_path != self.rel_path:
-                    self.formatter.error(
-                        f"'{declared}' is a declared subpath under this path."
-                        f" Adopting '{self.rel_path.as_posix()}' would conflict with it."
-                        f" Remove '{declared}' from the config subpath list first,"
-                        " or adopt a more specific path."
+                            " the daemon will project the copy.",
+                        ),
                     )
-                    return 1
+                if declared_path.is_relative_to(self.rel_path) and declared_path != self.rel_path:
+                    return self._result(
+                        dest,
+                        exit_code=1,
+                        errors=(
+                            f"'{declared}' is a declared subpath under this path."
+                            f" Adopting '{self.rel_path.as_posix()}' would conflict with it."
+                            f" Remove '{declared}' from the config subpath list first,"
+                            " or adopt a more specific path.",
+                        ),
+                    )
 
         if dest.exists() and not self.force:
-            self.formatter.error(f"Destination already exists: {dest.as_posix()}\nUse --force to overwrite.")
-            return 1
+            return self._result(
+                dest,
+                exit_code=1,
+                errors=(f"Destination already exists: {dest.as_posix()}\nUse --force to overwrite.",),
+            )
 
-        return 0
+        return None
 
     def _other_replica_roots(self) -> list[Path]:
         """Return other target-project roots for this managed project.
@@ -552,18 +552,29 @@ class CreateOperation:
                 roots.append(target)
         return roots
 
-    def _update_config(self) -> None:
+    def _fan_out_pairs(self, dest: Path) -> tuple[tuple[str, str], ...]:
+        """Return (hub, replica) posix pairs for other targets of this hub.
+
+        Args:
+            dest: Managed-project copy path.
+        """
+        return tuple((dest.as_posix(), (root / self.rel_path).as_posix()) for root in self._other_replica_roots())
+
+    def _update_config(self) -> str | None:
         """Add the item to every selective mapping of this managed project.
 
         Sync-all mappings have no subpath list and are left unchanged.
         Failures are non-fatal so a config write error does not undo the copy.
+
+        Returns:
+            The subpath entry name when yaml changed, otherwise ``None``.
         """
         if self.context is None:
-            return
+            return None
         mappings = self.context.mappings or [self.context.matched_mapping]
         selective = [mapping for mapping in mappings if mapping.subpaths is not None]
         if not selective:
-            return
+            return None
         updater = ConfigUpdater(self.context.config_path)
         entry_name = self.rel_path.as_posix()
         changed = False
@@ -573,30 +584,26 @@ class CreateOperation:
                 if updater.add_subpath_entry(self.context.project_name, target, entry_name):
                     changed = True
         if changed:
-            self.formatter.config_updated(entry_name)
+            return entry_name
+        return None
 
-    def _git_exclude_preview(self) -> None:
-        """Emit a dry-run preview for the git-exclude step.
-
-        Checks whether the project root (``context.cwd``) is a Git repository
-        and whether the entry already exists, then reports what would happen via
-        the formatter — without writing anything.
+    def _git_exclude_status(self) -> tuple[GitExcludeAction | None, str | None]:
+        """Return the git-exclude action and entry name without writing.
 
         The entry name is ``self.rel_path.as_posix()`` (e.g. ``.kiro/specs/foo``)
         rather than ``source.name`` so the exclude entry mirrors the full
         relative path used by catch-up and ``link check``.
         """
         if self.context is None:
-            return
+            return None, None
         manager = GitExcludeManager(self.context.cwd)
         if not manager.is_git_repo():
-            return
+            return None, None
         existing = manager.read_entries()
         entry_name = self.rel_path.as_posix()
         if entry_name in existing:
-            self.formatter.git_exclude_exists(entry_name)
-        else:
-            self.formatter.git_exclude_added(entry_name)
+            return "exists", entry_name
+        return "added", entry_name
 
 
 # ---------------------------------------------------------------------------

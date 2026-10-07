@@ -7,14 +7,15 @@ Covers:
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from beyond_local_file.daemon.live import LiveSync
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.operations import revlink
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
+from beyond_local_file.operations.result import render
+from beyond_local_file.operations.revlink import CreateOperation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,27 +27,21 @@ def _make_operation(
     dest_root: Path,
     *,
     force: bool = False,
-) -> tuple[CreateOperation, MagicMock]:
-    """Build a CreateOperation with a mock formatter.
+) -> CreateOperation:
+    """Build a CreateOperation.
 
     Args:
         source: Source path for the operation.
         dest_root: Destination root for the operation.
         force: Whether to enable force mode.
-
-    Returns:
-        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=CreateFormatter)
-    op = CreateOperation(
+    return CreateOperation(
         source=source,
         dest_root=dest_root,
         rel_path=Path(source.name),
         dry_run=False,
         force=force,
-        formatter=formatter,
     )
-    return op, formatter
 
 
 def test_checksum_verifier_is_gone() -> None:
@@ -94,16 +89,14 @@ class TestCreateCopyIoFailure:
         source.write_text("data")
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
-        op, formatter = _make_operation(source, dest_root)
+        result = _make_operation(source, dest_root).run()
 
-        result = op.run()
-
-        assert result == 0
-        names = [call[0] for call in formatter.method_calls]
-        assert "computing_checksum" not in names
-        assert "checksum_ok" not in names
-        formatter.copying.assert_called()
-        formatter.target_left_in_place.assert_called_once_with(source)
+        assert result.exit_code == 0
+        text = render(result)
+        assert "Computing checksum" not in text
+        assert "MD5" not in text
+        assert "Copying" in text
+        assert "Target path left in place" in text
 
 
 # ---------------------------------------------------------------------------
@@ -121,12 +114,11 @@ class TestCreateLeavesTargetInPlace:
         dest_root = tmp_path / "managed"
         dest_root.mkdir()
 
-        op, formatter = _make_operation(source, dest_root)
-        result = op.run()
+        result = _make_operation(source, dest_root).run()
 
-        assert result == 0
+        assert result.exit_code == 0
         assert source.is_file()
         assert not source.is_symlink()
         assert source.read_text() == "data"
         assert not (dest_root / "source.txt").exists()
-        formatter.target_left_in_place.assert_called_once_with(source)
+        assert result.source == source.as_posix()

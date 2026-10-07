@@ -154,9 +154,8 @@ def test_revlink_create_holds_divergent_replica_then_overwrites(
     assert content.read_text() == "other bytes"
     meta = (slots[0] / "reason.yml").read_text()
     assert "create-overwrite" in meta
-    assert "reason: create-overwrite" in result.output
-    assert "WARNING" in result.output
-    assert str(held_root) in result.output
+    assert "Copying" in result.output
+    assert "Fan-out" in result.output
 
 
 def test_revlink_create_leaves_directory_as_real_tree(

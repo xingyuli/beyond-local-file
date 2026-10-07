@@ -47,9 +47,31 @@ class CheckResult:
     not_found: str | None
 
 
-type OpResult = FailedResult | CheckResult
+type GitExcludeAction = Literal["added", "exists"]
+
+
+@dataclass(frozen=True)
+class CreateResult:
+    """Create plan and yaml-splice outcome, ready to render or send over IPC."""
+
+    exit_code: int
+    dry_run: bool
+    errors: tuple[str, ...]
+    already_managed: str | None
+    force_overwrite: str | None
+    source: str
+    dest: str
+    git_exclude: GitExcludeAction | None
+    git_exclude_name: str | None
+    fan_out: tuple[tuple[str, str], ...]
+    config_entry: str | None
+    persist_warning: str | None
+
+
+type OpResult = FailedResult | CheckResult | CreateResult
 
 _CHECK_SKIPS = frozenset({"missing_project", "missing_target"})
+_GIT_EXCLUDE_ACTIONS = frozenset({"added", "exists"})
 
 
 def to_ipc(result: OpResult) -> dict[str, Any]:
@@ -63,6 +85,8 @@ def to_ipc(result: OpResult) -> dict[str, Any]:
     """
     if isinstance(result, CheckResult):
         return _check_to_ipc(result)
+    if isinstance(result, CreateResult):
+        return _create_to_ipc(result)
     return {
         "exit_code": result.exit_code,
         "kind": "failed",
@@ -77,7 +101,7 @@ def from_ipc(payload: dict[str, Any]) -> OpResult:
         payload: Daemon IPC response.
 
     Returns:
-        The failed or check result matching ``kind``.
+        The failed, check, or create result matching ``kind``.
 
     Raises:
         ValueError: If *payload* is not a known operation result.
@@ -85,6 +109,8 @@ def from_ipc(payload: dict[str, Any]) -> OpResult:
     kind = payload.get("kind")
     if kind == "check":
         return _check_from_ipc(payload)
+    if kind == "create":
+        return _create_from_ipc(payload)
     if kind != "failed":
         raise ValueError("expected failed operation result")
     raw_lines = payload.get("lines", ())
@@ -107,6 +133,8 @@ def render(result: OpResult) -> str:
     """
     if isinstance(result, CheckResult):
         return _render_check(result)
+    if isinstance(result, CreateResult):
+        return _render_create(result)
     if not result.lines:
         return ""
     return "\n".join(result.lines) + "\n"
@@ -116,13 +144,13 @@ def payload_text(response: dict[str, Any]) -> str:
     """Return the shell transcript for an IPC *response*.
 
     Args:
-        response: Daemon IPC payload. A failed or check envelope is rendered;
-            leftover status/wait transcripts still use ``stdout``.
+        response: Daemon IPC payload. A failed, check, or create envelope is
+            rendered; leftover status/wait transcripts still use ``stdout``.
 
     Returns:
         Text the shell should print.
     """
-    if response.get("kind") in {"failed", "check"}:
+    if response.get("kind") in {"failed", "check", "create"}:
         return render(from_ipc(response))
     return str(response.get("stdout") or "")
 
@@ -292,3 +320,109 @@ def _skip_line(row: CheckRow) -> str | None:
     if row.skip == "missing_target":
         return f"Target directory does not exist: {row.target_path}\n"
     return None
+
+
+def _create_to_ipc(result: CreateResult) -> dict[str, Any]:
+    return {
+        "already_managed": result.already_managed,
+        "config_entry": result.config_entry,
+        "dest": result.dest,
+        "dry_run": result.dry_run,
+        "errors": list(result.errors),
+        "exit_code": result.exit_code,
+        "fan_out": [list(pair) for pair in result.fan_out],
+        "force_overwrite": result.force_overwrite,
+        "git_exclude": result.git_exclude,
+        "git_exclude_name": result.git_exclude_name,
+        "kind": "create",
+        "persist_warning": result.persist_warning,
+        "source": result.source,
+    }
+
+
+def _create_from_ipc(payload: dict[str, Any]) -> CreateResult:
+    raw_code = payload.get("exit_code", 0)
+    if not isinstance(raw_code, int):
+        raise ValueError("create operation result needs an exit_code")
+    git_exclude: GitExcludeAction | None = None
+    raw_git = payload.get("git_exclude")
+    if raw_git is not None:
+        if raw_git not in _GIT_EXCLUDE_ACTIONS:
+            raise ValueError("create git_exclude is not a known status")
+        git_exclude = "added" if raw_git == "added" else "exists"
+    return CreateResult(
+        exit_code=raw_code,
+        dry_run=bool(payload.get("dry_run")),
+        errors=_str_tuple(payload.get("errors"), "errors"),
+        already_managed=_opt_str(payload.get("already_managed"), "already_managed"),
+        force_overwrite=_opt_str(payload.get("force_overwrite"), "force_overwrite"),
+        source=str(payload.get("source") or ""),
+        dest=str(payload.get("dest") or ""),
+        git_exclude=git_exclude,
+        git_exclude_name=_opt_str(payload.get("git_exclude_name"), "git_exclude_name"),
+        fan_out=_fan_out_from_ipc(payload.get("fan_out")),
+        config_entry=_opt_str(payload.get("config_entry"), "config_entry"),
+        persist_warning=_opt_str(payload.get("persist_warning"), "persist_warning"),
+    )
+
+
+def _str_tuple(raw: object, name: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError(f"create {name} must be a list")
+    return tuple(str(item) for item in raw)
+
+
+def _opt_str(raw: object, name: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError(f"create {name} must be a string")
+    return raw
+
+
+def _fan_out_from_ipc(raw: object) -> tuple[tuple[str, str], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("create fan_out must be a list")
+    pairs: list[tuple[str, str]] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("create fan_out pair must have two paths")
+        try:
+            hub, replica = item
+        except ValueError:
+            raise ValueError("create fan_out pair must have two paths") from None
+        pairs.append((str(hub), str(replica)))
+    return tuple(pairs)
+
+
+def _render_create(result: CreateResult) -> str:
+    from .revlink import CreateFormatter  # noqa: PLC0415
+
+    formatter = CreateFormatter(dry_run=result.dry_run)
+    lines: list[str] = []
+    if result.errors:
+        lines.extend(formatter.error(message) for message in result.errors)
+    elif result.already_managed is not None:
+        lines.append(formatter.info(result.already_managed))
+    else:
+        if result.force_overwrite is not None:
+            lines.append(formatter.force_warning(result.force_overwrite))
+        lines.append(formatter.copying(result.source, result.dest))
+        lines.append(formatter.target_left_in_place(result.source))
+        if result.git_exclude == "added" and result.git_exclude_name is not None:
+            lines.append(formatter.git_exclude_added(result.git_exclude_name))
+        elif result.git_exclude == "exists" and result.git_exclude_name is not None:
+            lines.append(formatter.git_exclude_exists(result.git_exclude_name))
+        if result.config_entry is not None:
+            lines.append(formatter.config_updated(result.config_entry))
+        for hub, replica in result.fan_out:
+            lines.append(formatter.fan_out_copying(hub, replica))
+    if result.persist_warning is not None:
+        lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"

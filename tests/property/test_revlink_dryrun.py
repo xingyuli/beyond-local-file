@@ -12,7 +12,7 @@ from pathlib import Path
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation
+from beyond_local_file.operations.revlink import CreateOperation
 from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
@@ -83,8 +83,6 @@ def test_dryrun_does_not_modify_filesystem_with_existing_source(
 ) -> None:
     """Verify that dry-run leaves the filesystem unchanged when source exists.
 
-    **Validates: Requirements 3.4, 6.4**
-
     For any valid source file in ``tmp_path/target/`` and any ``dest_root``
     in ``tmp_path/managed/``, invoking ``CreateOperation`` with
     ``dry_run=True`` must leave the entire ``tmp_path`` tree in exactly the
@@ -116,7 +114,6 @@ def test_dryrun_does_not_modify_filesystem_with_existing_source(
             rel_path=Path(filename),
             dry_run=True,
             force=False,
-            formatter=CreateFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)
@@ -140,8 +137,6 @@ def test_dryrun_does_not_modify_filesystem_with_nonexistent_source(
     content: bytes,
 ) -> None:
     """Verify that dry-run leaves the filesystem unchanged when source does not exist.
-
-    **Validates: Requirements 3.4, 6.4**
 
     Even when validation fails (source path does not exist), invoking
     ``CreateOperation`` with ``dry_run=True`` must not modify the filesystem.
@@ -174,7 +169,6 @@ def test_dryrun_does_not_modify_filesystem_with_nonexistent_source(
             rel_path=Path(filename),
             dry_run=True,
             force=False,
-            formatter=CreateFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)

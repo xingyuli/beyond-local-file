@@ -9,10 +9,9 @@ Requirements: 6 (Requirement 7 in requirements.md)
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.operations.revlink import CreateFormatter, CreateOperation, RevlinkContext
+from beyond_local_file.operations.revlink import CreateOperation, RevlinkContext
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,29 +47,23 @@ def _make_operation(
     rel_path: Path,
     *,
     context: RevlinkContext | None = None,
-) -> tuple[CreateOperation, MagicMock]:
-    """Build a CreateOperation with a mock formatter.
+) -> CreateOperation:
+    """Build a CreateOperation.
 
     Args:
         source: Source path for the operation.
         dest_root: Destination root for the operation.
         rel_path: Relative path from CWD to source.
         context: Optional RevlinkContext; ``None`` skips config-aware rules.
-
-    Returns:
-        Tuple of (CreateOperation, mock formatter).
     """
-    formatter = MagicMock(spec=CreateFormatter)
-    op = CreateOperation(
+    return CreateOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
-        dry_run=False,
+        dry_run=True,
         force=False,
-        formatter=formatter,
         context=context,
     )
-    return op, formatter
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +92,11 @@ class TestRule4SyncAllNestedPath:
 
         rel_path = Path("subdir/file.txt")
         context = _make_sync_all_context(cwd, dest_root)
-        op, _ = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
+        assert result.exit_code == 1
 
     def test_nested_rel_path_emits_error_message(self, tmp_path: Path) -> None:
         """sync-all mapping with a nested rel_path emits the Rule 4 error message.
@@ -122,12 +115,12 @@ class TestRule4SyncAllNestedPath:
 
         rel_path = Path("subdir/file.txt")
         context = _make_sync_all_context(cwd, dest_root)
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        formatter.error.assert_called_once()
-        error_msg = formatter.error.call_args[0][0]
+        assert len(result.errors) == 1
+        error_msg = result.errors[0]
         assert _RULE4_ERROR_FRAGMENT in error_msg
 
     def test_nested_rel_path_error_message_contains_rel_path(self, tmp_path: Path) -> None:
@@ -147,11 +140,11 @@ class TestRule4SyncAllNestedPath:
 
         rel_path = Path("subdir/file.txt")
         context = _make_sync_all_context(cwd, dest_root)
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        error_msg = formatter.error.call_args[0][0]
+        error_msg = result.errors[0]
         assert rel_path.as_posix() in error_msg
 
     def test_deeply_nested_rel_path_returns_exit_1(self, tmp_path: Path) -> None:
@@ -171,11 +164,11 @@ class TestRule4SyncAllNestedPath:
 
         rel_path = Path("a/b/file.txt")
         context = _make_sync_all_context(cwd, dest_root)
-        op, _ = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
-        assert result == 1
+        assert result.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -203,13 +196,13 @@ class TestRule4SyncAllTopLevelPath:
 
         rel_path = Path("file.txt")
         context = _make_sync_all_context(cwd, dest_root)
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
         # Rule 4 does not fire; dest does not exist so Rule 6 also passes → exit 0
-        assert result == 0
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.errors == ()
 
     def test_top_level_rel_path_no_rule4_error_emitted(self, tmp_path: Path) -> None:
         """No Rule 4 error message is emitted for a 1-part rel_path.
@@ -226,13 +219,13 @@ class TestRule4SyncAllTopLevelPath:
 
         rel_path = Path("myfile.txt")
         context = _make_sync_all_context(cwd, dest_root)
-        op, formatter = _make_operation(source, dest_root, rel_path, context=context)
+        op = _make_operation(source, dest_root, rel_path, context=context)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
         # Confirm the Rule 4 error fragment is absent from any error calls
-        for call in formatter.error.call_args_list:
-            assert _RULE4_ERROR_FRAGMENT not in call[0][0]
+        for msg in result.errors:
+            assert _RULE4_ERROR_FRAGMENT not in msg
 
 
 # ---------------------------------------------------------------------------
@@ -262,13 +255,13 @@ class TestRule4ContextNone:
 
         rel_path = Path("subdir/file.txt")
         # No context — Rule 4 must be skipped
-        op, formatter = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
-        result = op._validate(dest_root / rel_path)
+        result = op.run()
 
         # Rule 4 is skipped; dest does not exist so Rule 6 also passes → exit 0
-        assert result == 0
-        formatter.error.assert_not_called()
+        assert result.exit_code == 0
+        assert result.errors == ()
 
     def test_no_context_no_rule4_error_emitted(self, tmp_path: Path) -> None:
         """No Rule 4 error message is emitted when context is None.
@@ -286,9 +279,9 @@ class TestRule4ContextNone:
         source.write_text("data")
 
         rel_path = Path("deep/path/item.txt")
-        op, formatter = _make_operation(source, dest_root, rel_path, context=None)
+        op = _make_operation(source, dest_root, rel_path, context=None)
 
-        op._validate(dest_root / rel_path)
+        result = op.run()
 
-        for call in formatter.error.call_args_list:
-            assert _RULE4_ERROR_FRAGMENT not in call[0][0]
+        for msg in result.errors:
+            assert _RULE4_ERROR_FRAGMENT not in msg
