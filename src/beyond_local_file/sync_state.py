@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .daemon.live import compute_file_hash, scan_items
 from .daemon.store import BaselineTrees, get_state, state_equal
+from .discovery import item_covers_rel
 
 
 class SyncStatus(StrEnum):
@@ -107,11 +108,7 @@ def _compute_directory_hash(directory: Path) -> str:
 def _item_changed(baseline: BaselineTrees, root: Path, item_name: str) -> bool:
     live = scan_items(root, [item_name])
     stored = baseline.get(str(root), {})
-    rels = set(live) | {rel for rel in stored if _rel_in_item(rel, item_name)}
-    if not any(_rel_in_item(rel, item_name) for rel in stored):
+    rels = set(live) | {rel for rel in stored if item_covers_rel(item_name, rel)}
+    if not any(item_covers_rel(item_name, rel) for rel in stored):
         return False
     return any(not state_equal(live.get(rel), get_state(baseline, root, rel)) for rel in rels)
-
-
-def _rel_in_item(rel: str, item_name: str) -> bool:
-    return rel == item_name or rel.startswith(f"{item_name}/")

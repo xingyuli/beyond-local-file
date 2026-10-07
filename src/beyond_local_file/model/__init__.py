@@ -5,12 +5,11 @@ Mapping units are the expanded managed project x one target after translation.
 """
 
 from .config import ConfigProject, Mapping
-from .processing import ManagedProjectItem, MappingUnit
+from .processing import MappingUnit
 from .translator import translate_config_to_mapping_units
 
 __all__ = [
     "ConfigProject",
-    "ManagedProjectItem",
     "Mapping",
     "MappingUnit",
     "translate_config_to_mapping_units",

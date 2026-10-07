@@ -17,10 +17,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from beyond_local_file.configuration_set import ConfigurationSet
+from beyond_local_file.discovery import rel_in_items
 from beyond_local_file.held import HeldCopy, held_dir_for
 from beyond_local_file.model.config import ConfigProject, Mapping
 
-from .live import rel_in_items
 from .merge import is_binary
 from .oos_held import OosAndHeld, list_oos_and_held
 from .process import resolve_port_path, resolve_token_path

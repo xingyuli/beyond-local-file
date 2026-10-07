@@ -10,9 +10,8 @@ from typing import Any
 import yaml
 
 from beyond_local_file.configuration_set import ConfigurationSet
+from beyond_local_file.discovery import item_names
 from beyond_local_file.model.config import ConfigProject, Mapping
-from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 from .log import log_duration
 
@@ -470,11 +469,12 @@ def _item_documents(
     trees: BaselineTrees,
     changed_rels: set[str] | None = None,
 ) -> list[tuple[str, BaselineTrees]]:
-    items_by_project: dict[str, dict[str, ManagedProjectItem]] = {}
-    for unit in translate_config_to_mapping_units(projects):
-        slot = items_by_project.setdefault(unit.managed_project_name, {})
-        for item in unit.items:
-            slot[item.name] = item
+    items_by_project: dict[str, dict[str, Path]] = {}
+    for project in projects.values():
+        slot = items_by_project.setdefault(project.managed_project_name, {})
+        for mapping in project.mappings:
+            for name in item_names(project.managed_project_path, mapping.subpaths):
+                slot[name] = project.managed_project_path / name
     selected, file_only = _projects_for_documents(projects, items_by_project, changed_rels)
     documents: list[tuple[str, BaselineTrees]] = []
     for project in selected.values():
@@ -486,8 +486,8 @@ def _item_documents(
         roots = [str(project.managed_project_path)]
         roots.extend(str(target) for mapping in project.mappings for target in mapping.targets)
         buckets: dict[str, BaselineTrees] = {}
-        for item in items.values():
-            _bucket_item(item, roots, trees, buckets)
+        for name, path in items.items():
+            _bucket_item(name, path, roots, trees, buckets)
         for doc_rel, doc_trees in sorted(buckets.items()):
             documents.append((f"{project.managed_project_name}/{doc_rel}", doc_trees))
     return documents
@@ -495,7 +495,7 @@ def _item_documents(
 
 def _projects_for_documents(
     projects: dict[str, ConfigProject],
-    items_by_project: dict[str, dict[str, ManagedProjectItem]],
+    items_by_project: dict[str, dict[str, Path]],
     changed_rels: set[str] | None,
 ) -> tuple[dict[str, ConfigProject], bool]:
     if changed_rels is None:
@@ -511,41 +511,42 @@ def _projects_for_documents(
 
 
 def _items_for_documents(
-    items: dict[str, ManagedProjectItem],
+    items: dict[str, Path],
     changed_rels: set[str] | None,
     *,
     file_only: bool,
-) -> dict[str, ManagedProjectItem]:
+) -> dict[str, Path]:
     if file_only:
-        return {name: item for name, item in items.items() if not _is_directory_item(item)}
+        return {name: path for name, path in items.items() if not _is_directory_item(path)}
     if changed_rels is None:
         return items
     return {
-        name: item
-        for name, item in items.items()
-        if not _is_directory_item(item) or _project_covers_changes({name}, changed_rels)
+        name: path
+        for name, path in items.items()
+        if not _is_directory_item(path) or _project_covers_changes({name}, changed_rels)
     }
 
 
 def _bucket_item(
-    item: ManagedProjectItem,
+    name: str,
+    path: Path,
     roots: list[str],
     trees: BaselineTrees,
     buckets: dict[str, BaselineTrees],
 ) -> None:
-    is_dir = _is_directory_item(item)
+    is_dir = _is_directory_item(path)
     for root in roots:
         slot = trees.get(root) or {}
         if not is_dir:
-            state = slot.get(item.name)
+            state = slot.get(name)
             if state is not None:
-                buckets.setdefault(FILES_DOCUMENT, {}).setdefault(root, {})[item.name] = state
+                buckets.setdefault(FILES_DOCUMENT, {}).setdefault(root, {})[name] = state
             continue
-        prefix = f"{item.name}/"
+        prefix = f"{name}/"
         for rel, state in slot.items():
-            if rel != item.name and not rel.startswith(prefix):
+            if rel != name and not rel.startswith(prefix):
                 continue
-            doc_rel = _document_rel(item.name, is_dir, rel, trees, roots)
+            doc_rel = _document_rel(name, is_dir, rel, trees, roots)
             buckets.setdefault(doc_rel, {}).setdefault(root, {})[rel] = state
 
 
@@ -683,9 +684,5 @@ def _document_covers(doc_trees: BaselineTrees, changed_rels: set[str]) -> bool:
     return False
 
 
-def _is_directory_item(item: ManagedProjectItem) -> bool:
-    return item.path.is_dir() and not item.path.is_symlink()
-
-
-def _rel_in_items(rel: str, item_names: set[str]) -> bool:
-    return any(rel == name or rel.startswith(f"{name}/") for name in item_names)
+def _is_directory_item(path: Path) -> bool:
+    return path.is_dir() and not path.is_symlink()

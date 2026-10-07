@@ -1,40 +1,12 @@
-"""Tests for model translation layer (config → processing).
+"""Tests for mapping expansion (config → mapping units).
 
-The translator is a pure mapping-expansion and display-name function once the
-``item_loader`` seam is used.  Tests are divided into five groups:
-
-1. ``TestDisplayNameGeneration``    — pure display-name logic, no disk I/O.
-2. ``TestItemLoader``               — unit tests for ``_load_items`` (the default
-                                     filesystem adapter), using ``tmp_path``.
-3. ``TestItemsLoading``             — integration-style tests that exercise the
-                                     full pipeline (loader + translator together).
-4. ``TestMultipleProjects``         — multi-project scenarios.
-5. ``TestMappingUnitAttributes`` — attribute-level correctness.
+Expansion is pure: M x N units and display names, independent of the
+filesystem and of item discovery.
 """
 
 from pathlib import Path
 
-import pytest
-
 from beyond_local_file.model import ConfigProject, Mapping, translate_config_to_mapping_units
-from beyond_local_file.model.processing import ManagedProjectItem
-from beyond_local_file.model.translator import _load_items
-
-# ---------------------------------------------------------------------------
-# Shared stub loader — returns one fake item regardless of arguments.
-# Used by tests that exercise display-name / mapping-expansion logic only
-# and should not touch the disk.
-# ---------------------------------------------------------------------------
-
-
-def _fake_loader(path: Path, subpaths: list[str] | None) -> list[ManagedProjectItem]:
-    """Deterministic stub: always returns one item named 'stub'."""
-    return [ManagedProjectItem(name="stub", path=path / "stub")]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_project(
@@ -53,13 +25,8 @@ def _make_project(
     }
 
 
-# ---------------------------------------------------------------------------
-# 1. Display-name generation (pure — no disk I/O via _fake_loader)
-# ---------------------------------------------------------------------------
-
-
 class TestDisplayNameGeneration:
-    """Display-name logic is pure once item_loader is stubbed out."""
+    """Display-name logic is pure: no disk, no item discovery."""
 
     def test_single_mapping_single_target_no_suffix(self, tmp_path: Path) -> None:
         """Single mapping with single target should have no suffix."""
@@ -67,12 +34,13 @@ class TestDisplayNameGeneration:
             tmp_path,
             mappings=[Mapping(targets=[Path("/target1")], subpaths=None)],
         )
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 1
         assert units[0].display_name == "my-project"
         assert units[0].mapping_index == 0
         assert units[0].target_index == 0
+        assert units[0].subpaths is None
 
     def test_multiple_mappings_single_target_each(self, tmp_path: Path) -> None:
         """Multiple mappings with single target each should use #N format."""
@@ -84,7 +52,7 @@ class TestDisplayNameGeneration:
                 Mapping(targets=[Path("/t3")], subpaths=None),
             ],
         )
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 3  # noqa: PLR2004
         assert units[0].display_name == "my-project#1"
@@ -102,7 +70,7 @@ class TestDisplayNameGeneration:
                 )
             ],
         )
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 3  # noqa: PLR2004
         assert units[0].display_name == "my-project#1-1"
@@ -119,7 +87,7 @@ class TestDisplayNameGeneration:
                 Mapping(targets=[Path("/t4")], subpaths=None),
             ],
         )
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 4  # noqa: PLR2004
         assert units[0].display_name == "my-project#1"
@@ -131,7 +99,7 @@ class TestDisplayNameGeneration:
         """Zero-padding applied when mapping index >= 10."""
         mappings = [Mapping(targets=[Path(f"/t{i}")], subpaths=None) for i in range(1, 12)]
         projects = _make_project(tmp_path, mappings=mappings)
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 11  # noqa: PLR2004
         assert units[0].display_name == "my-project#01"
@@ -146,7 +114,7 @@ class TestDisplayNameGeneration:
             tmp_path,
             mappings=[Mapping(targets=targets, subpaths=None)],
         )
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 11  # noqa: PLR2004
         assert units[0].display_name == "my-project#1-01"
@@ -164,7 +132,7 @@ class TestDisplayNameGeneration:
             for i in range(1, 12)
         ]
         projects = _make_project(tmp_path, mappings=mappings)
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 121  # noqa: PLR2004
         assert units[0].display_name == "my-project#01-01"
@@ -172,218 +140,26 @@ class TestDisplayNameGeneration:
         assert units[110].display_name == "my-project#11-01"
         assert units[120].display_name == "my-project#11-11"
 
-    def test_empty_loader_result_skips_unit(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """Units whose item list is empty are skipped with no message."""
+    def test_empty_hub_still_emits_the_unit(self, tmp_path: Path) -> None:
+        """Expansion always emits one unit per mapping x target."""
         projects = _make_project(
             tmp_path,
             mappings=[Mapping(targets=[Path("/t1")], subpaths=None)],
         )
-        units = translate_config_to_mapping_units(
-            projects,
-            item_loader=lambda path, sp: [],
-        )
-
-        assert units == []
-        captured = capsys.readouterr()
-        assert captured.out == ""
-
-
-# ---------------------------------------------------------------------------
-# 2. _load_items — the default filesystem adapter, tested in isolation
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def project_dir(tmp_path: Path) -> Path:
-    """Real project directory with a known layout."""
-    d = tmp_path / "test-project"
-    d.mkdir()
-    (d / "file1.txt").write_text("content1")
-    (d / "file2.txt").write_text("content2")
-    kiro = d / ".kiro"
-    kiro.mkdir()
-    hooks = kiro / "hooks"
-    hooks.mkdir()
-    (hooks / "hook.json").write_text("{}")
-    return d
-
-
-class TestItemLoader:
-    """Unit tests for _load_items (the real filesystem adapter)."""
-
-    def test_sync_all_enumerates_top_level_items(self, project_dir: Path) -> None:
-        """No subpaths → all top-level entries returned as COPY items."""
-        items = _load_items(project_dir, None)
-
-        names = {i.name for i in items}
-        assert names == {"file1.txt", "file2.txt", ".kiro"}
-
-    def test_sync_all_returns_empty_for_empty_directory(self, tmp_path: Path) -> None:
-        """Empty directory with no subpaths → empty list (unit skipped by translator)."""
-        empty = tmp_path / "empty"
-        empty.mkdir()
-        assert _load_items(empty, None) == []
-
-    def test_sync_all_returns_empty_for_nonexistent_directory(self, tmp_path: Path) -> None:
-        """Non-existent directory with no subpaths → empty list."""
-        assert _load_items(tmp_path / "ghost", None) == []
-
-    def test_subpath_list_returns_only_named_items(self, project_dir: Path) -> None:
-        """Explicit subpaths → only those entries, all COPY."""
-        items = _load_items(project_dir, ["file1.txt", ".kiro/hooks"])
-
-        names = {i.name for i in items}
-        assert names == {"file1.txt", ".kiro/hooks"}
-
-    def test_nonexistent_subpath_is_skipped(self, project_dir: Path) -> None:
-        """Subpath entries that don't exist on disk are silently skipped."""
-        items = _load_items(project_dir, ["file1.txt", "ghost.txt"])
-
-        assert len(items) == 1
-        assert items[0].name == "file1.txt"
-
-    def test_directory_subpath_is_a_copy_item(self, project_dir: Path) -> None:
-        """A directory item is loaded as a copy projection, not rejected."""
-        items = _load_items(project_dir, [".kiro/hooks"])
-
-        assert len(items) == 1
-        assert items[0].name == ".kiro/hooks"
-        assert items[0].path.is_dir()
-
-    def test_item_paths_are_absolute(self, project_dir: Path) -> None:
-        """All returned item.path values are absolute."""
-        items = _load_items(project_dir, ["file1.txt"])
-
-        assert all(i.path.is_absolute() for i in items)
-
-    def test_item_path_points_inside_project_dir(self, project_dir: Path) -> None:
-        """item.path is project_dir / item.name."""
-        items = _load_items(project_dir, ["file1.txt"])
-
-        assert items[0].path == project_dir / "file1.txt"
-
-
-# ---------------------------------------------------------------------------
-# 3. Full pipeline integration (loader + translator together, needs disk)
-# ---------------------------------------------------------------------------
-
-
-class TestItemsLoading:
-    """Pipeline tests that use the real _load_items adapter via tmp_path."""
-
-    def test_no_subpaths_expands_all_items(self, project_dir: Path) -> None:
-        """Sync-all mapping: all top-level items, all COPY."""
-        projects = {
-            "my-project": ConfigProject(
-                managed_project_name="my-project",
-                managed_project_path=project_dir,
-                mappings=[Mapping(targets=[Path("/t1")], subpaths=None)],
-            )
-        }
         units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 1
-        assert len(units[0].items) == 3  # noqa: PLR2004
-        assert {i.name for i in units[0].items} == {"file1.txt", "file2.txt", ".kiro"}
-
-    def test_with_subpaths_loads_named_items(self, project_dir: Path) -> None:
-        """Selective-sync mapping: only named subpaths returned."""
-        projects = {
-            "my-project": ConfigProject(
-                managed_project_name="my-project",
-                managed_project_path=project_dir,
-                mappings=[
-                    Mapping(
-                        targets=[Path("/t1")],
-                        subpaths=["file1.txt", ".kiro/hooks"],
-                    )
-                ],
-            )
-        }
-        units = translate_config_to_mapping_units(projects)
-
-        assert len(units) == 1
-        assert {i.name for i in units[0].items} == {"file1.txt", ".kiro/hooks"}
-
-    def test_mapping_without_copy_flag_projects_as_copies(self, project_dir: Path) -> None:
-        """Mappings without copy: true still project every named item."""
-        projects = {
-            "my-project": ConfigProject(
-                managed_project_name="my-project",
-                managed_project_path=project_dir,
-                mappings=[
-                    Mapping(
-                        targets=[Path("/t1")],
-                        subpaths=["file1.txt", "file2.txt"],
-                    )
-                ],
-            )
-        }
-        units = translate_config_to_mapping_units(projects)
-
-        by_name = {i.name: i for i in units[0].items}
-        assert set(by_name) == {"file1.txt", "file2.txt"}
-
-    def test_directory_item_is_projected_as_copy(self, project_dir: Path) -> None:
-        """A directory subpath becomes a copy item in the mapping unit."""
-        projects = {
-            "my-project": ConfigProject(
-                managed_project_name="my-project",
-                managed_project_path=project_dir,
-                mappings=[
-                    Mapping(
-                        targets=[Path("/t1")],
-                        subpaths=[".kiro/hooks"],
-                    )
-                ],
-            )
-        }
-        units = translate_config_to_mapping_units(projects)
-
-        assert len(units) == 1
-        assert units[0].items[0].name == ".kiro/hooks"
-        assert units[0].items[0].path.is_dir()
-
-    def test_nonexistent_subpath_skipped(self, project_dir: Path) -> None:
-        """Missing subpath entries are silently skipped."""
-        projects = {
-            "my-project": ConfigProject(
-                managed_project_name="my-project",
-                managed_project_path=project_dir,
-                mappings=[
-                    Mapping(
-                        targets=[Path("/t1")],
-                        subpaths=["file1.txt", "ghost.txt"],
-                    )
-                ],
-            )
-        }
-        units = translate_config_to_mapping_units(projects)
-
-        assert len(units) == 1
-        assert len(units[0].items) == 1
-        assert units[0].items[0].name == "file1.txt"
-
-
-# ---------------------------------------------------------------------------
-# 4. Multiple projects
-# ---------------------------------------------------------------------------
+        assert units[0].subpaths is None
 
 
 class TestMultipleProjects:
     """Multiple projects each produce their own mapping units."""
 
     def test_multiple_projects(self, tmp_path: Path) -> None:
-        project_a = tmp_path / "project-a"
-        project_a.mkdir()
-
-        project_b = tmp_path / "project-b"
-        project_b.mkdir()
-
         config_projects = {
             "project-a": ConfigProject(
                 managed_project_name="project-a",
-                managed_project_path=project_a,
+                managed_project_path=tmp_path / "project-a",
                 mappings=[
                     Mapping(targets=[Path("/t1")], subpaths=None),
                     Mapping(targets=[Path("/t2")], subpaths=None),
@@ -391,12 +167,12 @@ class TestMultipleProjects:
             ),
             "project-b": ConfigProject(
                 managed_project_name="project-b",
-                managed_project_path=project_b,
+                managed_project_path=tmp_path / "project-b",
                 mappings=[Mapping(targets=[Path("/t3")], subpaths=None)],
             ),
         }
 
-        units = translate_config_to_mapping_units(config_projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(config_projects)
 
         assert len(units) == 3  # noqa: PLR2004
 
@@ -408,11 +184,6 @@ class TestMultipleProjects:
         b_units = [u for u in units if u.managed_project_name == "project-b"]
         assert len(b_units) == 1
         assert b_units[0].display_name == "project-b"
-
-
-# ---------------------------------------------------------------------------
-# 5. MappingUnit attribute correctness
-# ---------------------------------------------------------------------------
 
 
 class TestMappingUnitAttributes:
@@ -427,12 +198,12 @@ class TestMappingUnitAttributes:
                 mappings=[
                     Mapping(
                         targets=[Path("/t1"), Path("/t2")],
-                        subpaths=None,
+                        subpaths=["notes.md"],
                     )
                 ],
             )
         }
-        units = translate_config_to_mapping_units(projects, item_loader=_fake_loader)
+        units = translate_config_to_mapping_units(projects)
 
         assert len(units) == 2  # noqa: PLR2004
 
@@ -443,10 +214,11 @@ class TestMappingUnitAttributes:
         assert u0.display_name == "my-project#1-1"
         assert u0.mapping_index == 0
         assert u0.target_index == 0
-        assert len(u0.items) == 1
+        assert u0.subpaths == ["notes.md"]
 
         u1 = units[1]
         assert u1.target_project_path == Path("/t2")
         assert u1.display_name == "my-project#1-2"
         assert u1.mapping_index == 0
         assert u1.target_index == 1
+        assert u1.subpaths == ["notes.md"]

@@ -13,6 +13,7 @@ from types import FrameType
 
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps
+from beyond_local_file.discovery import item_names
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import check, check_concat
@@ -276,6 +277,15 @@ def _catch_up_new_unit(
             unit.start()
 
 
+def _check_unit_count(projects: dict[str, ConfigProject]) -> int:
+    """Return mapping units that contribute at least one item name."""
+    return sum(
+        1
+        for unit in translate_config_to_mapping_units(projects)
+        if item_names(unit.managed_project_path, unit.subpaths)
+    )
+
+
 def _fanout_check(
     request_config: Path,
     request: Request,
@@ -299,7 +309,7 @@ def _fanout_check(
         request_config=request_config,
         request=request,
         on_progress=on_progress,
-        total=sum(len(translate_config_to_mapping_units(item.live.projects)) for item in selected),
+        total=sum(_check_unit_count(item.live.projects) for item in selected),
     )
     if on_progress is not None:
         for unit in selected:

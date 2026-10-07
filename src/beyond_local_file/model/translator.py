@@ -1,66 +1,17 @@
 """Translate configuration models into mapping units.
 
-The public entry point is :func:`translate_config_to_mapping_units`. Filesystem
-I/O is isolated behind the ``item_loader`` seam so the translation logic (M x N
-expansion, display-name generation) can be exercised in tests without touching
-the disk.
+The public entry point is :func:`translate_config_to_mapping_units`. Expansion
+is pure: M x N mapping units and display names, independent of the filesystem
+and of item discovery.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-
-from beyond_local_file.held import is_held_item_name
 
 from .config import ConfigProject
-from .processing import ManagedProjectItem, MappingUnit
+from .processing import MappingUnit
 
 # Padding threshold for display names
 _PADDING_THRESHOLD = 10
-
-
-def _load_items(
-    managed_project_path: Path,
-    subpaths: list[str] | None,
-) -> list[ManagedProjectItem]:
-    """Load project items based on subpaths configuration.
-
-    This is the default filesystem adapter used by
-    :func:`translate_config_to_mapping_units`.  Pass a custom callable via the
-    ``item_loader`` parameter to substitute a different implementation (e.g.
-    an in-memory stub in tests).
-
-    Every item is a copy projection.
-
-    Args:
-        managed_project_path: Path to the managed project directory.
-        subpaths: Optional list of relative subpaths to sync.
-
-    Returns:
-        List of ManagedProjectItem instances. Empty list if no items found.
-    """
-    if subpaths is None:
-        items: list[ManagedProjectItem] = []
-        if managed_project_path.exists() and managed_project_path.is_dir():
-            for item_path in managed_project_path.iterdir():
-                if is_held_item_name(item_path.name):
-                    continue
-                items.append(ManagedProjectItem(name=item_path.name, path=item_path))
-        return items
-
-    items_list: list[ManagedProjectItem] = []
-
-    for subpath in subpaths:
-        if is_held_item_name(Path(subpath).parts[0]):
-            continue
-        source_path = managed_project_path / subpath
-        if source_path.exists():
-            items_list.append(ManagedProjectItem(name=subpath, path=source_path))
-
-    return items_list
-
-
-type ItemLoader = Callable[[Path, list[str] | None], list[ManagedProjectItem]]
 
 
 @dataclass
@@ -79,8 +30,6 @@ class _DisplayNameContext:
 
 def translate_config_to_mapping_units(
     config_projects: dict[str, ConfigProject],
-    *,
-    item_loader: ItemLoader = _load_items,
 ) -> list[MappingUnit]:
     """Translate config model to mapping units.
 
@@ -89,7 +38,6 @@ def translate_config_to_mapping_units(
       - For each mapping, iterate through its targets (target_index = 0, 1, 2, ...)
       - Create one MappingUnit per (mapping, target) combination
       - Compute display_name based on total mappings and targets per mapping
-      - Load items via ``item_loader`` based on mapping's subpaths
 
     Display name logic:
       - If total mapping units == 1: use project name as-is
@@ -98,20 +46,13 @@ def translate_config_to_mapping_units(
       - If multiple mappings with multiple targets: "project#{mapping_index+1}-{target_index+1}"
       - Use zero-padding when any index >= 10 (e.g., #01, #01-01)
 
-    Items loading:
-      - Delegated to ``item_loader`` — the default is :func:`_load_items` which
-        reads from the filesystem.  Pass a custom callable in tests to exercise
-        display-name and mapping-expansion logic without touching the disk.
-      - Units whose item list is empty are skipped.
+    Item names come from item discovery, not expansion.
 
     Args:
         config_projects: Dictionary of project name to ConfigProject.
-        item_loader: Callable that accepts ``(managed_project_path, subpaths)``
-            and returns the list of items for that mapping.
-            Defaults to :func:`_load_items` (real filesystem walk).
 
     Returns:
-        List of MappingUnit instances ready for execution.
+        List of MappingUnit instances, one per mapping x target.
 
     Example:
         ConfigProject with 2 mappings:
@@ -148,22 +89,12 @@ def translate_config_to_mapping_units(
                 )
                 display_name = _compute_display_name(ctx)
 
-                # Load items via the injected loader
-                items = item_loader(
-                    config_project.managed_project_path,
-                    mapping.subpaths,
-                )
-
-                # Skip if no items found (empty managed project)
-                if not items:
-                    continue
-
                 mapping_units.append(
                     MappingUnit(
                         managed_project_name=config_project.managed_project_name,
                         managed_project_path=config_project.managed_project_path,
                         target_project_path=target_path,
-                        items=items,
+                        subpaths=mapping.subpaths,
                         display_name=display_name,
                         mapping_index=mapping_idx,
                         target_index=target_idx,

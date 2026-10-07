@@ -10,9 +10,8 @@ from pathlib import Path
 
 import click
 
-from beyond_local_file.held import is_held_item_name
+from beyond_local_file.discovery import item_covers_rel, item_names
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 
 @dataclass(frozen=True)
@@ -24,22 +23,6 @@ class ItemOverlap:
     item_a: str
     project_b: str
     item_b: str
-
-
-def item_covers_rel(item_name: str, rel: str) -> bool:
-    """Return whether *rel* is *item_name* or a path under it.
-
-    ``CONTEXT.md`` does not cover ``CONTEXT-MAP.md``: the prefix must be a
-    full path component.
-
-    Args:
-        item_name: Declared or discovered item name (relative path).
-        rel: Path relative to the target root.
-
-    Returns:
-        True when *rel* belongs to *item_name*.
-    """
-    return rel == item_name or rel.startswith(f"{item_name}/")
 
 
 def item_paths_overlap(left: str, right: str) -> bool:
@@ -82,8 +65,8 @@ def projects_targeting(projects: dict[str, ConfigProject], cwd: Path) -> list[Co
 def mapping_item_names(project: ConfigProject, cwd: Path) -> list[str]:
     """Item names *project* contributes to *cwd*.
 
-    Selective mappings use declared subpaths. Sync-all mappings use top-level
-    hub entries after skipping the held-copy directory.
+    Selective mappings use declared names. Sync-all mappings use present
+    top-level hub entries after skipping the held-copy directory.
 
     Args:
         project: One managed project.
@@ -96,16 +79,7 @@ def mapping_item_names(project: ConfigProject, cwd: Path) -> list[str]:
     for mapping in project.mappings:
         if cwd not in mapping.targets:
             continue
-        if mapping.subpaths is not None:
-            for subpath in mapping.subpaths:
-                if not subpath or is_held_item_name(Path(subpath).parts[0]):
-                    continue
-                names.append(subpath)
-            continue
-        hub = project.managed_project_path
-        if not hub.is_dir():
-            continue
-        names.extend(path.name for path in hub.iterdir() if not is_held_item_name(path.name))
+        names.extend(item_names(project.managed_project_path, mapping.subpaths))
     return names
 
 
@@ -145,11 +119,13 @@ def find_item_path_overlaps(projects: dict[str, ConfigProject]) -> list[ItemOver
         One overlap per colliding pair, sorted by target then item names.
     """
     grouped: dict[Path, list[tuple[str, str]]] = {}
-    for unit in translate_config_to_mapping_units(projects):
-        target = unit.target_project_path.resolve()
-        slot = grouped.setdefault(target, [])
-        for item in unit.items:
-            slot.append((unit.managed_project_name, item.name))
+    for project in projects.values():
+        for mapping in project.mappings:
+            names = item_names(project.managed_project_path, mapping.subpaths)
+            for target in mapping.targets:
+                slot = grouped.setdefault(target.resolve(), [])
+                for name in names:
+                    slot.append((project.managed_project_name, name))
 
     overlaps: list[ItemOverlap] = []
     for target, entries in grouped.items():

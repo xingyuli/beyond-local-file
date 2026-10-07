@@ -388,3 +388,17 @@ def test_catch_up_unit_uses_the_unit_live_and_does_not_reload(
     assert (hub / "shared.txt").read_text() == "from-alpha"
     assert (example / "shared.txt").read_text() == "from-alpha"
     assert get_generation(live.baseline, hub, "shared.txt") == 1
+
+
+def test_catch_up_seed_skips_declared_name_missing_from_hub(tmp_path: Path) -> None:
+    """Seed does not copy a declared name whose hub path is absent, and leaves replica bytes."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path)
+    (alpha / "notes.md").write_text("draft")
+    live = LiveSync(_with_items(_projects(config_path), ["notes.md"]), {})
+
+    catch_up_live(live, started_with_baseline=False)
+
+    assert not (hub / "notes.md").exists()
+    assert (alpha / "notes.md").read_text() == "draft"
+    assert not (example / "notes.md").exists()
+

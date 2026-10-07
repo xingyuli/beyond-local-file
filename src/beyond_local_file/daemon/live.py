@@ -10,17 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from beyond_local_file.discovery import item_names, rel_in_items
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.held import (
     HELD_DIR,
     REASON_CREATE_OVERWRITE,
     REASON_DELETE_GAP,
-    is_held_item_name,
     reason_clause,
     store_held_copy,
 )
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.processing import ManagedProjectItem
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.projection import copy_projection
 
@@ -122,19 +121,6 @@ def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
     if set(hub_tree) != set(replica_tree):
         return False
     return all(state_equal(hub_tree[rel], replica_tree[rel]) for rel in hub_tree)
-
-
-def rel_in_items(rel: str, item_names: list[str] | tuple[str, ...]) -> bool:
-    """Return whether *rel* is one of *item_names* or a path under one.
-
-    Args:
-        rel: Path relative to a replica root.
-        item_names: Watched item names.
-
-    Returns:
-        True when *rel* belongs to a watched item.
-    """
-    return any(rel == name or rel.startswith(f"{name}/") for name in item_names)
 
 
 def _copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
@@ -1021,33 +1007,13 @@ def _merge_watch(
     return _WatchRoot(root, merged_names, is_hub, merged_hubs)
 
 
-def _watch_item_loader(managed_project_path: Path, subpaths: list[str] | None) -> list[ManagedProjectItem]:
-    """Load declared items, including selective subpaths not yet on the hub.
-
-    Create splices yaml then replace_projects before the hub copy exists.
-    Watch roots must still include that declared item.
-    """
-    if subpaths is None:
-        items: list[ManagedProjectItem] = []
-        if managed_project_path.exists() and managed_project_path.is_dir():
-            for item_path in managed_project_path.iterdir():
-                if is_held_item_name(item_path.name):
-                    continue
-                items.append(ManagedProjectItem(name=item_path.name, path=item_path))
-        return items
-    items_list: list[ManagedProjectItem] = []
-    for subpath in subpaths:
-        if is_held_item_name(Path(subpath).parts[0]):
-            continue
-        items_list.append(ManagedProjectItem(name=subpath, path=managed_project_path / subpath))
-    return items_list
-
-
 def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
     hubs: dict[str, _WatchRoot] = {}
     replicas: dict[str, _WatchRoot] = {}
-    for unit in translate_config_to_mapping_units(projects, item_loader=_watch_item_loader):
-        names = tuple(item.name for item in unit.items)
+    for unit in translate_config_to_mapping_units(projects):
+        names = tuple(item_names(unit.managed_project_path, unit.subpaths))
+        if not names:
+            continue
         item_hubs = dict.fromkeys(names, unit.managed_project_path)
         hub_key = str(unit.managed_project_path)
         hubs[hub_key] = _merge_watch(hubs.get(hub_key), unit.managed_project_path, names, True, item_hubs)

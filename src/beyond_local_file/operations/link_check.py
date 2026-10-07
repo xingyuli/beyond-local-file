@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..daemon.store import BaselineTrees
+from ..discovery import item_names
 from ..git_manager import GitExcludeManager
 from ..model.config import ConfigProject
 from ..model.processing import MappingUnit
@@ -80,11 +81,15 @@ def check(  # noqa: PLR0913
         Check rows for every mapping unit, including skipped directories.
     """
     _mark_check_started(projects)
-    units = translate_config_to_mapping_units(projects)
-    total = unit_count if unit_count else len(units)
+    prepared = [
+        (unit, names)
+        for unit in translate_config_to_mapping_units(projects)
+        if (names := item_names(unit.managed_project_path, unit.subpaths))
+    ]
+    total = unit_count if unit_count else len(prepared)
     rows: list[CheckRow] = []
     unit_index = 0
-    for unit in units:
+    for unit, names in prepared:
         if not unit.managed_project_path.exists():
             rows.append(
                 CheckRow(
@@ -115,7 +120,7 @@ def check(  # noqa: PLR0913
             unit_index=unit_index,
             unit_count=total,
         )
-        git = _check_git_excludes(unit.target_project_path, {item.name for item in unit.items})
+        git = _check_git_excludes(unit.target_project_path, set(names))
         rows.append(
             CheckRow(
                 project_name=unit.display_name,
@@ -343,20 +348,24 @@ def _check_copies(
     in_sync: list[str] = []
     missing: list[str] = []
     incorrect: list[str] = []
-    for item in unit.items:
+    for name in item_names(unit.managed_project_path, unit.subpaths):
         if on_progress is not None:
-            on_progress(unit_index, unit_count, item.name)
-        target_file = unit.target_project_path / item.name
+            on_progress(unit_index, unit_count, name)
+        hub_file = unit.managed_project_path / name
+        target_file = unit.target_project_path / name
         if target_file.is_symlink():
-            incorrect.append(item.name)
+            incorrect.append(name)
             continue
         if not target_file.exists():
-            missing.append(item.name)
+            missing.append(name)
+            continue
+        if not hub_file.exists() and not hub_file.is_symlink():
+            details.mismatched.append(name)
             continue
         baseline_view = (
-            (baseline, unit.managed_project_path, unit.target_project_path, item.name) if baseline is not None else None
+            (baseline, unit.managed_project_path, unit.target_project_path, name) if baseline is not None else None
         )
-        status = detect_status(item.path, target_file, baseline_view)
+        status = detect_status(hub_file, target_file, baseline_view)
         status_map = {
             SyncStatus.IN_SYNC: details.in_sync,
             SyncStatus.MISMATCH: details.mismatched,
@@ -364,9 +373,9 @@ def _check_copies(
             SyncStatus.TARGET_CHANGED: details.target_changed,
             SyncStatus.BOTH_CHANGED: details.both_changed,
         }
-        status_map[status].append(item.name)
+        status_map[status].append(name)
         if status == SyncStatus.IN_SYNC:
-            in_sync.append(item.name)
+            in_sync.append(name)
     return LinkCheckResult(exists=in_sync, missing=missing, incorrect=incorrect, details=details)
 
 

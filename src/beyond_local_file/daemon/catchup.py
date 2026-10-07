@@ -6,11 +6,12 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+from beyond_local_file.discovery import item_names, rel_in_items
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.processing import MappingUnit
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 
-from .live import LiveSync, ScanStats, rel_in_items, scan_items
+from .live import LiveSync, ScanStats, scan_items
 from .log import log_duration
 from .store import BaselineTrees, PathState, path_state
 
@@ -67,7 +68,11 @@ def catch_up_live(
         *live*'s baseline trees after seed and optional tick.
     """
     _mark_catchup_started(live.projects)
-    units = translate_config_to_mapping_units(live.projects)
+    units = [
+        unit
+        for unit in translate_config_to_mapping_units(live.projects)
+        if item_names(unit.managed_project_path, unit.subpaths)
+    ]
     _announce_waiting(units, on_line)
     if started_with_baseline:
         print("catch-up: update", flush=True)
@@ -99,9 +104,11 @@ def record_baseline(
     stats = ScanStats()
     with log_duration("baseline: record") as fields:
         for unit in translate_config_to_mapping_units(projects):
-            item_names = [item.name for item in unit.items]
-            _merge_tree(trees, unit.managed_project_path, scan_items(unit.managed_project_path, item_names, stats))
-            _merge_tree(trees, unit.target_project_path, scan_items(unit.target_project_path, item_names, stats))
+            names = item_names(unit.managed_project_path, unit.subpaths)
+            if not names:
+                continue
+            _merge_tree(trees, unit.managed_project_path, scan_items(unit.managed_project_path, names, stats))
+            _merge_tree(trees, unit.target_project_path, scan_items(unit.target_project_path, names, stats))
         _preserve_generations(trees, previous)
         fields["paths"] = stats.paths
         fields["files"] = stats.files
@@ -130,7 +137,7 @@ def record_item_baseline(
         seen_hubs: set[str] = set()
         seen_targets: set[str] = set()
         for unit in translate_config_to_mapping_units(projects):
-            if not any(item.name == item_name for item in unit.items):
+            if item_name not in item_names(unit.managed_project_path, unit.subpaths):
                 continue
             hub_key = str(unit.managed_project_path)
             if hub_key not in seen_hubs:
@@ -288,13 +295,17 @@ def _seed_unrecorded(
         replica_tree = live.baseline.get(replica_key, {})
         if started_with_baseline and replica_key not in live.baseline:
             print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
-        _emit_unit_items(unit, index, total, emit)
-        for item in unit.items:
-            if _item_recorded(replica_tree, item.name):
+        names = item_names(unit.managed_project_path, unit.subpaths)
+        _emit_unit_items(unit, names, index, total, emit)
+        for name in names:
+            if _item_recorded(replica_tree, name):
                 continue
-            live.seed_item(unit.target_project_path, item.name)
-            destination = unit.target_project_path / item.name
-            print(f"catch-up: copied {item.name} -> {destination}", flush=True)
+            hub_path = unit.managed_project_path / name
+            if not hub_path.exists() and not hub_path.is_symlink():
+                continue
+            live.seed_item(unit.target_project_path, name)
+            destination = unit.target_project_path / name
+            print(f"catch-up: copied {name} -> {destination}", flush=True)
             replica_tree = live.baseline.get(replica_key, {})
         if not started_with_baseline:
             _mark_unit_done(units, index, on_line)
@@ -306,14 +317,15 @@ def _item_recorded(tree: dict[str, PathState], item_name: str) -> bool:
 
 def _emit_unit_items(
     unit: MappingUnit,
+    names: list[str],
     index: int,
     total: int,
     on_progress: ProgressFn | None,
 ) -> None:
     if on_progress is None:
         return
-    for item in unit.items:
-        on_progress(index, total, item.name)
+    for name in names:
+        on_progress(index, total, name)
 
 
 def _mark_catchup_started(projects: dict[str, ConfigProject]) -> None:

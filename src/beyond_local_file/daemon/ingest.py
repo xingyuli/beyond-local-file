@@ -10,7 +10,7 @@ import click
 
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps, find_item_path_overlaps
-from beyond_local_file.held import is_held_item_name
+from beyond_local_file.discovery import item_names
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.operations.result import ReloadResult
 
@@ -409,23 +409,18 @@ def _index_projects(projects: dict[str, ConfigProject]) -> dict[str, _ProjectInd
 def _item_removes(old: Subpaths, new: Subpaths, hub: Path) -> list[str]:
     if new is None or old == new:
         return []
-    old_set = _hub_items(hub) if old is None else old
-    return sorted(old_set - new)
+    old_set = set(item_names(hub, None if old is None else list(old)))
+    new_set = set(item_names(hub, list(new)))
+    return sorted(old_set - new_set)
 
 
 def _item_adds(old: Subpaths, new: Subpaths, hub: Path) -> list[str]:
     if old is None or old == new:
         return []
-    if new is None:
-        return sorted(_hub_items(hub) - old)
-    return sorted(new - old)
+    old_set = set(item_names(hub, list(old)))
+    new_set = set(item_names(hub, None if new is None else list(new)))
+    return sorted(new_set - old_set)
 
 
 def _projected_item_names(hub: Path, subpaths: Subpaths) -> frozenset[str]:
-    return _hub_items(hub) if subpaths is None else subpaths
-
-
-def _hub_items(hub: Path) -> frozenset[str]:
-    if not hub.is_dir():
-        return frozenset()
-    return frozenset(path.name for path in hub.iterdir() if not is_held_item_name(path.name))
+    return frozenset(item_names(hub, None if subpaths is None else list(subpaths)))

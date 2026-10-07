@@ -57,7 +57,7 @@ The threading grain: one queue for **one managed project** (hub and every target
 _Avoid_: Processing unit, thread per target, set-wide lock
 
 **Mapping unit**:
-The expanded **managed project × one target** with that mapping's items. Check rows, git exclude, and fan-out destinations. Not its own thread. A ConfigProject with M mappings and N total targets becomes M×N mapping units.
+The expanded **managed project × one target** for one mapping. Check rows, git exclude, and fan-out destinations. Not its own thread. A ConfigProject with M mappings and N total targets becomes M×N mapping units. Item names for a unit come from item discovery.
 _Avoid_: Processing unit, worker unit, execution thread
 
 **Daemon phase**:
@@ -169,11 +169,11 @@ Whether a managed item and its projection match **right now** (live hashes). Mat
 _Avoid_: Diff, state, status, sync-state
 
 **Item discovery**:
-The process of determining which items a managed project contributes to a given mapping — either by enumerating the managed project directory (sync-all) or by resolving each declared subpath against the filesystem. A distinct concern from mapping expansion.
+The names a mapping contributes: the declared subpaths of a selective mapping (on the hub or still missing), or the present top-level entries of the managed project for sync-all. Distinct from mapping expansion.
 _Avoid_: File scanning, directory walk, item loading
 
 **Mapping expansion**:
-The pure structural transformation that converts a config with M mappings and N total targets into a flat list of mapping units. Independent of the filesystem — concerns only the shape of the config.
+The pure structural transformation that converts a config with M mappings and N total targets into a flat list of mapping units. Independent of the filesystem and of item discovery — concerns only the shape of the config.
 _Avoid_: Translation, flattening, config parsing
 
 **Revlink**:

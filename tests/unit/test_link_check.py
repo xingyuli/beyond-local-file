@@ -350,3 +350,43 @@ def test_check_emits_progress_for_verbose_and_table(
         unit_count=1,
     )
     assert seen == [(1, 1, "file1.txt"), (1, 1, "file2.txt")]
+
+
+def test_check_skips_empty_sync_all(tmp_path: Path) -> None:
+    """An empty sync-all hub produces no check row."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    projects = {
+        "lab-app": ConfigProject(
+            managed_project_name="lab-app",
+            managed_project_path=hub,
+            mappings=[Mapping(targets=[alpha], subpaths=None)],
+        )
+    }
+
+    result = check(projects, None, extra_exclude=False, output_format=OutputFormat.TABLE)
+
+    assert result.rows == ()
+
+
+def test_check_missing_hub_with_present_replica_is_mismatch(tmp_path: Path) -> None:
+    """A declared name whose hub file is missing and whose replica exists is a mismatch."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    (alpha / "notes.md").write_text("draft")
+    projects = {
+        "lab-app": ConfigProject(
+            managed_project_name="lab-app",
+            managed_project_path=hub,
+            mappings=[Mapping(targets=[alpha], subpaths=["notes.md"])],
+        )
+    }
+
+    result = check(projects, None, extra_exclude=False, output_format=OutputFormat.VERBOSE)
+
+    assert result.rows[0].copy is not None
+    assert result.rows[0].copy.details.mismatched == ["notes.md"]

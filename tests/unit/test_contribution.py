@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from beyond_local_file.contribution import find_item_path_overlaps, item_covers_rel, item_paths_overlap
+from beyond_local_file.contribution import find_item_path_overlaps, item_paths_overlap
+from beyond_local_file.discovery import item_covers_rel
 from beyond_local_file.model.config import ConfigProject, Mapping
 
 
@@ -51,4 +52,32 @@ def test_find_overlaps_names_both_projects(tmp_path: Path) -> None:
     assert overlaps[0].project_a == "proj-a"
     assert overlaps[0].item_a == "local-file"
     assert overlaps[0].project_b == "proj-b"
+    assert overlaps[0].item_b == "local-file/devops/k8s.md"
+
+
+def test_find_overlaps_uses_declared_names_missing_from_hub(tmp_path: Path) -> None:
+    """A declared selective name still overlaps when the hub file is missing."""
+    hub_a = tmp_path / "lab-app"
+    hub_b = tmp_path / "other"
+    target = tmp_path / "alpha"
+    hub_a.mkdir()
+    hub_b.mkdir()
+    target.mkdir()
+    projects = {
+        "lab-app": ConfigProject(
+            managed_project_name="lab-app",
+            managed_project_path=hub_a,
+            mappings=[Mapping(targets=[target], subpaths=["local-file"])],
+        ),
+        "other": ConfigProject(
+            managed_project_name="other",
+            managed_project_path=hub_b,
+            mappings=[Mapping(targets=[target], subpaths=["local-file/devops/k8s.md"])],
+        ),
+    }
+
+    overlaps = find_item_path_overlaps(projects)
+
+    assert len(overlaps) == 1
+    assert overlaps[0].item_a == "local-file"
     assert overlaps[0].item_b == "local-file/devops/k8s.md"
