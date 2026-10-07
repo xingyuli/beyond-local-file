@@ -14,7 +14,7 @@ from pathlib import Path
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from beyond_local_file.operations.revlink import RestoreFormatter, RestoreOperation
+from beyond_local_file.operations.revlink import RestoreOperation
 from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
@@ -84,8 +84,6 @@ def test_restore_dryrun_does_not_modify_filesystem_with_valid_symlink(
 ) -> None:
     """Verify that restore dry-run leaves the filesystem unchanged for a valid symlink setup.
 
-    **Validates: Requirements 3.4**
-
     For any valid symlink at ``source`` pointing to a real managed copy in
     ``managed_dir``, invoking ``RestoreOperation`` with ``dry_run=True`` must
     leave the entire directory tree in exactly the same state as before the
@@ -121,7 +119,6 @@ def test_restore_dryrun_does_not_modify_filesystem_with_valid_symlink(
             dest_root=managed_dir,
             rel_path=Path(filename),
             dry_run=True,
-            formatter=RestoreFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)
@@ -144,8 +141,6 @@ def test_restore_dryrun_does_not_modify_filesystem_when_source_missing(
     content: bytes,
 ) -> None:
     """Verify that restore dry-run leaves the filesystem unchanged when source does not exist.
-
-    **Validates: Requirements 3.4**
 
     Even when validation fails because the source path does not exist,
     invoking ``RestoreOperation`` with ``dry_run=True`` must not modify the
@@ -178,7 +173,6 @@ def test_restore_dryrun_does_not_modify_filesystem_when_source_missing(
             dest_root=managed_dir,
             rel_path=Path(filename),
             dry_run=True,
-            formatter=RestoreFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)
@@ -201,8 +195,6 @@ def test_restore_dryrun_does_not_modify_filesystem_when_source_is_not_symlink(
     content: bytes,
 ) -> None:
     """Verify that restore dry-run leaves the filesystem unchanged when source is a real file.
-
-    **Validates: Requirements 3.4**
 
     When the source path exists but is not a symlink, ``RestoreOperation``
     validation must fail and the filesystem must remain untouched even with
@@ -234,7 +226,6 @@ def test_restore_dryrun_does_not_modify_filesystem_when_source_is_not_symlink(
             dest_root=managed_dir,
             rel_path=Path(filename),
             dry_run=True,
-            formatter=RestoreFormatter(dry_run=True),
         ).run()
 
         after = _snapshot(tmp_path)

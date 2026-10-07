@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-
-import click
 
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping
-from beyond_local_file.operations.result import CreateResult, GitExcludeAction
+from beyond_local_file.operations.result import CreateResult, GitExcludeAction, RestoreGitExcludeStatus, RestoreResult
 from beyond_local_file.projection import copy_projection
 
 # ---------------------------------------------------------------------------
@@ -141,11 +139,9 @@ class CreateFormatter:
 
 
 class RestoreFormatter:
-    """Formats and prints step-by-step progress for the revlink restore operation.
+    """Render adapter for restore: string builders used only by ``render``.
 
-    All output is emitted via ``click.echo``. When ``dry_run`` is ``True``
-    every output line is prefixed with ``[dry-run]`` so the user can
-    distinguish preview output from real output.
+    When ``dry_run`` is ``True`` every echo is prefixed with ``[dry-run]``.
     """
 
     def __init__(self, dry_run: bool) -> None:
@@ -157,120 +153,92 @@ class RestoreFormatter:
         """
         self._dry_run = dry_run
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _echo(self, message: str) -> None:
-        """Emit a single output line, prepending the dry-run prefix if active.
+    def _line(self, message: str) -> str:
+        """Return one output line, prepending the dry-run prefix if active.
 
         Args:
             message: The message text to display.
         """
         if self._dry_run:
-            click.echo(f"[dry-run] {message}")
-        else:
-            click.echo(message)
+            return f"[dry-run] {message}"
+        return message
 
-    # ------------------------------------------------------------------
-    # Public formatter methods
-    # ------------------------------------------------------------------
-
-    def leaving_target_file(self, path: Path) -> None:
-        """Print a confirmation that the target path is left as an unmanaged file.
+    def leaving_target_file(self, path: str) -> str:
+        """Return a confirmation that the target path is left as an unmanaged file.
 
         Args:
             path: Target-side path that remains after the hub copy is deleted.
         """
-        self._echo(f"Leaving target file in place: {path.as_posix()}")
+        return self._line(f"Leaving target file in place: {path}")
 
-    def removing_symlink(self, path: Path) -> None:
-        """Print a message indicating that the leftover symlink at *path* is removed.
+    def removing_symlink(self, path: str) -> str:
+        """Return that the leftover symlink at *path* is removed.
 
         Args:
             path: Path to the leftover symlink that is about to be unlinked.
         """
-        self._echo(f"Removing symlink at {path.as_posix()}")
+        return self._line(f"Removing symlink at {path}")
 
-    def copying_back(self, source: Path, dest: Path) -> None:
-        """Print a message showing the managed copy source and the restore destination.
+    def copying_back(self, source: str, dest: str) -> str:
+        """Return the managed copy source and the restore destination.
 
         Args:
-            source: Path to the managed copy (the symlink target in the managed
-                project).
+            source: Path to the managed copy (the leftover-symlink target in the
+                managed project).
             dest: Path to the destination in the current working directory where
                 the content is being restored.
         """
-        self._echo(f"Copying {source.as_posix()} -> {dest.as_posix()}")
+        return self._line(f"Copying {source} -> {dest}")
 
-    def managed_copy_deleted(self, path: Path) -> None:
-        """Print a confirmation that the managed copy at *path* was deleted successfully.
+    def managed_copy_deleted(self, path: str) -> str:
+        """Return a confirmation that the managed copy at *path* was deleted.
 
         Args:
             path: Path to the managed copy that was deleted.
         """
-        self._echo(f"✓ Managed copy deleted: {path.as_posix()}")
+        return self._line(f"✓ Managed copy deleted: {path}")
 
-    def managed_copy_delete_failed(self, path: Path) -> None:
-        """Print a warning that the managed copy at *path* could not be deleted.
-
-        This is a non-fatal warning — the restore to CWD has already succeeded.
-        The managed copy is left in place for manual cleanup.
-
-        Args:
-            path: Path to the managed copy that could not be deleted.
-        """
-        self._echo(f"Warning: could not delete managed copy at {path.as_posix()}")
-
-    def replica_copy_deleted(self, path: Path) -> None:
-        """Print a confirmation that another replica's projection was deleted.
+    def replica_copy_deleted(self, path: str) -> str:
+        """Return a confirmation that another replica's projection was deleted.
 
         Args:
             path: Fan-out copy that was removed from another target project.
         """
-        self._echo(f"Deleted replica copy: {path.as_posix()}")
+        return self._line(f"Deleted replica copy: {path}")
 
-    def replica_copy_delete_failed(self, path: Path) -> None:
-        """Print a warning that another replica's projection could not be deleted.
-
-        Args:
-            path: Fan-out copy that could not be removed.
-        """
-        self._echo(f"Warning: could not delete replica copy at {path.as_posix()}")
-
-    def git_exclude_removed(self, name: str) -> None:
-        """Print a confirmation that *name* was removed from ``.git/info/exclude``.
+    def git_exclude_removed(self, name: str) -> str:
+        """Return a confirmation that *name* was removed from ``.git/info/exclude``.
 
         Args:
             name: The filename or directory name that was removed from the git
                 exclude file.
         """
-        self._echo(f"Removed {name!r} from .git/info/exclude")
+        return self._line(f"Removed {name!r} from .git/info/exclude")
 
-    def git_exclude_not_found(self, name: str) -> None:
-        """Print a notice that *name* was not found in ``.git/info/exclude``.
+    def git_exclude_not_found(self, name: str) -> str:
+        """Return a notice that *name* was not found in ``.git/info/exclude``.
 
         Args:
             name: The filename or directory name that was not present in the
                 git exclude file.
         """
-        self._echo(f"{name!r} not in .git/info/exclude")
+        return self._line(f"{name!r} not in .git/info/exclude")
 
-    def config_entry_removed(self, name: str) -> None:
-        """Print a confirmation that *name* was removed from the config subpath list.
+    def config_entry_removed(self, name: str) -> str:
+        """Return a confirmation that *name* was removed from the config subpath list.
 
         Args:
             name: The filename or directory name removed from the config.
         """
-        self._echo(f"Removed {name!r} from config subpath list")
+        return self._line(f"Removed {name!r} from config subpath list")
 
-    def error(self, message: str) -> None:
-        """Print an error message.
+    def error(self, message: str) -> str:
+        """Return an error message.
 
         Args:
             message: Human-readable description of the error condition.
         """
-        self._echo(f"Error: {message}")
+        return self._line(f"Error: {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +581,11 @@ class CreateOperation:
 
 @dataclass
 class RestoreOperation:
-    """Validates and formats revlink restore; yaml splice stays in this wrapper.
+    """Validates and plans revlink restore; yaml splice stays in this wrapper.
 
     Disk writes (delete hub and other replicas, git exclude, last-seen) are a
     LiveSync restore job. ``run`` materializes a leftover symlink at PATH so
-    the user keeps a real file, then formats the planned deletes. It does not
+    the user keeps a real file, then returns the planned deletes. It does not
     delete, fan out, or git-exclude.
 
     Attributes:
@@ -630,7 +598,6 @@ class RestoreOperation:
             ``dest_root / rel_path``, preserving the full directory structure.
         dry_run: When ``True``, perform all validation and report what would
             happen without modifying the filesystem.
-        formatter: Formatter instance used for all user-facing output.
         context: Config-resolution context used for the post-restore config
             removal step.  ``None`` skips the update (useful in tests).
     """
@@ -639,83 +606,105 @@ class RestoreOperation:
     dest_root: Path
     rel_path: Path
     dry_run: bool
-    formatter: RestoreFormatter
     context: RevlinkContext | None = field(default=None)
 
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
-    def run(self) -> int:
-        """Validate, materialize a leftover symlink, and format planned deletes.
+    def run(self) -> RestoreResult:
+        """Validate, materialize a leftover symlink, and return planned deletes.
 
-        Derives ``managed`` as ``dest_root / rel_path``. Dry-run previews every
-        step without modifying the filesystem. A real run materializes a leftover
-        symlink at PATH, then prints the intended hub/replica deletes and git
-        exclude; LiveSync restore then writes disks. Yaml drop is
-        :meth:`drop_mapping` after that job.
+        Derives ``managed`` as ``dest_root / rel_path``. Dry-run is data on the
+        result. A real run materializes a leftover symlink at PATH; LiveSync
+        restore then writes disks. Yaml drop is :meth:`drop_mapping` after
+        that job.
 
         Returns:
-            ``0`` on success, ``1`` if any step fails.
+            The restore result the shell renders.
         """
         managed = self.dest_root / self.rel_path
 
         with log_duration("restore: validate"):
-            result = self._validate(managed)
-        if result != 0:
-            return result
+            blocked = self._validate(managed)
+        if blocked is not None:
+            return blocked
 
+        leftover = self.source.is_symlink()
         if self.dry_run:
-            self._preview(managed)
-            return 0
+            return self._plan(managed, leftover_symlink=leftover, config_removed=self._dry_run_config_removed())
 
-        if self.source.is_symlink():
+        if leftover:
             with log_duration("restore: replace"):
-                result = self._replace(managed)
-            if result != 0:
-                return result
-        else:
-            self.formatter.leaving_target_file(self.source)
-        self.formatter.managed_copy_deleted(managed)
-        for replica_path in self._other_replica_paths():
-            if replica_path.exists() or replica_path.is_symlink():
-                self.formatter.replica_copy_deleted(replica_path)
-        self._git_exclude_preview()
-        return 0
+                failed = self._replace(managed)
+            if failed is not None:
+                return failed
+        return self._plan(managed, leftover_symlink=leftover)
 
-    def drop_mapping(self) -> None:
-        """Splice the mapping yaml drop after the LiveSync restore job."""
-        with log_duration("restore: config"):
-            self._remove_config()
-
-    def _preview(self, managed: Path) -> None:
-        """Emit dry-run preview messages for all steps without touching the filesystem.
-
-        Called by :meth:`run` when ``dry_run=True`` and validation has passed.
-        Mirrors the output of the real steps so the user can see exactly what
-        would happen.
+    def drop_mapping(self, result: RestoreResult) -> RestoreResult:
+        """Splice the mapping yaml drop after the LiveSync restore job.
 
         Args:
-            managed: Derived managed copy path (``dest_root / rel_path``).
+            result: Restore plan returned by :meth:`run`.
+
+        Returns:
+            *result* with ``config_removed`` set when yaml changed.
         """
-        if self.source.is_symlink():
-            self.formatter.removing_symlink(self.source)
-            self.formatter.copying_back(managed, self.source)
-        else:
-            self.formatter.leaving_target_file(self.source)
-        self.formatter.managed_copy_deleted(managed)
-        for replica_path in self._other_replica_paths():
-            if replica_path.exists() or replica_path.is_symlink():
-                self.formatter.replica_copy_deleted(replica_path)
-        self._git_exclude_preview()
-        if self._selective_targets():
-            self.formatter.config_entry_removed(self.rel_path.as_posix())
+        with log_duration("restore: config"):
+            entry = self._remove_config()
+        if entry is None:
+            return result
+        return replace(result, config_removed=entry)
+
+    def _plan(
+        self,
+        managed: Path,
+        *,
+        leftover_symlink: bool,
+        config_removed: str | None = None,
+    ) -> RestoreResult:
+        return self._result(
+            managed,
+            leftover_symlink=leftover_symlink,
+            replica_deletes=self._replica_deletes(),
+            git_excludes=self._git_excludes(),
+            config_removed=config_removed,
+        )
+
+    def _dry_run_config_removed(self) -> str | None:
+        if not self._selective_targets():
+            return None
+        return self.rel_path.as_posix()
 
     # ------------------------------------------------------------------
     # Internal steps
     # ------------------------------------------------------------------
 
-    def _validate(self, managed: Path) -> int:
+    def _result(  # noqa: PLR0913 -- RestoreResult fields are the IPC shape
+        self,
+        managed: Path,
+        *,
+        exit_code: int = 0,
+        errors: tuple[str, ...] = (),
+        leftover_symlink: bool = False,
+        replica_deletes: tuple[str, ...] = (),
+        git_excludes: tuple[tuple[str, RestoreGitExcludeStatus], ...] = (),
+        config_removed: str | None = None,
+    ) -> RestoreResult:
+        return RestoreResult(
+            exit_code=exit_code,
+            dry_run=self.dry_run,
+            errors=errors,
+            leftover_symlink=leftover_symlink,
+            source=self.source.as_posix(),
+            managed=managed.as_posix(),
+            replica_deletes=replica_deletes,
+            git_excludes=git_excludes,
+            config_removed=config_removed,
+            persist_warning=None,
+        )
+
+    def _validate(self, managed: Path) -> RestoreResult | None:
         """Run pre-flight validation checks before any filesystem mutation.
 
         Checks are performed in order:
@@ -730,29 +719,30 @@ class RestoreOperation:
             managed: Derived managed copy path (``dest_root / rel_path``).
 
         Returns:
-            ``0`` if all checks pass, ``1`` on the first failing check.
+            A result when validation stops the plan, or ``None`` when all
+            checks pass.
         """
         # exists() follows symlinks and returns False for dangling leftover
         # symlinks, so both conditions are needed to distinguish "nothing here"
         # from "dangling leftover symlink".
         if not self.source.exists() and not self.source.is_symlink():
-            self.formatter.error(f"Path does not exist: {self.source}")
-            return 1
+            return self._result(managed, exit_code=1, errors=(f"Path does not exist: {self.source}",))
 
         if not self.source.is_symlink() and not self.source.is_file() and not self.source.is_dir():
-            self.formatter.error(f"Path is not a restorable projection: {self.source}")
-            return 1
+            return self._result(managed, exit_code=1, errors=(f"Path is not a restorable projection: {self.source}",))
 
         if not managed.exists():
             if self.source.is_symlink():
-                self.formatter.error(f"Dangling symlink: managed copy does not exist at {managed}")
-            else:
-                self.formatter.error(f"Managed copy does not exist at {managed}")
-            return 1
+                return self._result(
+                    managed,
+                    exit_code=1,
+                    errors=(f"Dangling symlink: managed copy does not exist at {managed}",),
+                )
+            return self._result(managed, exit_code=1, errors=(f"Managed copy does not exist at {managed}",))
 
-        return 0
+        return None
 
-    def _replace(self, managed: Path) -> int:
+    def _replace(self, managed: Path) -> RestoreResult | None:
         """Remove the symlink and copy the managed content back to the CWD path.
 
         The symlink is always a single inode regardless of whether its target
@@ -768,21 +758,21 @@ class RestoreOperation:
                 whose content will be copied back to ``source``.
 
         Returns:
-            ``0`` on success, ``1`` if the symlink cannot be removed.
+            A result when unlink fails, or ``None`` when the leftover symlink
+            is materialized.
         """
-        self.formatter.removing_symlink(self.source)
-
         try:
             self.source.unlink(missing_ok=False)
         except PermissionError:
-            self.formatter.error(f"Permission denied removing symlink at {self.source}")
-            return 1
-
-        self.formatter.copying_back(managed, self.source)
+            return self._result(
+                managed,
+                exit_code=1,
+                errors=(f"Permission denied removing symlink at {self.source}",),
+                leftover_symlink=True,
+            )
 
         copy_projection(managed, self.source)
-
-        return 0
+        return None
 
     def _mappings(self) -> list[Mapping]:
         """Return this managed project's mappings, or an empty list with no context.
@@ -871,21 +861,27 @@ class RestoreOperation:
             return [cwd, *roots]
         return roots
 
-    def _git_exclude_preview(self) -> None:
-        """Emit dry-run git-exclude removals without writing exclude files."""
+    def _replica_deletes(self) -> tuple[str, ...]:
+        """Return other replicas' projection paths that currently exist."""
+        return tuple(path.as_posix() for path in self._other_replica_paths() if path.exists() or path.is_symlink())
+
+    def _git_excludes(self) -> tuple[tuple[str, RestoreGitExcludeStatus], ...]:
+        """Return planned git-exclude removals without writing exclude files."""
         if self.context is None:
-            return
+            return ()
         entry_name = self.rel_path.as_posix()
+        items: list[tuple[str, RestoreGitExcludeStatus]] = []
         for replica_root in self._git_exclude_roots():
             manager = GitExcludeManager(replica_root)
             if not manager.is_git_repo():
                 continue
             if entry_name in manager.read_entries():
-                self.formatter.git_exclude_removed(entry_name)
+                items.append((entry_name, "removed"))
             else:
-                self.formatter.git_exclude_not_found(entry_name)
+                items.append((entry_name, "not_found"))
+        return tuple(items)
 
-    def _remove_config(self) -> None:
+    def _remove_config(self) -> str | None:
         """Remove the source item from every participating selective mapping.
 
         Sync-all mappings have no subpath list and are left unchanged. Nested
@@ -894,16 +890,20 @@ class RestoreOperation:
 
         This step is non-fatal: failures are silently ignored so that a config
         write error does not undo the already-completed restore.
+
+        Returns:
+            The subpath entry name when yaml changed, otherwise ``None``.
         """
         if self.context is None:
-            return
+            return None
 
         entry_name = self.rel_path.as_posix()
         targets = self._selective_targets()
         if not targets:
-            return
+            return None
 
         updater = ConfigUpdater(self.context.config_path)
         changed = updater.remove_subpath_entries(self.context.project_name, targets, entry_name)
         if changed:
-            self.formatter.config_entry_removed(entry_name)
+            return entry_name
+        return None

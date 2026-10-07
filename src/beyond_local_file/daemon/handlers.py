@@ -3,22 +3,18 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from contextlib import redirect_stdout
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 
-import click
-
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.operations.link_check import check
-from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
-from beyond_local_file.operations.result import CheckResult, FailedResult, render, to_ipc
+from beyond_local_file.operations.remove import RemoveOperation
+from beyond_local_file.operations.result import CheckResult, FailedResult, to_ipc
 from beyond_local_file.operations.revlink import (
     CreateOperation,
-    RestoreFormatter,
     RestoreOperation,
     RevlinkContext,
 )
@@ -35,8 +31,6 @@ from .live import LiveSync
 from .log import log_duration, note_persist_ms
 from .store import BaselineTrees, load_baseline, load_snapshot, save_baseline, save_snapshot
 
-type Handler = Callable[[Path, Request], int]
-
 
 def handle_request(
     config_path: Path,
@@ -45,7 +39,7 @@ def handle_request(
     previous_trees: BaselineTrees | None = None,
     live: LiveSync | None = None,
 ) -> Response:
-    """Run one daemon request and capture its stdout.
+    """Run one daemon request and return its IPC envelope.
 
     Args:
         config_path: Path to the loaded config file.
@@ -58,8 +52,8 @@ def handle_request(
             the yaml drop. When omitted, mutating shells build a throwaway observer.
 
     Returns:
-        A check, create, or failed envelope, or ``exit_code`` and captured
-        ``stdout`` for mutating ops that still print.
+        A check, create, restore, remove, or failed envelope, or ``exit_code``
+        and captured ``stdout`` for reload.
     """
     op = request.get("op")
     created: dict[str, LiveSync] = {}
@@ -69,22 +63,16 @@ def handle_request(
         return _handle_check(config_path, request, on_progress)
     if op == "create":
         return _handle_create(config_path, request, created, on_progress, previous_trees)
-    dispatch: dict[str, Handler] = {
-        "restore": lambda path, req: _handle_restore(path, req, created),
-        "remove": lambda path, req: _handle_remove(path, req, created),
-        "reload": _handle_reload,
-    }
-    handler = dispatch.get(str(op) if op is not None else "")
-    if handler is None:
+    if op == "restore":
+        return _handle_restore(config_path, request, created, on_progress, previous_trees)
+    if op == "remove":
+        return _handle_remove(config_path, request, created, on_progress, previous_trees)
+    if op != "reload":
         return to_ipc(FailedResult(1, (f"Error: unknown daemon operation {op!r}",)))
 
     buffer = StringIO()
     with redirect_stdout(buffer):
-        exit_code = handler(config_path, request)
-        if exit_code == 0 and op in {"restore", "remove"} and not request.get("dry_run"):
-            warning = _try_persist(config_path, request, created, on_progress, previous_trees)
-            if warning is not None:
-                click.echo(f"Warning: could not persist mapping snapshot: {warning}")
+        exit_code = _handle_reload(config_path, request)
     return {"exit_code": exit_code, "stdout": buffer.getvalue()}
 
 
@@ -178,68 +166,86 @@ def _handle_create(
     return to_ipc(result)
 
 
-def _handle_restore(config_path: Path, request: Request, created: dict[str, LiveSync]) -> int:
+def _handle_restore(
+    config_path: Path,
+    request: Request,
+    created: dict[str, LiveSync],
+    on_progress: ProgressCallback | None,
+    previous_trees: BaselineTrees | None,
+) -> Response:
     cwd, path = _cwd_and_path(request)
     source = (cwd / path).absolute()
     rel_path = _rel_path_or_error(source, cwd, path)
     if isinstance(rel_path, FailedResult):
-        return _echo_failed(rel_path)
+        return to_ipc(rel_path)
     context = _resolve_context(config_path, cwd, rel_path=rel_path)
     if isinstance(context, FailedResult):
-        return _echo_failed(context)
+        return to_ipc(context)
     dest_root = context.managed_project_path
     if dest_root is None:
-        return _echo_failed(FailedResult(1, ("Error: managed project path is missing",)))
+        return to_ipc(FailedResult(1, ("Error: managed project path is missing",)))
     dry_run = bool(request.get("dry_run"))
     operation = RestoreOperation(
         source=source,
         dest_root=dest_root,
         rel_path=rel_path,
         dry_run=dry_run,
-        formatter=RestoreFormatter(dry_run=dry_run),
         context=context,
     )
-    code = operation.run()
-    if code != 0 or dry_run:
-        return code
+    result = operation.run()
+    if result.exit_code != 0 or result.dry_run:
+        return to_ipc(result)
     observer, subset = _observer_for(config_path, created, context)
     if subset:
         observer.replace_projects(subset)
     observer.restore_item(cwd, rel_path.as_posix())
-    operation.drop_mapping()
-    return _replace_after_mapping_drop(config_path, created, context)
+    result = operation.drop_mapping(result)
+    _replace_after_mapping_drop(config_path, created, context)
+    warning = _try_persist(config_path, request, created, on_progress, previous_trees)
+    if warning is not None:
+        result = replace(result, persist_warning=warning)
+    return to_ipc(result)
 
 
-def _handle_remove(config_path: Path, request: Request, created: dict[str, LiveSync]) -> int:
+def _handle_remove(
+    config_path: Path,
+    request: Request,
+    created: dict[str, LiveSync],
+    on_progress: ProgressCallback | None,
+    previous_trees: BaselineTrees | None,
+) -> Response:
     cwd, path = _cwd_and_path(request)
     candidate = Path(path)
     candidate = candidate if candidate.is_absolute() else cwd / candidate
     source = Path(os.path.normpath(candidate))
     rel_path = _rel_path_or_error(source, cwd, path)
     if isinstance(rel_path, FailedResult):
-        return _echo_failed(rel_path)
+        return to_ipc(rel_path)
     context = _resolve_context(config_path, cwd, rel_path=rel_path)
     if isinstance(context, FailedResult):
-        return _echo_failed(context)
+        return to_ipc(context)
     dry_run = bool(request.get("dry_run"))
     operation = RemoveOperation(
         source=source,
         rel_path=rel_path,
         dry_run=dry_run,
-        formatter=RemoveFormatter(dry_run=dry_run),
         context=context,
     )
-    code = operation.run()
-    if code != 0 or dry_run:
-        return code
+    result = operation.run()
+    if result.exit_code != 0 or result.dry_run:
+        return to_ipc(result)
     observer, subset = _observer_for(config_path, created, context)
     if subset:
         observer.replace_projects(subset)
     observer.remove_item(cwd, rel_path.as_posix())
-    code = operation.drop_mapping()
-    if code != 0:
-        return code
-    return _replace_after_mapping_drop(config_path, created, context)
+    result = operation.drop_mapping(result)
+    if result.exit_code != 0:
+        return to_ipc(result)
+    _replace_after_mapping_drop(config_path, created, context)
+    warning = _try_persist(config_path, request, created, on_progress, previous_trees)
+    if warning is not None:
+        result = replace(result, persist_warning=warning)
+    return to_ipc(result)
 
 
 def _cwd_and_path(request: Request) -> tuple[Path, str]:
@@ -272,13 +278,6 @@ def _resolve_context(
         lines = () if result.message is None else (result.message,)
         return FailedResult(result.exit_code, lines)
     return result
-
-
-def _echo_failed(result: FailedResult) -> int:
-    text = render(result)
-    if text:
-        click.echo(text, nl=not text.endswith("\n"))
-    return result.exit_code
 
 
 def _try_persist(

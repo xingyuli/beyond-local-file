@@ -12,6 +12,8 @@ from beyond_local_file.operations.result import (
     CheckRow,
     CreateResult,
     FailedResult,
+    RemoveResult,
+    RestoreResult,
     from_ipc,
     payload_text,
     render,
@@ -193,5 +195,209 @@ def test_render_create_errors_and_already_managed() -> None:
 def test_render_create_persist_warning_is_last_and_keeps_exit_zero() -> None:
     """Persist failure is a field; the warning is last and exit_code stays 0."""
     result = _create_result(persist_warning="disk full")
+    assert result.exit_code == 0
+    assert render(result).endswith("Warning: could not persist mapping snapshot: disk full\n")
+
+
+def _restore_result(**fields: object) -> RestoreResult:
+    """Return a RestoreResult with lab-app / alpha / example stand-ins."""
+    values: dict[str, object] = {
+        "exit_code": 0,
+        "dry_run": False,
+        "errors": (),
+        "leftover_symlink": False,
+        "source": "/tmp/alpha/example",
+        "managed": "/tmp/lab-app/example",
+        "replica_deletes": ("/tmp/example/example",),
+        "git_excludes": (("example", "removed"),),
+        "config_removed": "example",
+        "persist_warning": None,
+    }
+    values.update(fields)
+    return RestoreResult(**values)  # type: ignore[arg-type]
+
+
+def _remove_result(**fields: object) -> RemoveResult:
+    """Return a RemoveResult with lab-app / alpha / example stand-ins."""
+    values: dict[str, object] = {
+        "exit_code": 0,
+        "dry_run": False,
+        "errors": (),
+        "artifacts": (
+            ("/tmp/alpha/example", "copy", True),
+            ("/tmp/example/example", "symlink", True),
+        ),
+        "excludes": (
+            ("example", "/tmp/alpha/.git/info/exclude", True),
+            ("example", "/tmp/example/.git/info/exclude", False),
+        ),
+        "managed_copy": "/tmp/lab-app/example",
+        "config": "updated",
+        "config_path": "/tmp/config.yml",
+        "config_entry": "example",
+        "persist_warning": None,
+    }
+    values.update(fields)
+    return RemoveResult(**values)  # type: ignore[arg-type]
+
+
+def test_restore_result_round_trips_through_ipc() -> None:
+    """RestoreResult survives to_ipc then from_ipc, with tuples as lists on the wire."""
+    result = _restore_result(git_excludes=(("example", "removed"), ("example", "not_found")))
+    payload = to_ipc(result)
+    assert payload["kind"] == "restore"
+    assert payload["git_excludes"] == [["example", "removed"], ["example", "not_found"]]
+    assert payload["replica_deletes"] == ["/tmp/example/example"]
+    assert payload["errors"] == []
+    assert from_ipc(payload) == result
+
+
+def test_render_restore_leave_in_place_matches_today_order() -> None:
+    """Leave-in-place restore prints target, hub delete, replicas, git, then config."""
+    result = _restore_result()
+    assert render(result) == (
+        "Leaving target file in place: /tmp/alpha/example\n"
+        "✓ Managed copy deleted: /tmp/lab-app/example\n"
+        "Deleted replica copy: /tmp/example/example\n"
+        "Removed 'example' from .git/info/exclude\n"
+        "Removed 'example' from config subpath list\n"
+    )
+    assert payload_text(to_ipc(result)) == render(result)
+
+
+def test_render_restore_leftover_symlink_matches_today_order() -> None:
+    """Leftover-symlink restore prints unlink, copy-back, then the same deletes."""
+    result = _restore_result(leftover_symlink=True)
+    assert render(result) == (
+        "Removing symlink at /tmp/alpha/example\n"
+        "Copying /tmp/lab-app/example -> /tmp/alpha/example\n"
+        "✓ Managed copy deleted: /tmp/lab-app/example\n"
+        "Deleted replica copy: /tmp/example/example\n"
+        "Removed 'example' from .git/info/exclude\n"
+        "Removed 'example' from config subpath list\n"
+    )
+
+
+def test_render_restore_dry_run_prefixes_each_line() -> None:
+    """Dry-run is data; render prefixes each restore echo with [dry-run]."""
+    result = _restore_result(dry_run=True, leftover_symlink=True)
+    assert render(result) == (
+        "[dry-run] Removing symlink at /tmp/alpha/example\n"
+        "[dry-run] Copying /tmp/lab-app/example -> /tmp/alpha/example\n"
+        "[dry-run] ✓ Managed copy deleted: /tmp/lab-app/example\n"
+        "[dry-run] Deleted replica copy: /tmp/example/example\n"
+        "[dry-run] Removed 'example' from .git/info/exclude\n"
+        "[dry-run] Removed 'example' from config subpath list\n"
+    )
+
+
+def test_render_restore_errors_and_permission_unlink() -> None:
+    """Errors take Error: prefix; a started leftover unlink still prints Removing symlink."""
+    missing = _restore_result(
+        exit_code=1,
+        errors=("Path does not exist: /tmp/alpha/example",),
+        leftover_symlink=False,
+        replica_deletes=(),
+        git_excludes=(),
+        config_removed=None,
+    )
+    assert render(missing) == "Error: Path does not exist: /tmp/alpha/example\n"
+    denied = _restore_result(
+        exit_code=1,
+        leftover_symlink=True,
+        errors=("Permission denied removing symlink at /tmp/alpha/example",),
+        replica_deletes=(),
+        git_excludes=(),
+        config_removed=None,
+    )
+    assert render(denied) == (
+        "Removing symlink at /tmp/alpha/example\nError: Permission denied removing symlink at /tmp/alpha/example\n"
+    )
+    dry_err = _restore_result(
+        exit_code=1,
+        dry_run=True,
+        errors=("Managed copy does not exist at /tmp/lab-app/example",),
+    )
+    assert render(dry_err) == "[dry-run] Error: Managed copy does not exist at /tmp/lab-app/example\n"
+
+
+def test_render_restore_persist_warning_is_last_and_keeps_exit_zero() -> None:
+    """Persist failure is a field; the warning is last and exit_code stays 0."""
+    result = _restore_result(persist_warning="disk full")
+    assert result.exit_code == 0
+    assert render(result).endswith("Warning: could not persist mapping snapshot: disk full\n")
+
+
+def test_remove_result_round_trips_through_ipc() -> None:
+    """RemoveResult survives to_ipc then from_ipc, with tuples as lists on the wire."""
+    result = _remove_result(artifacts=(("/tmp/alpha/example", None, False),))
+    payload = to_ipc(result)
+    assert payload["kind"] == "remove"
+    assert payload["artifacts"] == [["/tmp/alpha/example", None, False]]
+    assert payload["excludes"] == [
+        ["example", "/tmp/alpha/.git/info/exclude", True],
+        ["example", "/tmp/example/.git/info/exclude", False],
+    ]
+    assert payload["config"] == "updated"
+    assert from_ipc(payload) == result
+
+
+def test_render_remove_success_story_matches_today_order() -> None:
+    """Remove success prints artifacts, excludes, hub delete, then config update."""
+    result = _remove_result()
+    assert render(result) == (
+        "Removed copy artifact: /tmp/alpha/example\n"
+        "Removed symlink artifact: /tmp/example/example\n"
+        "Removed Git exclude entry 'example' from /tmp/alpha/.git/info/exclude\n"
+        "Skipping absent Git exclude entry 'example' in /tmp/example/.git/info/exclude\n"
+        "Deleted managed copy: /tmp/lab-app/example\n"
+        "Removed 'example' from selective-sync configuration: /tmp/config.yml\n"
+    )
+    assert payload_text(to_ipc(result)) == render(result)
+
+
+def test_render_remove_dry_run_prefixes_each_line() -> None:
+    """Dry-run is data; render prefixes each remove line with [dry-run]."""
+    result = _remove_result(dry_run=True, artifacts=(("/tmp/alpha/example", None, False),), config="skipped")
+    assert render(result) == (
+        "[dry-run] Skipping absent artifact: /tmp/alpha/example\n"
+        "[dry-run] Removed Git exclude entry 'example' from /tmp/alpha/.git/info/exclude\n"
+        "[dry-run] Skipping absent Git exclude entry 'example' in /tmp/example/.git/info/exclude\n"
+        "[dry-run] Deleted managed copy: /tmp/lab-app/example\n"
+        "[dry-run] Skipping configuration update: no participating selective mapping\n"
+    )
+
+
+def test_render_remove_errors_and_config_repair() -> None:
+    """Validation errors are Error: lines; repair prints the error then the manual line."""
+    refused = _remove_result(
+        exit_code=1,
+        errors=("invocation path does not match managed copy: /tmp/alpha/example",),
+        artifacts=(),
+        excludes=(),
+        config=None,
+        config_path=None,
+        config_entry=None,
+    )
+    assert render(refused) == "Error: invocation path does not match managed copy: /tmp/alpha/example\n"
+    repair = _remove_result(
+        exit_code=1,
+        errors=("Could not update configuration /tmp/config.yml: disk failure",),
+        config="repair",
+    )
+    assert render(repair) == (
+        "Removed copy artifact: /tmp/alpha/example\n"
+        "Removed symlink artifact: /tmp/example/example\n"
+        "Removed Git exclude entry 'example' from /tmp/alpha/.git/info/exclude\n"
+        "Skipping absent Git exclude entry 'example' in /tmp/example/.git/info/exclude\n"
+        "Deleted managed copy: /tmp/lab-app/example\n"
+        "Error: Could not update configuration /tmp/config.yml: disk failure\n"
+        "Managed copy /tmp/lab-app/example was deleted; remove 'example' from configuration manually.\n"
+    )
+
+
+def test_render_remove_persist_warning_is_last_and_keeps_exit_zero() -> None:
+    """Persist failure is a field; the warning is last and exit_code stays 0."""
+    result = _remove_result(persist_warning="disk full")
     assert result.exit_code == 0
     assert render(result).endswith("Warning: could not persist mapping snapshot: disk full\n")

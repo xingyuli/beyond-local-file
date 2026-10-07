@@ -6,13 +6,11 @@ Covers task 7.3:
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from beyond_local_file.model.config import Mapping
 from beyond_local_file.operations.result import CreateResult, render
 from beyond_local_file.operations.revlink import (
     CreateOperation,
-    RestoreFormatter,
     RestoreOperation,
     RevlinkContext,
 )
@@ -295,12 +293,12 @@ class TestContextNoneSkipsGitExclude:
         assert result.git_exclude_name is None
 
     def test_restore_operation_context_none_returns_zero_without_error(self, tmp_path: Path) -> None:
-        """RestoreOperation git-exclude preview is a no-op when context is None.
+        """RestoreOperation git-exclude collection is empty when context is None.
 
         Source is placed in a plain directory (no .git) so that ``is_git_repo``
         returns ``False`` regardless of whether the ``context is None`` guard
         is present.  This exercises the observable contract: when context is
-        None, the step always exits cleanly and no exclude entry is removed.
+        None, the step always exits cleanly and no exclude entry is recorded.
 
         Requirements: 3.4
         """
@@ -308,19 +306,18 @@ class TestContextNoneSkipsGitExclude:
         plain_dir.mkdir()
         source = plain_dir / "myfile.txt"
         source.write_text("hello")
+        dest_root = tmp_path / "managed"
+        dest_root.mkdir()
+        (dest_root / "myfile.txt").write_text("hello")
 
-        formatter = MagicMock(spec=RestoreFormatter)
-        op = RestoreOperation(
+        result = RestoreOperation(
             source=source,
-            dest_root=tmp_path / "managed",
+            dest_root=dest_root,
             rel_path=Path("myfile.txt"),
             dry_run=False,
-            formatter=formatter,
             context=None,  # explicitly None
-        )
+        ).run()
 
-        op._git_exclude_preview()
-
+        assert result.exit_code == 0
         assert not (plain_dir / ".git").exists(), ".git dir should not be created"
-        formatter.git_exclude_removed.assert_not_called()
-        formatter.git_exclude_not_found.assert_not_called()
+        assert result.git_excludes == ()

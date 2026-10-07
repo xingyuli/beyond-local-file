@@ -48,6 +48,9 @@ class CheckResult:
 
 
 type GitExcludeAction = Literal["added", "exists"]
+type RestoreGitExcludeStatus = Literal["removed", "not_found"]
+type RemoveArtifactKind = Literal["copy", "symlink"]
+type RemoveConfigStatus = Literal["updated", "skipped", "repair"]
 
 
 @dataclass(frozen=True)
@@ -68,10 +71,46 @@ class CreateResult:
     persist_warning: str | None
 
 
-type OpResult = FailedResult | CheckResult | CreateResult
+@dataclass(frozen=True)
+class RestoreResult:
+    """Restore plan and yaml-drop outcome, ready to render or send over IPC."""
+
+    exit_code: int
+    dry_run: bool
+    errors: tuple[str, ...]
+    leftover_symlink: bool
+    source: str
+    managed: str
+    replica_deletes: tuple[str, ...]
+    git_excludes: tuple[tuple[str, RestoreGitExcludeStatus], ...]
+    config_removed: str | None
+    persist_warning: str | None
+
+
+@dataclass(frozen=True)
+class RemoveResult:
+    """Remove plan and yaml-drop outcome, ready to render or send over IPC."""
+
+    exit_code: int
+    dry_run: bool
+    errors: tuple[str, ...]
+    artifacts: tuple[tuple[str, RemoveArtifactKind | None, bool], ...]
+    excludes: tuple[tuple[str, str, bool], ...]
+    managed_copy: str
+    config: RemoveConfigStatus | None
+    config_path: str | None
+    config_entry: str | None
+    persist_warning: str | None
+
+
+type OpResult = FailedResult | CheckResult | CreateResult | RestoreResult | RemoveResult
 
 _CHECK_SKIPS = frozenset({"missing_project", "missing_target"})
 _GIT_EXCLUDE_ACTIONS = frozenset({"added", "exists"})
+_RESTORE_GIT_STATUSES = frozenset({"removed", "not_found"})
+_REMOVE_ARTIFACT_KINDS = frozenset({"copy", "symlink"})
+_REMOVE_CONFIG_STATUSES = frozenset({"updated", "skipped", "repair"})
+_KIND_ENVELOPES = frozenset({"failed", "check", "create", "restore", "remove"})
 
 
 def to_ipc(result: OpResult) -> dict[str, Any]:
@@ -87,6 +126,10 @@ def to_ipc(result: OpResult) -> dict[str, Any]:
         return _check_to_ipc(result)
     if isinstance(result, CreateResult):
         return _create_to_ipc(result)
+    if isinstance(result, RestoreResult):
+        return _restore_to_ipc(result)
+    if isinstance(result, RemoveResult):
+        return _remove_to_ipc(result)
     return {
         "exit_code": result.exit_code,
         "kind": "failed",
@@ -101,7 +144,7 @@ def from_ipc(payload: dict[str, Any]) -> OpResult:
         payload: Daemon IPC response.
 
     Returns:
-        The failed, check, or create result matching ``kind``.
+        The failed, check, create, restore, or remove result matching ``kind``.
 
     Raises:
         ValueError: If *payload* is not a known operation result.
@@ -111,6 +154,10 @@ def from_ipc(payload: dict[str, Any]) -> OpResult:
         return _check_from_ipc(payload)
     if kind == "create":
         return _create_from_ipc(payload)
+    if kind == "restore":
+        return _restore_from_ipc(payload)
+    if kind == "remove":
+        return _remove_from_ipc(payload)
     if kind != "failed":
         raise ValueError("expected failed operation result")
     raw_lines = payload.get("lines", ())
@@ -135,6 +182,10 @@ def render(result: OpResult) -> str:
         return _render_check(result)
     if isinstance(result, CreateResult):
         return _render_create(result)
+    if isinstance(result, RestoreResult):
+        return _render_restore(result)
+    if isinstance(result, RemoveResult):
+        return _render_remove(result)
     if not result.lines:
         return ""
     return "\n".join(result.lines) + "\n"
@@ -144,13 +195,14 @@ def payload_text(response: dict[str, Any]) -> str:
     """Return the shell transcript for an IPC *response*.
 
     Args:
-        response: Daemon IPC payload. A failed, check, or create envelope is
-            rendered; leftover status/wait transcripts still use ``stdout``.
+        response: Daemon IPC payload. A failed, check, create, restore, or
+            remove envelope is rendered; leftover status/wait transcripts
+            still use ``stdout``.
 
     Returns:
         Text the shell should print.
     """
-    if response.get("kind") in {"failed", "check", "create"}:
+    if response.get("kind") in _KIND_ENVELOPES:
         return render(from_ipc(response))
     return str(response.get("stdout") or "")
 
@@ -370,7 +422,7 @@ def _str_tuple(raw: object, name: str) -> tuple[str, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list | tuple):
-        raise ValueError(f"create {name} must be a list")
+        raise ValueError(f"{name} must be a list")
     return tuple(str(item) for item in raw)
 
 
@@ -378,7 +430,7 @@ def _opt_str(raw: object, name: str) -> str | None:
     if raw is None:
         return None
     if not isinstance(raw, str):
-        raise ValueError(f"create {name} must be a string")
+        raise ValueError(f"{name} must be a string")
     return raw
 
 
@@ -421,6 +473,206 @@ def _render_create(result: CreateResult) -> str:
             lines.append(formatter.config_updated(result.config_entry))
         for hub, replica in result.fan_out:
             lines.append(formatter.fan_out_copying(hub, replica))
+    if result.persist_warning is not None:
+        lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
+def _restore_to_ipc(result: RestoreResult) -> dict[str, Any]:
+    return {
+        "config_removed": result.config_removed,
+        "dry_run": result.dry_run,
+        "errors": list(result.errors),
+        "exit_code": result.exit_code,
+        "git_excludes": [list(item) for item in result.git_excludes],
+        "kind": "restore",
+        "leftover_symlink": result.leftover_symlink,
+        "managed": result.managed,
+        "persist_warning": result.persist_warning,
+        "replica_deletes": list(result.replica_deletes),
+        "source": result.source,
+    }
+
+
+def _restore_from_ipc(payload: dict[str, Any]) -> RestoreResult:
+    raw_code = payload.get("exit_code", 0)
+    if not isinstance(raw_code, int):
+        raise ValueError("restore operation result needs an exit_code")
+    return RestoreResult(
+        exit_code=raw_code,
+        dry_run=bool(payload.get("dry_run")),
+        errors=_str_tuple(payload.get("errors"), "errors"),
+        leftover_symlink=bool(payload.get("leftover_symlink")),
+        source=str(payload.get("source") or ""),
+        managed=str(payload.get("managed") or ""),
+        replica_deletes=_str_tuple(payload.get("replica_deletes"), "replica_deletes"),
+        git_excludes=_restore_git_from_ipc(payload.get("git_excludes")),
+        config_removed=_opt_str(payload.get("config_removed"), "config_removed"),
+        persist_warning=_opt_str(payload.get("persist_warning"), "persist_warning"),
+    )
+
+
+def _restore_git_from_ipc(raw: object) -> tuple[tuple[str, RestoreGitExcludeStatus], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("restore git_excludes must be a list")
+    items: list[tuple[str, RestoreGitExcludeStatus]] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("restore git_excludes pair must have a name and status")
+        try:
+            name, status = item
+        except ValueError:
+            raise ValueError("restore git_excludes pair must have a name and status") from None
+        if status not in _RESTORE_GIT_STATUSES:
+            raise ValueError("restore git_excludes status is not a known status")
+        items.append((str(name), "removed" if status == "removed" else "not_found"))
+    return tuple(items)
+
+
+def _remove_to_ipc(result: RemoveResult) -> dict[str, Any]:
+    return {
+        "artifacts": [[path, kind, present] for path, kind, present in result.artifacts],
+        "config": result.config,
+        "config_entry": result.config_entry,
+        "config_path": result.config_path,
+        "dry_run": result.dry_run,
+        "errors": list(result.errors),
+        "excludes": [list(item) for item in result.excludes],
+        "exit_code": result.exit_code,
+        "kind": "remove",
+        "managed_copy": result.managed_copy,
+        "persist_warning": result.persist_warning,
+    }
+
+
+def _remove_from_ipc(payload: dict[str, Any]) -> RemoveResult:
+    raw_code = payload.get("exit_code", 0)
+    if not isinstance(raw_code, int):
+        raise ValueError("remove operation result needs an exit_code")
+    config: RemoveConfigStatus | None = None
+    raw_config = payload.get("config")
+    if raw_config is not None:
+        if raw_config not in _REMOVE_CONFIG_STATUSES:
+            raise ValueError("remove config is not a known status")
+        config = "updated" if raw_config == "updated" else "skipped" if raw_config == "skipped" else "repair"
+    return RemoveResult(
+        exit_code=raw_code,
+        dry_run=bool(payload.get("dry_run")),
+        errors=_str_tuple(payload.get("errors"), "errors"),
+        artifacts=_remove_artifacts_from_ipc(payload.get("artifacts")),
+        excludes=_remove_excludes_from_ipc(payload.get("excludes")),
+        managed_copy=str(payload.get("managed_copy") or ""),
+        config=config,
+        config_path=_opt_str(payload.get("config_path"), "config_path"),
+        config_entry=_opt_str(payload.get("config_entry"), "config_entry"),
+        persist_warning=_opt_str(payload.get("persist_warning"), "persist_warning"),
+    )
+
+
+def _remove_artifacts_from_ipc(raw: object) -> tuple[tuple[str, RemoveArtifactKind | None, bool], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("remove artifacts must be a list")
+    items: list[tuple[str, RemoveArtifactKind | None, bool]] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("remove artifact must have a path, kind, and present flag")
+        try:
+            path, kind, present = item
+        except ValueError:
+            raise ValueError("remove artifact must have a path, kind, and present flag") from None
+        artifact_kind: RemoveArtifactKind | None
+        if kind is None:
+            artifact_kind = None
+        elif kind not in _REMOVE_ARTIFACT_KINDS:
+            raise ValueError("remove artifact kind is not a known strategy")
+        else:
+            artifact_kind = "copy" if kind == "copy" else "symlink"
+        items.append((str(path), artifact_kind, bool(present)))
+    return tuple(items)
+
+
+def _remove_excludes_from_ipc(raw: object) -> tuple[tuple[str, str, bool], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("remove excludes must be a list")
+    items: list[tuple[str, str, bool]] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("remove exclude must have an entry, path, and present flag")
+        try:
+            entry, exclude_file, present = item
+        except ValueError:
+            raise ValueError("remove exclude must have an entry, path, and present flag") from None
+        items.append((str(entry), str(exclude_file), bool(present)))
+    return tuple(items)
+
+
+def _render_restore(result: RestoreResult) -> str:
+    from .revlink import RestoreFormatter  # noqa: PLC0415
+
+    formatter = RestoreFormatter(dry_run=result.dry_run)
+    lines: list[str] = []
+    if result.errors:
+        if result.leftover_symlink:
+            lines.append(formatter.removing_symlink(result.source))
+        lines.extend(formatter.error(message) for message in result.errors)
+    else:
+        if result.leftover_symlink:
+            lines.append(formatter.removing_symlink(result.source))
+            lines.append(formatter.copying_back(result.managed, result.source))
+        else:
+            lines.append(formatter.leaving_target_file(result.source))
+        lines.append(formatter.managed_copy_deleted(result.managed))
+        lines.extend(formatter.replica_copy_deleted(path) for path in result.replica_deletes)
+        for name, status in result.git_excludes:
+            if status == "removed":
+                lines.append(formatter.git_exclude_removed(name))
+            else:
+                lines.append(formatter.git_exclude_not_found(name))
+        if result.config_removed is not None:
+            lines.append(formatter.config_entry_removed(result.config_removed))
+    if result.persist_warning is not None:
+        lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
+def _render_remove(result: RemoveResult) -> str:  # noqa: PLR0912 -- story, repair, and error branches
+    from .remove import RemoveFormatter  # noqa: PLC0415
+
+    formatter = RemoveFormatter(dry_run=result.dry_run)
+    lines: list[str] = []
+    story = result.config == "repair" or not result.errors
+    for path, kind, present in result.artifacts:
+        if present and kind is not None:
+            lines.append(formatter.artifact_removed(path, kind))
+        else:
+            lines.append(formatter.artifact_absent(path))
+    for entry, exclude_file, present in result.excludes:
+        if present:
+            lines.append(formatter.exclude_removed(entry, exclude_file))
+        else:
+            lines.append(formatter.exclude_absent(entry, exclude_file))
+    if story:
+        lines.append(formatter.managed_copy_deleted(result.managed_copy))
+        if result.config == "repair":
+            lines.extend(formatter.error(message) for message in result.errors)
+            if result.config_entry is not None:
+                lines.append(formatter.config_repair_needed(result.managed_copy, result.config_entry))
+        elif result.config == "updated" and result.config_entry is not None and result.config_path is not None:
+            lines.append(formatter.config_updated(result.config_entry, result.config_path))
+        elif result.config == "skipped":
+            lines.append(formatter.config_skipped())
+    else:
+        lines.extend(formatter.error(message) for message in result.errors)
     if result.persist_warning is not None:
         lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
     if not lines:

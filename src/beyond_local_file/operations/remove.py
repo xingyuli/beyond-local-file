@@ -3,24 +3,23 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-
-import click
 
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.daemon.catchup import item_matches
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping
+from beyond_local_file.operations.result import RemoveArtifactKind, RemoveConfigStatus, RemoveResult
 from beyond_local_file.operations.revlink import RevlinkContext
 
 
 class RemoveFormatter:
-    """Format all user-facing output for a managed-item removal operation.
+    """Render adapter for remove: string builders used only by ``render``.
 
-    Attributes:
-        _dry_run: Whether each emitted line is marked as a non-mutating preview.
+    When ``dry_run`` is ``True`` every line of a message is prefixed with
+    ``[dry-run]``.
     """
 
     def __init__(self, dry_run: bool) -> None:
@@ -31,100 +30,87 @@ class RemoveFormatter:
         """
         self._dry_run = dry_run
 
-    def _echo(self, message: str) -> None:
-        """Print message lines, prefixing each one when this is a dry run.
+    def _line(self, message: str) -> str:
+        """Return message lines, prefixing each one when this is a dry run.
 
         Args:
             message: Human-readable removal status text, possibly multiline.
         """
         prefix = "[dry-run] " if self._dry_run else ""
-        for line in message.splitlines() or [""]:
-            click.echo(f"{prefix}{line}")
+        return "\n".join(f"{prefix}{line}" for line in message.splitlines() or [""])
 
-    def info(self, message: str) -> None:
-        """Print a non-error informational message.
-
-        Args:
-            message: Human-readable status or captured resolver output.
-        """
-        self._echo(message)
-
-    def error(self, message: str) -> None:
-        """Print a fatal validation or cleanup error.
+    def error(self, message: str) -> str:
+        """Return a fatal validation or cleanup error.
 
         Args:
             message: Explanation of the failed safety condition or action.
         """
-        self._echo(f"Error: {message}")
+        return self._line(f"Error: {message}")
 
-    def artifact_removed(self, artifact: Path, strategy: str) -> None:
-        """Report deletion of one target-side projection.
+    def artifact_removed(self, artifact: str, strategy: str) -> str:
+        """Return deletion of one target-side projection.
 
         Args:
             artifact: Removed target-side item path.
             strategy: Projection strategy represented by the deleted item.
         """
-        self._echo(f"Removed {strategy} artifact: {artifact.as_posix()}")
+        return self._line(f"Removed {strategy} artifact: {artifact}")
 
-    def artifact_absent(self, artifact: Path) -> None:
-        """Report that a missing expected target artifact needs no cleanup.
+    def artifact_absent(self, artifact: str) -> str:
+        """Return that a missing expected target artifact needs no cleanup.
 
         Args:
             artifact: Expected projection path that is absent.
         """
-        self._echo(f"Skipping absent artifact: {artifact.as_posix()}")
+        return self._line(f"Skipping absent artifact: {artifact}")
 
-    def exclude_removed(self, entry: str, exclude_file: Path) -> None:
-        """Report deletion of one Git-exclude entry.
+    def exclude_removed(self, entry: str, exclude_file: str) -> str:
+        """Return deletion of one Git-exclude entry.
 
         Args:
             entry: Relative item path removed from the exclude file.
             exclude_file: Repository exclude file updated by the removal.
         """
-        self._echo(f"Removed Git exclude entry {entry!r} from {exclude_file.as_posix()}")
+        return self._line(f"Removed Git exclude entry {entry!r} from {exclude_file}")
 
-    def exclude_absent(self, entry: str, exclude_file: Path) -> None:
-        """Report that an absent Git-exclude entry needs no cleanup.
+    def exclude_absent(self, entry: str, exclude_file: str) -> str:
+        """Return that an absent Git-exclude entry needs no cleanup.
 
         Args:
             entry: Relative item path that was not present.
             exclude_file: Repository exclude file that was inspected.
         """
-        self._echo(f"Skipping absent Git exclude entry {entry!r} in {exclude_file.as_posix()}")
+        return self._line(f"Skipping absent Git exclude entry {entry!r} in {exclude_file}")
 
-    def managed_copy_deleted(self, managed_copy: Path) -> None:
-        """Report permanent deletion of the authoritative managed item.
+    def managed_copy_deleted(self, managed_copy: str) -> str:
+        """Return permanent deletion of the authoritative managed item.
 
         Args:
             managed_copy: Removed canonical managed item path.
         """
-        self._echo(f"Deleted managed copy: {managed_copy.as_posix()}")
+        return self._line(f"Deleted managed copy: {managed_copy}")
 
-    def config_updated(self, entry: str, config_path: Path) -> None:
-        """Report removal of selective-sync configuration entries.
+    def config_updated(self, entry: str, config_path: str) -> str:
+        """Return removal of selective-sync configuration entries.
 
         Args:
             entry: Relative item path removed from selective mappings.
             config_path: Updated configuration file.
         """
-        self._echo(f"Removed {entry!r} from selective-sync configuration: {config_path.as_posix()}")
+        return self._line(f"Removed {entry!r} from selective-sync configuration: {config_path}")
 
-    def config_skipped(self) -> None:
-        """Report that no participating selective mapping needs updating."""
-        self._echo("Skipping configuration update: no participating selective mapping")
+    def config_skipped(self) -> str:
+        """Return that no participating selective mapping needs updating."""
+        return self._line("Skipping configuration update: no participating selective mapping")
 
-    def cleanup_retained(self) -> None:
-        """Explain recovery state after a partially failed target cleanup."""
-        self._echo("Target cleanup failed; the managed copy and configuration were retained. Fix errors and retry.")
-
-    def config_repair_needed(self, managed_copy: Path, entry: str) -> None:
-        """Explain the manual repair needed after a post-deletion config failure.
+    def config_repair_needed(self, managed_copy: str, entry: str) -> str:
+        """Return the manual repair needed after a post-deletion config failure.
 
         Args:
             managed_copy: Managed item already deleted before the failed write.
             entry: Configuration entry that may require manual removal.
         """
-        self._echo(f"Managed copy {managed_copy.as_posix()} was deleted; remove {entry!r} from configuration manually.")
+        return self._line(f"Managed copy {managed_copy} was deleted; remove {entry!r} from configuration manually.")
 
 
 @dataclass(frozen=True)
@@ -139,7 +125,7 @@ class _Artifact:
 
 @dataclass
 class RemoveOperation:
-    """Validates and formats ``blf remove``; yaml splice stays in this wrapper.
+    """Validates and plans ``blf remove``; yaml splice stays in this wrapper.
 
     Disk writes (delete hub and every projection, git exclude, last-seen) are a
     LiveSync remove job. Mapping membership is enough for a leftover
@@ -150,117 +136,169 @@ class RemoveOperation:
         source: Lexically normalized target-side path supplied by the user.
         rel_path: Source path relative to the configured CWD target root.
         dry_run: Whether to validate and preview without persistent mutation.
-        formatter: Owner of all operation status and error output.
         context: Resolved project, mapping, and configuration context.
     """
 
     source: Path
     rel_path: Path
     dry_run: bool
-    formatter: RemoveFormatter
     context: RevlinkContext
 
-    def run(self) -> int:
-        """Validate and format planned deletes. Disk writes are a LiveSync job.
+    def run(self) -> RemoveResult:
+        """Validate and return planned deletes. Disk writes are a LiveSync job.
 
         Returns:
-            Zero after validation (and dry-run preview) succeeds; one when
-            validation or preview inspection fails.
+            The remove result the shell renders.
         """
         managed_copy = self.context.managed_project_path / self.rel_path
         with log_duration("remove: validate"):
-            if not self._validate_invocation(managed_copy):
-                return 1
-            artifacts = self._preflight_targets(managed_copy)
-        if artifacts is None:
-            return 1
+            invocation_error = self._validate_invocation(managed_copy)
+            if invocation_error is not None:
+                return self._result(managed_copy, exit_code=1, errors=(invocation_error,))
+            artifacts, errors = self._preflight_targets(managed_copy)
+        if errors:
+            return self._result(managed_copy, exit_code=1, errors=errors)
 
+        artifact_rows = tuple(self._artifact_row(artifact) for artifact in artifacts)
+        excludes, exclude_errors = self._collect_excludes(artifacts)
+        if exclude_errors:
+            return self._result(
+                managed_copy,
+                exit_code=1,
+                errors=exclude_errors,
+                artifacts=artifact_rows,
+                excludes=excludes,
+            )
+        config: RemoveConfigStatus | None = None
+        config_path: str | None = None
+        config_entry: str | None = None
         if self.dry_run:
-            return 0 if self._preview(artifacts, managed_copy) else 1
+            if self._selective_targets():
+                config = "updated"
+                config_path = self.context.config_path.as_posix()
+                config_entry = self.rel_path.as_posix()
+            else:
+                config = "skipped"
+        return self._result(
+            managed_copy,
+            artifacts=artifact_rows,
+            excludes=excludes,
+            config=config,
+            config_path=config_path,
+            config_entry=config_entry,
+        )
 
-        if not self._format_disk_plan(artifacts, managed_copy):
-            return 1
-        return 0
-
-    def drop_mapping(self) -> int:
+    def drop_mapping(self, result: RemoveResult) -> RemoveResult:
         """Splice the mapping yaml drop after the LiveSync remove job.
 
+        Args:
+            result: Remove plan returned by :meth:`run`.
+
         Returns:
-            Zero on success; one if the atomic update fails after item deletion.
+            *result* with config status set, or repair fields after a failed write.
         """
         with log_duration("remove: config"):
-            return self._update_config()
+            return self._update_config(result)
 
-    def _validate_invocation(self, managed_copy: Path) -> bool:
+    def _result(  # noqa: PLR0913 -- RemoveResult fields are the IPC shape
+        self,
+        managed_copy: Path,
+        *,
+        exit_code: int = 0,
+        errors: tuple[str, ...] = (),
+        artifacts: tuple[tuple[str, RemoveArtifactKind | None, bool], ...] = (),
+        excludes: tuple[tuple[str, str, bool], ...] = (),
+        config: RemoveConfigStatus | None = None,
+        config_path: str | None = None,
+        config_entry: str | None = None,
+    ) -> RemoveResult:
+        return RemoveResult(
+            exit_code=exit_code,
+            dry_run=self.dry_run,
+            errors=errors,
+            artifacts=artifacts,
+            excludes=excludes,
+            managed_copy=managed_copy.as_posix(),
+            config=config,
+            config_path=config_path,
+            config_entry=config_entry,
+            persist_warning=None,
+        )
+
+    @staticmethod
+    def _artifact_row(artifact: _Artifact) -> tuple[str, RemoveArtifactKind | None, bool]:
+        if not artifact.present:
+            return artifact.path.as_posix(), None, False
+        kind: RemoveArtifactKind = "copy" if artifact.copy_strategy else "symlink"
+        return artifact.path.as_posix(), kind, True
+
+    def _validate_invocation(self, managed_copy: Path) -> str | None:
         """Prove that the supplied path is the expected invocation projection.
 
         Args:
             managed_copy: Canonical item path in the managed project.
 
         Returns:
-            True when the supplied path is an owned projection; otherwise False.
+            An error body when the path is not an owned projection, otherwise None.
         """
         if not managed_copy.exists():
-            self.formatter.error(f"Managed copy does not exist: {managed_copy}")
-            return False
-        if self._has_symlink_ancestor():
-            return False
+            return f"Managed copy does not exist: {managed_copy}"
+        ancestor_error = self._symlink_ancestor_error()
+        if ancestor_error is not None:
+            return ancestor_error
         if not self.source.exists() and not self.source.is_symlink():
-            self.formatter.error(f"Invocation path does not exist: {self.source}")
-            return False
+            return f"Invocation path does not exist: {self.source}"
 
         entry = self.rel_path.as_posix()
         mapping = self.context.matched_mapping
         if mapping.subpaths is not None and entry not in mapping.subpaths:
-            self.formatter.error(f"Invocation mapping does not manage {entry!r}")
-            return False
+            return f"Invocation mapping does not manage {entry!r}"
 
         if self.source.is_symlink():
-            return True
-        return self._validate_copy_artifact(self.source, managed_copy, "invocation path")
+            return None
+        return self._copy_artifact_error(self.source, managed_copy, "invocation path")
 
-    def _has_symlink_ancestor(self) -> bool:
+    def _symlink_ancestor_error(self) -> str | None:
         """Reject a child reached by traversing a directory symlink.
 
         Returns:
-            True and emits an error when an ancestor is a symlink; otherwise False.
+            An error body when an ancestor is a symlink; otherwise None.
         """
         for ancestor in self.rel_path.parents:
             if ancestor == Path("."):
                 continue
             candidate = self.context.cwd / ancestor
             if candidate.is_symlink():
-                self.formatter.error(
+                return (
                     f"Invocation path traverses directory symlink {candidate}; only configured artifacts are removable."
                 )
-                return True
-        return False
+        return None
 
-    def _preflight_targets(self, managed_copy: Path) -> list[_Artifact] | None:
+    def _preflight_targets(self, managed_copy: Path) -> tuple[list[_Artifact], tuple[str, ...]]:
         """Validate every participating target without changing persistent state.
 
         Args:
             managed_copy: Canonical item path in the managed project.
 
         Returns:
-            All expected artifacts when validation succeeds, otherwise None.
+            Validated artifacts and any error bodies.
         """
         artifacts: list[_Artifact] = []
-        valid = True
+        errors: list[str] = []
         for mapping in self._participating_mappings():
             for target in mapping.targets:
                 if not target.is_dir() or not os.access(target, os.X_OK):
-                    self.formatter.error(f"Participating target is inaccessible: {target}")
-                    valid = False
+                    errors.append(f"Participating target is inaccessible: {target}")
                     continue
                 artifact = target / self.rel_path
                 present = artifact.exists() or artifact.is_symlink()
                 copy_strategy = not artifact.is_symlink()
                 if present and not artifact.is_symlink():
-                    label = f"target artifact {artifact}"
-                    valid = self._validate_copy_artifact(artifact, managed_copy, label) and valid
+                    copy_error = self._copy_artifact_error(artifact, managed_copy, f"target artifact {artifact}")
+                    if copy_error is not None:
+                        errors.append(copy_error)
                 artifacts.append(_Artifact(target, artifact, copy_strategy, present))
-        return artifacts if valid else None
+        return artifacts, tuple(errors)
 
     def _participating_mappings(self) -> list[Mapping]:
         """Return mappings that explicitly or implicitly manage this exact item.
@@ -271,7 +309,7 @@ class RemoveOperation:
         entry = self.rel_path.as_posix()
         return [mapping for mapping in self.context.mappings if mapping.subpaths is None or entry in mapping.subpaths]
 
-    def _validate_copy_artifact(self, artifact: Path, managed_copy: Path, label: str) -> bool:
+    def _copy_artifact_error(self, artifact: Path, managed_copy: Path, label: str) -> str | None:
         """Verify that a target artifact is an identical file or directory copy.
 
         Args:
@@ -280,87 +318,45 @@ class RemoveOperation:
             label: Human-readable location description for diagnostics.
 
         Returns:
-            True when the artifact is a byte-identical file or directory.
+            An error body when the artifact is not a byte-identical copy.
         """
         same_kind = (artifact.is_file() and managed_copy.is_file()) or (artifact.is_dir() and managed_copy.is_dir())
         if artifact.is_symlink() or not same_kind:
-            self.formatter.error(f"{label} must be a regular file or directory matching managed copy: {artifact}")
-            return False
+            return f"{label} must be a regular file or directory matching managed copy: {artifact}"
         hub_root = managed_copy
         replica_root = artifact
         for _ in self.rel_path.parts:
             hub_root = hub_root.parent
             replica_root = replica_root.parent
         if not item_matches(hub_root, replica_root, self.rel_path.as_posix()):
-            self.formatter.error(f"{label} does not match managed copy: {artifact}")
-            return False
-        return True
+            return f"{label} does not match managed copy: {artifact}"
+        return None
 
-    def _preview(self, artifacts: list[_Artifact], managed_copy: Path) -> bool:
-        """Print every planned cleanup after successful read-only validation.
-
-        Args:
-            artifacts: Fully validated target artifacts.
-            managed_copy: Canonical managed item planned for deletion.
-
-        Returns:
-            True when all preview inspection succeeds; False after an I/O error.
-        """
-        if not self._format_disk_plan(artifacts, managed_copy):
-            return False
-        if self._selective_targets():
-            self.formatter.config_updated(self.rel_path.as_posix(), self.context.config_path)
-        else:
-            self.formatter.config_skipped()
-        return True
-
-    def _format_disk_plan(self, artifacts: list[_Artifact], managed_copy: Path) -> bool:
-        """Print planned target, exclude, and hub deletes without writing.
-
-        Args:
-            artifacts: Fully validated target artifacts.
-            managed_copy: Canonical managed item planned for deletion.
-
-        Returns:
-            True when Git-exclude reads succeed; False after an I/O error.
-        """
-        for artifact in artifacts:
-            if artifact.present:
-                strategy = "copy" if artifact.copy_strategy else "symlink"
-                self.formatter.artifact_removed(artifact.path, strategy)
-            else:
-                self.formatter.artifact_absent(artifact.path)
-        if not self._preview_excludes(artifacts):
-            return False
-        self.formatter.managed_copy_deleted(managed_copy)
-        return True
-
-    def _preview_excludes(self, artifacts: list[_Artifact]) -> bool:
-        """Print planned Git-exclude handling without writing exclude files.
+    def _collect_excludes(
+        self, artifacts: list[_Artifact]
+    ) -> tuple[tuple[tuple[str, str, bool], ...], tuple[str, ...]]:
+        """Collect planned Git-exclude handling without writing exclude files.
 
         Args:
             artifacts: Target projections whose distinct target roots are checked.
 
         Returns:
-            True when all Git-exclude reads succeed; False otherwise.
+            Exclude rows and any read-error bodies.
         """
-        succeeded = True
+        rows: list[tuple[str, str, bool]] = []
+        errors: list[str] = []
+        entry = self.rel_path.as_posix()
         for target in self._distinct_targets(artifacts):
             manager = GitExcludeManager(target)
             if not manager.is_git_repo():
                 continue
-            entry = self.rel_path.as_posix()
             try:
                 entries = manager.read_entries()
             except OSError as error:
-                self.formatter.error(f"Could not read Git exclude file {manager.exclude_file}: {error}")
-                succeeded = False
+                errors.append(f"Could not read Git exclude file {manager.exclude_file}: {error}")
                 continue
-            if entry in entries:
-                self.formatter.exclude_removed(entry, manager.exclude_file)
-            else:
-                self.formatter.exclude_absent(entry, manager.exclude_file)
-        return succeeded
+            rows.append((entry, manager.exclude_file.as_posix(), entry in entries))
+        return tuple(rows), tuple(errors)
 
     def _distinct_targets(self, artifacts: list[_Artifact]) -> list[Path]:
         """Return target roots once each, preserving their configuration order.
@@ -386,31 +382,40 @@ class RemoveOperation:
             for target in mapping.targets
         }
 
-    def _update_config(self) -> int:
+    def _update_config(self, result: RemoveResult) -> RemoveResult:
         """Persist all selective mapping removals in one configuration update.
 
+        Args:
+            result: Remove plan after the LiveSync job.
+
         Returns:
-            Zero on success; one if the atomic update fails after item deletion.
+            *result* with config status, or repair fields after a failed write.
         """
         targets = self._selective_targets()
         if not targets:
-            self.formatter.config_skipped()
-            return 0
+            return replace(result, config="skipped")
+        path = self.context.config_path.as_posix()
+        entry = self.rel_path.as_posix()
         try:
             changed = ConfigUpdater(self.context.config_path).remove_subpath_entries(
-                self.context.project_name, targets, self.rel_path.as_posix()
+                self.context.project_name, targets, entry
             )
         except OSError as error:
-            self.formatter.error(f"Could not update configuration {self.context.config_path}: {error}")
-            self.formatter.config_repair_needed(
-                managed_copy=self.context.managed_project_path / self.rel_path,
-                entry=self.rel_path.as_posix(),
+            return replace(
+                result,
+                exit_code=1,
+                errors=(f"Could not update configuration {self.context.config_path}: {error}",),
+                config="repair",
+                config_path=path,
+                config_entry=entry,
             )
-            return 1
         if not changed:
-            self.formatter.error(f"Could not remove {self.rel_path!s} from participating selective mappings")
-            managed_copy = self.context.managed_project_path / self.rel_path
-            self.formatter.config_repair_needed(managed_copy, self.rel_path.as_posix())
-            return 1
-        self.formatter.config_updated(self.rel_path.as_posix(), self.context.config_path)
-        return 0
+            return replace(
+                result,
+                exit_code=1,
+                errors=(f"Could not remove {self.rel_path!s} from participating selective mappings",),
+                config="repair",
+                config_path=path,
+                config_entry=entry,
+            )
+        return replace(result, config="updated", config_path=path, config_entry=entry)

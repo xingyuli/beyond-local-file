@@ -11,7 +11,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from beyond_local_file.cli import cli
-from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
+from beyond_local_file.operations.remove import RemoveOperation
 from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
 from tests.daemon_support import invoke_with_daemon
 from tests.path_strategies import is_safe_fs_name
@@ -164,17 +164,17 @@ def test_remove_copy_mismatch_never_mutates_persistent_state(content: bytes) -> 
             os.chdir(target)
             context = resolve_revlink_context(str(config), Path.cwd())
             assert not isinstance(context, RevlinkResolveError)
-            exit_code = RemoveOperation(
+            result = RemoveOperation(
                 source=target_item,
                 rel_path=Path("item.txt"),
                 dry_run=False,
-                formatter=RemoveFormatter(dry_run=False),
                 context=context,
             ).run()
         finally:
             os.chdir(previous_cwd)
 
-        assert exit_code == 1
+        assert result.exit_code == 1
+        assert any("does not match managed copy" in error for error in result.errors)
         assert config.read_bytes() == before["config"]
         assert exclude.read_bytes() == before["exclude"]
         assert managed_item.read_bytes() == before["managed"]

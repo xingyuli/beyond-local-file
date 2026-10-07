@@ -7,7 +7,7 @@ from click.testing import CliRunner
 from beyond_local_file.cli import cli
 from beyond_local_file.daemon.handlers import handle_request
 from beyond_local_file.git_manager import GitExcludeManager
-from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
+from beyond_local_file.operations.remove import RemoveOperation
 from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
 from tests.daemon_support import invoke_cli, invoke_with_daemon
 
@@ -470,7 +470,7 @@ def test_remove_dry_run_prefixes_config_resolution_errors(isolated_home: dict[st
 
 
 def test_remove_refuses_drifted_copy_projection_without_mutation(
-    tmp_path: Path, monkeypatch, isolated_home: dict[str, str], capsys
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
 ) -> None:
     """A copy whose bytes differ from the hub is refused; nothing is deleted."""
     hub = tmp_path / "lab-app"
@@ -500,17 +500,15 @@ def test_remove_refuses_drifted_copy_projection_without_mutation(
     monkeypatch.chdir(alpha)
     context = resolve_revlink_context(str(config_path), Path.cwd())
     assert not isinstance(context, RevlinkResolveError)
-    exit_code = RemoveOperation(
+    result = RemoveOperation(
         source=alpha_item,
         rel_path=Path("item.txt"),
         dry_run=False,
-        formatter=RemoveFormatter(dry_run=False),
         context=context,
     ).run()
-    captured = capsys.readouterr()
 
-    assert exit_code == 1
-    assert "does not match managed copy" in captured.out
+    assert result.exit_code == 1
+    assert any("does not match managed copy" in error for error in result.errors)
     assert config_path.read_bytes() == before["config"]
     assert exclude_file.read_bytes() == before["exclude"]
     assert hub_item.read_bytes() == before["hub"]

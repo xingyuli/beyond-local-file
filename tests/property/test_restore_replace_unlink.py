@@ -14,7 +14,7 @@ from pathlib import Path
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from beyond_local_file.operations.revlink import RestoreFormatter, RestoreOperation
+from beyond_local_file.operations.revlink import RestoreOperation
 from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
@@ -54,8 +54,6 @@ def test_replace_does_not_rmtree_symlink_target(
     file_content: bytes,
 ) -> None:
     """Verify that _replace removes the symlink with unlink, not rmtree.
-
-    **Validates: Requirements 4.1**
 
     For any symlink at ``source`` whose target is a real directory, invoking
     ``RestoreOperation._replace`` must leave the target directory intact after
@@ -110,7 +108,6 @@ def test_replace_does_not_rmtree_symlink_target(
             dest_root=dest_root,
             rel_path=Path(dir_name),
             dry_run=False,
-            formatter=RestoreFormatter(dry_run=False),
         )
         operation._replace(managed_dir)
 

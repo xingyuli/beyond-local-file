@@ -6,11 +6,11 @@ Covers:
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from beyond_local_file.operations.revlink import RestoreFormatter, RestoreOperation
+from beyond_local_file.operations.revlink import RestoreOperation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,25 +20,19 @@ from beyond_local_file.operations.revlink import RestoreFormatter, RestoreOperat
 def _make_operation(
     source: Path,
     dest_root: Path,
-) -> tuple[RestoreOperation, MagicMock]:
-    """Build a RestoreOperation with a mock formatter.
+) -> RestoreOperation:
+    """Build a RestoreOperation.
 
     Args:
         source: Source path (the symlink in CWD) for the operation.
         dest_root: Destination root (managed project path) for the operation.
-
-    Returns:
-        Tuple of (RestoreOperation, mock formatter).
     """
-    formatter = MagicMock(spec=RestoreFormatter)
-    op = RestoreOperation(
+    return RestoreOperation(
         source=source,
         dest_root=dest_root,
         rel_path=Path(source.name),
         dry_run=False,
-        formatter=formatter,
     )
-    return op, formatter
 
 
 def _make_symlink(link: Path, target: Path) -> None:
@@ -67,7 +61,7 @@ class TestRestoreCopyIoFailure:
         managed.write_text("managed content")
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
-        op, _formatter = _make_operation(source, managed_root)
+        op = _make_operation(source, managed_root)
 
         with (
             patch("beyond_local_file.operations.revlink.copy_projection", side_effect=OSError("disk full")),
@@ -79,22 +73,23 @@ class TestRestoreCopyIoFailure:
         assert managed.read_text() == "managed content"
 
     def test_leftover_symlink_restore_does_not_emit_checksum_steps(self, tmp_path: Path) -> None:
-        """Leftover-symlink restore does not MD5-verify after copy."""
+        """Leftover-symlink restore materializes the file without checksum fields."""
         managed_root = tmp_path / "managed"
         managed_root.mkdir()
         managed = managed_root / "data.txt"
         managed.write_text("managed content")
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
-        op, formatter = _make_operation(source, managed_root)
+        result = _make_operation(source, managed_root).run()
 
-        result = op.run()
-
-        assert result == 0
-        names = [call[0] for call in formatter.method_calls]
-        assert "computing_checksum" not in names
-        assert "checksum_ok" not in names
-        formatter.copying_back.assert_called()
+        assert result.exit_code == 0
+        assert result.leftover_symlink is True
+        assert result.errors == ()
+        assert result.source == source.as_posix()
+        assert result.managed == managed.as_posix()
+        assert source.is_file()
+        assert not source.is_symlink()
+        assert source.read_text() == "managed content"
 
 
 # ---------------------------------------------------------------------------
@@ -117,15 +112,16 @@ class TestPermissionErrorOnUnlink:
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
 
-        op, _ = _make_operation(source, tmp_path / "managed")
+        op = _make_operation(source, tmp_path / "managed")
 
         with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
             result = op._replace(managed)
 
-        assert result == 1
+        assert result is not None
+        assert result.exit_code == 1
 
     def test_permission_error_emits_error_message(self, tmp_path: Path) -> None:
-        """formatter.error is called with a permission-denied message.
+        """Permission-denied unlink is an error body on the result.
 
         Requirements: 4.2
         """
@@ -136,13 +132,14 @@ class TestPermissionErrorOnUnlink:
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
 
-        op, formatter = _make_operation(source, tmp_path / "managed")
+        op = _make_operation(source, tmp_path / "managed")
 
         with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
-            op._replace(managed)
+            result = op._replace(managed)
 
-        formatter.error.assert_called_once()
-        assert "Permission denied" in formatter.error.call_args[0][0]
+        assert result is not None
+        assert result.leftover_symlink is True
+        assert result.errors == (f"Permission denied removing symlink at {source}",)
 
     def test_permission_error_no_copy_attempted(self, tmp_path: Path) -> None:
         """No copy is attempted when symlink unlink fails with PermissionError.
@@ -158,14 +155,14 @@ class TestPermissionErrorOnUnlink:
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
 
-        op, formatter = _make_operation(source, tmp_path / "managed")
+        op = _make_operation(source, tmp_path / "managed")
 
         with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
-            op._replace(managed)
+            result = op._replace(managed)
 
-        # copying_back must never be called — no copy was attempted
-        formatter.copying_back.assert_not_called()
-        # managed copy must be untouched
+        assert result is not None
+        assert result.errors == (f"Permission denied removing symlink at {source}",)
+        assert source.is_symlink()
         assert managed.exists()
         assert managed.read_text() == "managed content"
 
@@ -182,9 +179,11 @@ class TestPermissionErrorOnUnlink:
         source = tmp_path / "data.txt"
         _make_symlink(source, managed)
 
-        op, _ = _make_operation(source, managed_root)
+        op = _make_operation(source, managed_root)
 
         with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
             result = op.run()
 
-        assert result == 1
+        assert result.exit_code == 1
+        assert result.leftover_symlink is True
+        assert result.errors == (f"Permission denied removing symlink at {source}",)

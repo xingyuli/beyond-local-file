@@ -1,205 +1,167 @@
-"""Unit tests for RestoreFormatter output.
+"""Unit tests for restore render output.
 
 Covers task 8.3:
-- Each RestoreFormatter method produces the expected string
+- Each restore story line produces the expected string
 - All methods produce [dry-run] prefix when dry_run=True
 """
 
-from pathlib import Path
-from unittest.mock import patch
+from beyond_local_file.operations.result import RestoreResult, render
 
-from beyond_local_file.operations.revlink import RestoreFormatter
 
-# ---------------------------------------------------------------------------
-# RestoreFormatter tests (Requirements 7.1-7.10)
-# ---------------------------------------------------------------------------
+def _restore_result(**fields: object) -> RestoreResult:
+    """Return a RestoreResult with lab-app / alpha / example stand-ins."""
+    values: dict[str, object] = {
+        "exit_code": 0,
+        "dry_run": False,
+        "errors": (),
+        "leftover_symlink": False,
+        "source": "/tmp/alpha/example",
+        "managed": "/tmp/lab-app/example",
+        "replica_deletes": (),
+        "git_excludes": (),
+        "config_removed": None,
+        "persist_warning": None,
+    }
+    values.update(fields)
+    return RestoreResult(**values)  # type: ignore[arg-type]
 
 
 class TestRestoreFormatterNoDryRun:
-    """Tests for RestoreFormatter with dry_run=False.
+    """Tests for render(RestoreResult) with dry_run=False.
 
     Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9
     """
-
-    def setup_method(self) -> None:
-        """Create a formatter with dry_run=False for each test."""
-        self.formatter = RestoreFormatter(dry_run=False)
 
     def test_removing_symlink(self) -> None:
         """removing_symlink emits the expected message without prefix.
 
         Requirements: 7.1
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.removing_symlink(Path("/some/path"))
-        mock_echo.assert_called_once_with("Removing symlink at /some/path")
+        text = render(_restore_result(leftover_symlink=True))
+        assert "Removing symlink at /tmp/alpha/example" in text
 
     def test_copying_back(self) -> None:
         """copying_back emits the expected message without prefix.
 
         Requirements: 7.2
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.copying_back(Path("/managed/file.txt"), Path("/cwd/file.txt"))
-        mock_echo.assert_called_once_with("Copying /managed/file.txt -> /cwd/file.txt")
+        text = render(_restore_result(leftover_symlink=True))
+        assert "Copying /tmp/lab-app/example -> /tmp/alpha/example" in text
+
+    def test_leaving_target_file(self) -> None:
+        """leaving_target_file emits the expected message without prefix."""
+        assert "Leaving target file in place: /tmp/alpha/example" in render(_restore_result())
 
     def test_managed_copy_deleted(self) -> None:
         """managed_copy_deleted emits the expected message without prefix.
 
         Requirements: 7.5
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.managed_copy_deleted(Path("/managed/file.txt"))
-        mock_echo.assert_called_once_with("✓ Managed copy deleted: /managed/file.txt")
-
-    def test_managed_copy_delete_failed(self) -> None:
-        """managed_copy_delete_failed emits the expected warning message without prefix.
-
-        Requirements: 7.6
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.managed_copy_delete_failed(Path("/managed/file.txt"))
-        mock_echo.assert_called_once_with("Warning: could not delete managed copy at /managed/file.txt")
+        assert "✓ Managed copy deleted: /tmp/lab-app/example" in render(_restore_result())
 
     def test_replica_copy_deleted(self) -> None:
         """replica_copy_deleted emits the expected message without prefix."""
-        with patch("click.echo") as mock_echo:
-            self.formatter.replica_copy_deleted(Path("/example/file.txt"))
-        mock_echo.assert_called_once_with("Deleted replica copy: /example/file.txt")
-
-    def test_replica_copy_delete_failed(self) -> None:
-        """replica_copy_delete_failed emits the expected warning without prefix."""
-        with patch("click.echo") as mock_echo:
-            self.formatter.replica_copy_delete_failed(Path("/example/file.txt"))
-        mock_echo.assert_called_once_with("Warning: could not delete replica copy at /example/file.txt")
+        text = render(_restore_result(replica_deletes=("/tmp/example/example",)))
+        assert "Deleted replica copy: /tmp/example/example" in text
 
     def test_git_exclude_removed(self) -> None:
         """git_exclude_removed emits the expected message without prefix.
 
         Requirements: 7.7
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.git_exclude_removed("myfile.txt")
-        mock_echo.assert_called_once_with("Removed 'myfile.txt' from .git/info/exclude")
+        text = render(_restore_result(git_excludes=(("example", "removed"),)))
+        assert "Removed 'example' from .git/info/exclude" in text
 
     def test_git_exclude_not_found(self) -> None:
         """git_exclude_not_found emits the expected message without prefix.
 
         Requirements: 7.8
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.git_exclude_not_found("myfile.txt")
-        mock_echo.assert_called_once_with("'myfile.txt' not in .git/info/exclude")
+        text = render(_restore_result(git_excludes=(("example", "not_found"),)))
+        assert "'example' not in .git/info/exclude" in text
 
     def test_config_entry_removed(self) -> None:
         """config_entry_removed emits the expected message without prefix.
 
         Requirements: 7.9
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.config_entry_removed("myfile.txt")
-        mock_echo.assert_called_once_with("Removed 'myfile.txt' from config subpath list")
+        text = render(_restore_result(config_removed="example"))
+        assert "Removed 'example' from config subpath list" in text
 
     def test_error(self) -> None:
         """error emits the expected message without prefix.
 
         Requirements: 7.1-7.9 (error path)
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.error("something went wrong")
-        mock_echo.assert_called_once_with("Error: something went wrong")
+        assert render(_restore_result(exit_code=1, errors=("something went wrong",))) == (
+            "Error: something went wrong\n"
+        )
 
 
 class TestRestoreFormatterDryRun:
-    """Tests for RestoreFormatter with dry_run=True — all output prefixed with [dry-run].
+    """Tests for render(RestoreResult) with dry_run=True — all output prefixed with [dry-run].
 
     Requirements: 7.10
     """
-
-    def setup_method(self) -> None:
-        """Create a formatter with dry_run=True for each test."""
-        self.formatter = RestoreFormatter(dry_run=True)
 
     def test_removing_symlink_dry_run(self) -> None:
         """removing_symlink emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.1, 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.removing_symlink(Path("/some/path"))
-        mock_echo.assert_called_once_with("[dry-run] Removing symlink at /some/path")
+        text = render(_restore_result(dry_run=True, leftover_symlink=True))
+        assert "[dry-run] Removing symlink at /tmp/alpha/example" in text
 
     def test_copying_back_dry_run(self) -> None:
         """copying_back emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.2, 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.copying_back(Path("/managed/file.txt"), Path("/cwd/file.txt"))
-        mock_echo.assert_called_once_with("[dry-run] Copying /managed/file.txt -> /cwd/file.txt")
+        text = render(_restore_result(dry_run=True, leftover_symlink=True))
+        assert "[dry-run] Copying /tmp/lab-app/example -> /tmp/alpha/example" in text
 
     def test_managed_copy_deleted_dry_run(self) -> None:
         """managed_copy_deleted emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.5, 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.managed_copy_deleted(Path("/managed/file.txt"))
-        mock_echo.assert_called_once_with("[dry-run] ✓ Managed copy deleted: /managed/file.txt")
-
-    def test_managed_copy_delete_failed_dry_run(self) -> None:
-        """managed_copy_delete_failed emits [dry-run] prefix when dry_run=True.
-
-        Requirements: 7.6, 7.10
-        """
-        with patch("click.echo") as mock_echo:
-            self.formatter.managed_copy_delete_failed(Path("/managed/file.txt"))
-        mock_echo.assert_called_once_with("[dry-run] Warning: could not delete managed copy at /managed/file.txt")
+        text = render(_restore_result(dry_run=True))
+        assert "[dry-run] ✓ Managed copy deleted: /tmp/lab-app/example" in text
 
     def test_replica_copy_deleted_dry_run(self) -> None:
         """replica_copy_deleted emits [dry-run] prefix when dry_run=True."""
-        with patch("click.echo") as mock_echo:
-            self.formatter.replica_copy_deleted(Path("/example/file.txt"))
-        mock_echo.assert_called_once_with("[dry-run] Deleted replica copy: /example/file.txt")
-
-    def test_replica_copy_delete_failed_dry_run(self) -> None:
-        """replica_copy_delete_failed emits [dry-run] prefix when dry_run=True."""
-        with patch("click.echo") as mock_echo:
-            self.formatter.replica_copy_delete_failed(Path("/example/file.txt"))
-        mock_echo.assert_called_once_with("[dry-run] Warning: could not delete replica copy at /example/file.txt")
+        text = render(_restore_result(dry_run=True, replica_deletes=("/tmp/example/example",)))
+        assert "[dry-run] Deleted replica copy: /tmp/example/example" in text
 
     def test_git_exclude_removed_dry_run(self) -> None:
         """git_exclude_removed emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.7, 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.git_exclude_removed("myfile.txt")
-        mock_echo.assert_called_once_with("[dry-run] Removed 'myfile.txt' from .git/info/exclude")
+        text = render(_restore_result(dry_run=True, git_excludes=(("example", "removed"),)))
+        assert "[dry-run] Removed 'example' from .git/info/exclude" in text
 
     def test_git_exclude_not_found_dry_run(self) -> None:
         """git_exclude_not_found emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.8, 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.git_exclude_not_found("myfile.txt")
-        mock_echo.assert_called_once_with("[dry-run] 'myfile.txt' not in .git/info/exclude")
+        text = render(_restore_result(dry_run=True, git_excludes=(("example", "not_found"),)))
+        assert "[dry-run] 'example' not in .git/info/exclude" in text
 
     def test_config_entry_removed_dry_run(self) -> None:
         """config_entry_removed emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.9, 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.config_entry_removed("myfile.txt")
-        mock_echo.assert_called_once_with("[dry-run] Removed 'myfile.txt' from config subpath list")
+        text = render(_restore_result(dry_run=True, config_removed="example"))
+        assert "[dry-run] Removed 'example' from config subpath list" in text
 
     def test_error_dry_run(self) -> None:
         """error emits [dry-run] prefix when dry_run=True.
 
         Requirements: 7.10
         """
-        with patch("click.echo") as mock_echo:
-            self.formatter.error("something went wrong")
-        mock_echo.assert_called_once_with("[dry-run] Error: something went wrong")
+        assert render(_restore_result(exit_code=1, dry_run=True, errors=("something went wrong",))) == (
+            "[dry-run] Error: something went wrong\n"
+        )
