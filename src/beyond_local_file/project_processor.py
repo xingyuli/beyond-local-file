@@ -1,6 +1,6 @@
 """Project processing utilities for CLI commands.
 
-This module handles path resolution and project orchestration.
+This module resolves revlink contribution-source context.
 Operation logic lives in the ``operations`` package — one module per subcommand.
 """
 
@@ -14,8 +14,6 @@ import click
 from .configuration_set import ConfigError, configuration_set_for_shell
 from .contribution import contribution_owner, projects_targeting
 from .model.config import ConfigProject
-from .model.translator import translate_config_to_mapping_units
-from .operations import CmdOperation
 from .operations.revlink import RevlinkContext
 
 
@@ -146,51 +144,6 @@ def _disambiguate_revlink_project(
         return owner
     names = ", ".join(candidate.managed_project_name for candidate in matches)
     return RevlinkResolveError(message=f"Ambiguous: multiple projects target {cwd}: {names}")
-
-
-class ProjectProcessor:
-    """Orchestrates processing of all projects for a given CLI operation.
-
-    Iterates over all mapping units derived from the config and delegates
-    execution to the provided :class:`~beyond_local_file.operations.CmdOperation`.
-    """
-
-    @staticmethod
-    def process_all_mapping_units(
-        config_projects: dict[str, ConfigProject],
-        operation: CmdOperation,
-        skip_invalid: bool = True,
-    ) -> bool:
-        """Process all projects using new model structure with translation layer.
-
-        Args:
-            config_projects: Dictionary of ConfigProject instances.
-            operation: The operation to execute for each mapping unit.
-            skip_invalid: Whether to skip invalid projects or stop processing.
-
-        Returns:
-            True if all operations completed, False if aborted.
-        """
-        mapping_units = translate_config_to_mapping_units(config_projects)
-
-        for unit in mapping_units:
-            if not unit.managed_project_path.exists():
-                click.echo(f"Project directory does not exist: {unit.managed_project_path}")
-                if not skip_invalid:
-                    return False
-                continue
-
-            if not unit.target_project_path.exists():
-                click.echo(f"Target directory does not exist: {unit.target_project_path}")
-                continue
-
-            if operation.verbose_progress:
-                click.echo(f"\nProcessing {unit.display_name} -> {unit.target_project_path}")
-
-            if not operation.execute_unit(unit):
-                return False
-
-        return True
 
 
 def _resolve_project_from_cwd(

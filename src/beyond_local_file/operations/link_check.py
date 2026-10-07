@@ -1,21 +1,25 @@
-"""link check subcommand — operation logic and output formatting."""
+"""link check: projects x baseline to rows, plus render adapters."""
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
+from contextlib import redirect_stdout
 from dataclasses import dataclass, field
+from io import StringIO
 from pathlib import Path
 
-import click
 from rich.console import Console
 from rich.table import Table
 
 from ..daemon.store import BaselineTrees
 from ..git_manager import GitExcludeManager
+from ..model.config import ConfigProject
 from ..model.processing import MappingUnit
+from ..model.translator import translate_config_to_mapping_units
 from ..options import OutputFormat
 from ..sync_state import SyncStatus, detect_status
-from .base import CmdOperation
+from .result import CheckResult, CheckRow
 
 type ItemProgress = Callable[[int, int, str], None]
 
@@ -50,27 +54,126 @@ class GitExcludeStatus:
     extra: set[str] = field(default_factory=set)
 
 
-@dataclass
-class MappingUnitResults:
-    """Raw results collected from a single mapping unit during a check."""
+def check(  # noqa: PLR0913
+    projects: dict[str, ConfigProject],
+    baseline: BaselineTrees | None,
+    *,
+    extra_exclude: bool,
+    output_format: OutputFormat,
+    on_progress: ItemProgress | None = None,
+    unit_count: int = 0,
+) -> CheckResult:
+    """Check copy projections and git excludes for *projects*.
 
-    unit: MappingUnit
-    copy_link_result: LinkCheckResult | None = None
-    git_result: GitExcludeStatus | None = None
+    Always walks mapping units and collects skip rows. Table vs verbose is a
+    later :func:`~beyond_local_file.operations.result.render` of the same rows.
+    Progress is streamed through *on_progress* regardless of output format.
+
+    Args:
+        projects: Managed projects to check.
+        baseline: Baseline trees for mismatch labels, or ``None``.
+        extra_exclude: Whether extras belong in the later render.
+        output_format: Table or verbose; stored so render needs no request.
+        on_progress: Optional ``(index, total, item)`` callback per item.
+        unit_count: Progress total. ``0`` uses the number of mapping units.
+
+    Returns:
+        Check rows for every mapping unit, including skipped directories.
+    """
+    _mark_check_started(projects)
+    with redirect_stdout(StringIO()):
+        units = translate_config_to_mapping_units(projects)
+    total = unit_count if unit_count else len(units)
+    rows: list[CheckRow] = []
+    unit_index = 0
+    for unit in units:
+        if not unit.managed_project_path.exists():
+            rows.append(
+                CheckRow(
+                    project_name=unit.display_name,
+                    target_path=unit.managed_project_path.as_posix(),
+                    skip="missing_project",
+                    copy=None,
+                    git=None,
+                )
+            )
+            continue
+        if not unit.target_project_path.exists():
+            rows.append(
+                CheckRow(
+                    project_name=unit.display_name,
+                    target_path=unit.target_project_path.as_posix(),
+                    skip="missing_target",
+                    copy=None,
+                    git=None,
+                )
+            )
+            continue
+        unit_index += 1
+        copy = _check_copies(
+            unit,
+            baseline,
+            on_progress=on_progress,
+            unit_index=unit_index,
+            unit_count=total,
+        )
+        git = _check_git_excludes(unit.target_project_path, {item.name for item in unit.items})
+        rows.append(
+            CheckRow(
+                project_name=unit.display_name,
+                target_path=unit.target_project_path.as_posix(),
+                skip=None,
+                copy=copy,
+                git=git,
+            )
+        )
+    return CheckResult(
+        exit_code=0,
+        extra_exclude=extra_exclude,
+        output_format=output_format,
+        rows=tuple(rows),
+        not_found=None,
+    )
 
 
-@dataclass
-class CheckRow:
-    """A single row of check results ready for table rendering."""
+def check_concat(parts: list[CheckResult]) -> CheckResult:
+    """Concatenate per-worker-unit check results into one result.
 
-    project_name: str
-    target_path: Path
-    copy_link_result: LinkCheckResult | None = None
-    git_result: GitExcludeStatus | None = None
+    Args:
+        parts: Check results in worker-unit order.
+
+    Returns:
+        One result whose rows are *parts* concatenated. Flags come from the
+        first part. An empty list is an empty table result.
+    """
+    if not parts:
+        return CheckResult(
+            exit_code=0,
+            extra_exclude=False,
+            output_format=OutputFormat.TABLE,
+            rows=(),
+            not_found=None,
+        )
+    rows: list[CheckRow] = []
+    not_found: str | None = None
+    exit_code = 0
+    for part in parts:
+        rows.extend(part.rows)
+        if part.not_found is not None:
+            not_found = part.not_found
+        if part.exit_code != 0:
+            exit_code = part.exit_code
+    return CheckResult(
+        exit_code=exit_code,
+        extra_exclude=parts[0].extra_exclude,
+        output_format=parts[0].output_format,
+        rows=tuple(rows),
+        not_found=not_found,
+    )
 
 
 class LinkCheckFormatter:
-    """Formats and prints detailed (verbose) check results for a single project."""
+    """Formats detailed (verbose) check results for a single row."""
 
     def __init__(
         self,
@@ -82,86 +185,74 @@ class LinkCheckFormatter:
         self.git_result = git_result
         self.show_extra = show_extra
 
-    def print(self, project_name: str, target_path: Path) -> None:
-        """Print all output lines for this check result."""
-        click.echo(f"\nChecking {project_name} -> {target_path}")
-        click.echo("=" * 60)
-        self._format_link_status()
-        self._format_copy_details()
-        self._format_exclude_status()
+    def render(self, project_name: str, target_path: str) -> str:
+        """Return the verbose block for this row, including trailing newline."""
+        lines = [
+            f"\nChecking {project_name} -> {target_path}",
+            "=" * 60,
+            *self._link_status_lines(),
+            *self._copy_detail_lines(),
+            *self._exclude_status_lines(),
+        ]
+        return "\n".join(lines) + "\n"
 
-    def _format_link_status(self) -> None:
+    def _link_status_lines(self) -> list[str]:
         has_issues = self.link_result.missing or self.link_result.incorrect
         if has_issues:
-            click.echo("\nCopy Status:")
-            click.echo(f"  Exists: {len(self.link_result.exists)}")
+            lines = [
+                "\nCopy Status:",
+                f"  Exists: {len(self.link_result.exists)}",
+            ]
             for item in self.link_result.exists:
-                click.echo(f"    ✓ {item}")
+                lines.append(f"    ✓ {item}")
             if self.link_result.incorrect:
-                click.echo(f"  Incorrect: {len(self.link_result.incorrect)}")
+                lines.append(f"  Incorrect: {len(self.link_result.incorrect)}")
                 for item in self.link_result.incorrect:
-                    click.echo(f"    ⚠ {item} (not a copy)")
+                    lines.append(f"    ⚠ {item} (not a copy)")
             if self.link_result.missing:
-                click.echo(f"  Missing: {len(self.link_result.missing)}")
+                lines.append(f"  Missing: {len(self.link_result.missing)}")
                 for item in self.link_result.missing:
-                    click.echo(f"    ✗ {item}")
-        else:
-            click.echo("\nCopy Status: ✓")
+                    lines.append(f"    ✗ {item}")
+            return lines
+        return ["\nCopy Status: ✓"]
 
-    def _format_copy_details(self) -> None:
+    def _copy_detail_lines(self) -> list[str]:
         details = self.link_result.details
-        click.echo("\nCopy Sync Status:")
+        lines = ["\nCopy Sync Status:"]
         for item in details.in_sync:
-            click.echo(f"  ✓ {item} (in sync)")
+            lines.append(f"  ✓ {item} (in sync)")
         for item in details.mismatched:
-            click.echo(f"  ⚠ {item} (mismatch)")
+            lines.append(f"  ⚠ {item} (mismatch)")
         for item in details.managed_changed:
-            click.echo(f"  ⚠ {item} (managed changed)")
+            lines.append(f"  ⚠ {item} (managed changed)")
         for item in details.target_changed:
-            click.echo(f"  ⚠ {item} (target changed)")
+            lines.append(f"  ⚠ {item} (target changed)")
         for item in details.both_changed:
-            click.echo(f"  ✗ {item} (conflict - both changed)")
+            lines.append(f"  ✗ {item} (conflict - both changed)")
+        return lines
 
-    def _format_exclude_status(self) -> None:
+    def _exclude_status_lines(self) -> list[str]:
         if self.git_result is None:
-            click.echo("\nTarget is not a git repository")
-            return
+            return ["\nTarget is not a git repository"]
         has_exclude_data = (
             self.git_result.present or self.git_result.missing or (self.show_extra and self.git_result.extra)
         )
         if not has_exclude_data:
-            click.echo("\nTarget is not a git repository")
-            return
+            return ["\nTarget is not a git repository"]
         if self.git_result.missing:
-            click.echo("\nGit Exclude Status:")
-            click.echo(f"  Missing entries: {len(self.git_result.missing)}")
+            lines = [
+                "\nGit Exclude Status:",
+                f"  Missing entries: {len(self.git_result.missing)}",
+            ]
             for item in sorted(self.git_result.missing):
-                click.echo(f"    ✗ {item}")
+                lines.append(f"    ✗ {item}")
         else:
-            click.echo("\nGit Exclude Status: ✓")
+            lines = ["\nGit Exclude Status: ✓"]
         if self.show_extra and self.git_result.extra:
-            click.echo(f"  Extra entries: {len(self.git_result.extra)}")
+            lines.append(f"  Extra entries: {len(self.git_result.extra)}")
             for item in sorted(self.git_result.extra):
-                click.echo(f"    ! {item}")
-
-
-class CheckTableRenderer:
-    """Transforms raw mapping-unit results into table rows."""
-
-    def __init__(self, results: list[MappingUnitResults]) -> None:
-        self.results = results
-
-    def transform(self) -> list[CheckRow]:
-        """Transform raw results into CheckRow objects for table rendering."""
-        return [
-            CheckRow(
-                project_name=result.unit.display_name,
-                target_path=result.unit.target_project_path,
-                copy_link_result=result.copy_link_result,
-                git_result=result.git_result,
-            )
-            for result in self.results
-        ]
+                lines.append(f"    ! {item}")
+        return lines
 
 
 class CheckTableFormatter:
@@ -171,9 +262,10 @@ class CheckTableFormatter:
         self.rows = rows
         self.show_extra = show_extra
 
-    def render(self) -> None:
-        """Render the table and optional extra-exclude section to stdout."""
-        console = Console()
+    def render(self) -> str:
+        """Return the table and optional extra-exclude section."""
+        buffer = StringIO()
+        console = Console(file=buffer, force_terminal=False, color_system=None, highlight=False)
         table = Table(show_header=True, header_style="bold")
         table.add_column("Project")
         table.add_column("Exclude", justify="center")
@@ -182,13 +274,14 @@ class CheckTableFormatter:
         for row in self.rows:
             table.add_row(
                 row.project_name,
-                self._exclude_cell(row.git_result),
-                self._copy_cell(row.copy_link_result),
-                str(row.target_path),
+                self._exclude_cell(row.git),
+                self._copy_cell(row.copy),
+                row.target_path,
             )
         console.print(table)
         if self.show_extra:
             self._render_extra_entries(console)
+        return buffer.getvalue()
 
     def _exclude_cell(self, git_result: GitExcludeStatus | None) -> str:
         if git_result is None:
@@ -232,11 +325,7 @@ class CheckTableFormatter:
         return "[green]✓[/green]"
 
     def _render_extra_entries(self, console: Console) -> None:
-        extras = [
-            (row.project_name, sorted(row.git_result.extra))
-            for row in self.rows
-            if row.git_result and row.git_result.extra
-        ]
+        extras = [(row.project_name, sorted(row.git.extra)) for row in self.rows if row.git and row.git.extra]
         if not extras:
             return
         console.print("\nExtra exclude entries:")
@@ -244,94 +333,43 @@ class CheckTableFormatter:
             console.print(f"  {project_name}: {', '.join(entries)}")
 
 
-class CheckOperation(CmdOperation):
-    """Check live copy projections and git exclude entries per mapping unit."""
-
-    def __init__(
-        self,
-        config_dir: Path,
-        show_extra: bool = False,
-        output_format: OutputFormat = OutputFormat.TABLE,
-    ) -> None:
-        self.config_dir = config_dir
-        self.show_extra = show_extra
-        self.output_format = output_format
-        self.baseline: BaselineTrees | None = None
-        self.on_progress: ItemProgress | None = None
-        self.unit_count = 0
-        self._unit_index = 0
-        self._results: list[MappingUnitResults] = []
-
-    @property
-    def results(self) -> list[MappingUnitResults]:
-        """Return collected per-mapping-unit check results."""
-        return list(self._results)
-
-    def extend_results(self, results: list[MappingUnitResults]) -> None:
-        """Append *results* from another check run for a later table render."""
-        self._results.extend(results)
-
-    @property
-    def verbose_progress(self) -> bool:
-        """Whether to print per-target progress lines during processing."""
-        return self.output_format == OutputFormat.VERBOSE
-
-    def execute_unit(self, unit: MappingUnit) -> bool:
-        """Check one mapping unit's copy projections and git exclude."""
-        self._unit_index += 1
-        item_names = {item.name for item in unit.items}
-        link_result = self._check_copies(unit)
-        git_result = _check_git_excludes(unit.target_project_path, item_names)
-        if self.output_format == OutputFormat.VERBOSE:
-            LinkCheckFormatter(link_result, git_result, self.show_extra).print(
-                unit.display_name, unit.target_project_path
-            )
-        else:
-            self._results.append(MappingUnitResults(unit=unit, copy_link_result=link_result, git_result=git_result))
-        return True
-
-    def _check_copies(self, unit: MappingUnit) -> LinkCheckResult:
-        details = CopyCheckDetails()
-        in_sync: list[str] = []
-        missing: list[str] = []
-        incorrect: list[str] = []
-        for item in unit.items:
-            self._emit(item.name)
-            target_file = unit.target_project_path / item.name
-            if target_file.is_symlink():
-                incorrect.append(item.name)
-                continue
-            if not target_file.exists():
-                missing.append(item.name)
-                continue
-            baseline_view = (
-                (self.baseline, unit.managed_project_path, unit.target_project_path, item.name)
-                if self.baseline is not None
-                else None
-            )
-            status = detect_status(item.path, target_file, baseline_view)
-            status_map = {
-                SyncStatus.IN_SYNC: details.in_sync,
-                SyncStatus.MISMATCH: details.mismatched,
-                SyncStatus.MANAGED_CHANGED: details.managed_changed,
-                SyncStatus.TARGET_CHANGED: details.target_changed,
-                SyncStatus.BOTH_CHANGED: details.both_changed,
-            }
-            status_map[status].append(item.name)
-            if status == SyncStatus.IN_SYNC:
-                in_sync.append(item.name)
-        return LinkCheckResult(exists=in_sync, missing=missing, incorrect=incorrect, details=details)
-
-    def render(self) -> None:
-        """Render collected results as a table."""
-        if self.output_format != OutputFormat.VERBOSE and self._results:
-            rows = CheckTableRenderer(self._results).transform()
-            CheckTableFormatter(rows, self.show_extra).render()
-
-    def _emit(self, item_name: str) -> None:
-        if self.on_progress is None or self.output_format == OutputFormat.VERBOSE:
-            return
-        self.on_progress(self._unit_index, self.unit_count, item_name)
+def _check_copies(
+    unit: MappingUnit,
+    baseline: BaselineTrees | None,
+    *,
+    on_progress: ItemProgress | None,
+    unit_index: int,
+    unit_count: int,
+) -> LinkCheckResult:
+    details = CopyCheckDetails()
+    in_sync: list[str] = []
+    missing: list[str] = []
+    incorrect: list[str] = []
+    for item in unit.items:
+        if on_progress is not None:
+            on_progress(unit_index, unit_count, item.name)
+        target_file = unit.target_project_path / item.name
+        if target_file.is_symlink():
+            incorrect.append(item.name)
+            continue
+        if not target_file.exists():
+            missing.append(item.name)
+            continue
+        baseline_view = (
+            (baseline, unit.managed_project_path, unit.target_project_path, item.name) if baseline is not None else None
+        )
+        status = detect_status(item.path, target_file, baseline_view)
+        status_map = {
+            SyncStatus.IN_SYNC: details.in_sync,
+            SyncStatus.MISMATCH: details.mismatched,
+            SyncStatus.MANAGED_CHANGED: details.managed_changed,
+            SyncStatus.TARGET_CHANGED: details.target_changed,
+            SyncStatus.BOTH_CHANGED: details.both_changed,
+        }
+        status_map[status].append(item.name)
+        if status == SyncStatus.IN_SYNC:
+            in_sync.append(item.name)
+    return LinkCheckResult(exists=in_sync, missing=missing, incorrect=incorrect, details=details)
 
 
 def _check_git_excludes(target_path: Path, item_names: set[str]) -> GitExcludeStatus | None:
@@ -344,3 +382,13 @@ def _check_git_excludes(target_path: Path, item_names: set[str]) -> GitExcludeSt
         missing=item_names - exclude_entries,
         extra=exclude_entries - item_names,
     )
+
+
+def _mark_check_started(projects: dict[str, ConfigProject]) -> None:
+    raw = os.environ.get("BLF_TEST_CHECK_STARTED")
+    if not raw:
+        return
+    root = Path(raw)
+    root.mkdir(parents=True, exist_ok=True)
+    for project in projects.values():
+        (root / project.managed_project_name).write_text("1", encoding="utf-8")

@@ -17,6 +17,7 @@ import pytest
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.client import send_when_up
 from beyond_local_file.daemon.handlers import handle_request
+from beyond_local_file.operations.result import payload_text
 from tests.daemon_support import daemon_running, invoke_cli, start_daemon, stop_daemon
 
 _READY_WAIT_S = 15.0
@@ -118,6 +119,7 @@ def test_check_handler_streams_checking_status_then_table(
     response = handle_request(config_path, {"op": "check"}, on_progress=progress.append)
 
     assert response["exit_code"] == 0
+    assert response.get("kind") == "check"
     assert progress
     names: list[str] = []
     for line in progress:
@@ -130,7 +132,7 @@ def test_check_handler_streams_checking_status_then_table(
         assert str(target) not in match.group(0)
     assert "shared.txt" in names
     assert "nested" in names
-    stdout = str(response.get("stdout") or "")
+    stdout = payload_text(response)
     assert "proj-0" in stdout
     assert "Copy" in stdout
     assert "Checking " not in stdout
@@ -142,7 +144,7 @@ def test_check_handler_verbose_is_line_oriented_without_progress(
     tmp_path: Path,
     isolated_home: dict[str, str],
 ) -> None:
-    """Verbose check stays line-oriented and does not stream a status line."""
+    """Verbose check stays line-oriented; progress is streamed separately."""
     del isolated_home
     config_path, _managed, target = _write_workspace(tmp_path)
     (target / "shared.txt").write_text("hub-0")
@@ -158,13 +160,22 @@ def test_check_handler_verbose_is_line_oriented_without_progress(
     )
 
     assert response["exit_code"] == 0
-    assert progress == []
-    stdout = str(response.get("stdout") or "")
+    assert response.get("kind") == "check"
+    assert progress
+    names: list[str] = []
+    for line in progress:
+        match = _CHECK_LINE.fullmatch(line)
+        assert match, line
+        names.append(match.group(3))
+    assert "shared.txt" in names
+    assert "nested" in names
+    stdout = payload_text(response)
     assert "Copy Status" in stdout
     assert "Copy Sync Status" in stdout
     assert "(in sync)" in stdout
     assert "┌" not in stdout
     assert not _CHECK_LINE.search(stdout)
+    assert "Processing " not in stdout
 
 
 def test_daemon_check_live_match_writes_no_sync_state(
@@ -206,7 +217,8 @@ def test_daemon_check_labels_mismatch_from_baseline_not_sync_state(
     )
 
     assert response["exit_code"] == 0
-    stdout = str(response.get("stdout") or "")
+    assert response.get("kind") == "check"
+    stdout = payload_text(response)
     assert "shared.txt" in stdout
     assert "(managed changed)" in stdout
     assert "nested" in stdout
@@ -315,12 +327,13 @@ def test_daemon_ipc_streams_check_progress_on_existing_connection(
         progress: list[str] = []
         response = send_when_up(config_path, {"op": "check"}, on_progress=progress.append)
         assert int(response.get("exit_code", 1)) == 0
+        assert response.get("kind") == "check"
         assert progress
         checking = [line for line in progress if _CHECK_LINE.fullmatch(line)]
         assert checking
         assert any(line.startswith("Waiting · proj-0") for line in progress)
         assert any(line.startswith("Checking ") and line.endswith(" · proj-0") for line in progress)
         assert "Done · proj-0" in progress
-        stdout = str(response.get("stdout") or "")
+        stdout = payload_text(response)
         assert "proj-0" in stdout
         assert "Checking " not in stdout

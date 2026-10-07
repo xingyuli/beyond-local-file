@@ -12,10 +12,9 @@ import click
 
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.model.config import ConfigProject
-from beyond_local_file.model.translator import translate_config_to_mapping_units
-from beyond_local_file.operations.link_check import CheckOperation, MappingUnitResults
+from beyond_local_file.operations.link_check import check
 from beyond_local_file.operations.remove import RemoveFormatter, RemoveOperation
-from beyond_local_file.operations.result import FailedResult, to_ipc
+from beyond_local_file.operations.result import CheckResult, FailedResult, to_ipc
 from beyond_local_file.operations.revlink import (
     CreateFormatter,
     CreateOperation,
@@ -25,7 +24,6 @@ from beyond_local_file.operations.revlink import (
 )
 from beyond_local_file.options import OutputFormat
 from beyond_local_file.project_processor import (
-    ProjectProcessor,
     RevlinkResolveError,
     resolve_revlink_context,
 )
@@ -60,15 +58,16 @@ def handle_request(
             the yaml drop. When omitted, mutating shells build a throwaway observer.
 
     Returns:
-        ``exit_code`` and captured ``stdout``, or a failed envelope for an
-        unknown operation.
+        A check or failed envelope, or ``exit_code`` and captured ``stdout``
+        for mutating ops that still print.
     """
     op = request.get("op")
     created: dict[str, LiveSync] = {}
     if live is not None:
         created["live"] = live
+    if op == "check":
+        return _handle_check(config_path, request, on_progress)
     dispatch: dict[str, Handler] = {
-        "check": lambda path, req: _handle_check(path, req, on_progress),
         "create": lambda path, req: _handle_create(path, req, created),
         "restore": lambda path, req: _handle_restore(path, req, created),
         "remove": lambda path, req: _handle_remove(path, req, created),
@@ -109,96 +108,40 @@ def _handle_check(
     config_path: Path,
     request: Request,
     on_progress: ProgressCallback | None = None,
-) -> int:
+) -> Response:
     projects = load_snapshot(config_path)
     if projects is None:
         projects = ConfigurationSet(config_path).projects()
+    extra_exclude = bool(request.get("extra_exclude"))
+    output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
     project_name = request.get("project_name")
     if project_name:
         projects = {key: project for key, project in projects.items() if project.managed_project_name == project_name}
         if not projects:
-            click.echo(f"Project '{project_name}' not found in config")
-            return 1
-    extra_exclude = bool(request.get("extra_exclude"))
-    output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
-    units = translate_config_to_mapping_units(projects)
+            return to_ipc(
+                CheckResult(
+                    exit_code=1,
+                    extra_exclude=extra_exclude,
+                    output_format=output_format,
+                    rows=(),
+                    not_found=f"Project '{project_name}' not found in config",
+                )
+            )
 
     def emit_item(index: int, total: int, item: str) -> None:
         if on_progress is None:
             return
         on_progress(format_status_line("Checking", index, total, item))
 
-    operation = CheckOperation(ConfigurationSet(config_path).run_directory, extra_exclude, output_format)
-    operation.baseline = load_baseline(config_path)
-    operation.on_progress = emit_item
-    operation.unit_count = len(units)
-    ProjectProcessor.process_all_mapping_units(projects, operation)
-    operation.render()
-    return 0
-
-
-def collect_check_results(
-    config_path: Path,
-    projects: dict[str, ConfigProject],
-    request: Request,
-    on_item: Callable[[int, int, str], None] | None,
-    unit_count: int,
-) -> tuple[list[MappingUnitResults], str]:
-    """Check *projects* and return mapping-unit rows plus captured stdout.
-
-    Args:
-        config_path: Set identity path.
-        projects: Managed projects this worker unit should check.
-        request: Original check request (format and extra-exclude flags).
-        on_item: Optional ``(index, total, item)`` progress callback.
-        unit_count: Mapping-unit total for progress (set-wide when fan-out).
-
-    Returns:
-        Collected rows and any verbose stdout printed during the check.
-    """
-    extra_exclude = bool(request.get("extra_exclude"))
-    output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
-    _mark_check_started(projects)
-    buffer = StringIO()
-    with redirect_stdout(buffer):
-        operation = CheckOperation(ConfigurationSet(config_path).run_directory, extra_exclude, output_format)
-        operation.baseline = load_baseline(config_path)
-        operation.on_progress = on_item
-        operation.unit_count = unit_count
-        ProjectProcessor.process_all_mapping_units(projects, operation)
-    return operation.results, buffer.getvalue()
-
-
-def render_check_results(results: list[MappingUnitResults], request: Request) -> str:
-    """Render merged check rows as the final table.
-
-    Args:
-        results: Rows from every worker unit.
-        request: Original check request (format and extra-exclude flags).
-
-    Returns:
-        Table stdout, or empty when the format is verbose (already printed).
-    """
-    extra_exclude = bool(request.get("extra_exclude"))
-    output_format = OutputFormat(str(request.get("output_format") or OutputFormat.TABLE))
-    if output_format == OutputFormat.VERBOSE or not results:
-        return ""
-    operation = CheckOperation(Path("."), extra_exclude, output_format)
-    operation.extend_results(results)
-    buffer = StringIO()
-    with redirect_stdout(buffer):
-        operation.render()
-    return buffer.getvalue()
-
-
-def _mark_check_started(projects: dict[str, ConfigProject]) -> None:
-    raw = os.environ.get("BLF_TEST_CHECK_STARTED")
-    if not raw:
-        return
-    root = Path(raw)
-    root.mkdir(parents=True, exist_ok=True)
-    for project in projects.values():
-        (root / project.managed_project_name).write_text("1", encoding="utf-8")
+    return to_ipc(
+        check(
+            projects,
+            load_baseline(config_path),
+            extra_exclude=extra_exclude,
+            output_format=output_format,
+            on_progress=emit_item,
+        )
+    )
 
 
 def _handle_create(config_path: Path, request: Request, created: dict[str, LiveSync]) -> int:

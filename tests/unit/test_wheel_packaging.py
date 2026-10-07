@@ -33,7 +33,6 @@ REQUIRED_WHEEL_MODULES = [
     "beyond_local_file/model/translator.py",
     # operations subpackage
     "beyond_local_file/operations/__init__.py",
-    "beyond_local_file/operations/base.py",
     "beyond_local_file/operations/daemon.py",
     "beyond_local_file/operations/link_check.py",
     "beyond_local_file/operations/result.py",

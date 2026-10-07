@@ -17,11 +17,12 @@ from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
-from beyond_local_file.operations.link_check import MappingUnitResults
-from beyond_local_file.operations.result import FailedResult, to_ipc
+from beyond_local_file.operations.link_check import check, check_concat
+from beyond_local_file.operations.result import CheckResult, FailedResult, to_ipc
+from beyond_local_file.options import OutputFormat
 
 from .catchup import catch_up_live, run_catch_up
-from .handlers import collect_check_results, handle_request, render_check_results
+from .handlers import handle_request
 from .ingest import prepare_reload
 from .ipc import (
     ProgressCallback,
@@ -345,33 +346,37 @@ class _CheckFanout:
 
 def _merge_unit_checks(selected: list[WorkerUnit], fanout: _CheckFanout) -> Response:
     waits = [item.submit_async(lambda current=item: _timed_unit_check(current, fanout)) for item in selected]
-    rows: list[MappingUnitResults] = []
-    verbose: list[str] = []
+    parts: list[CheckResult] = []
     for wait in waits:
-        part_rows, part_stdout = wait()
-        rows.extend(part_rows)
-        if part_stdout:
-            verbose.append(part_stdout)
+        parts.append(wait())
     if fanout.skipped and _is_cancelled(fanout.request):
         return to_ipc(FailedResult(1, ("Stopped",)))
-    table = render_check_results(rows, fanout.request)
-    return {"exit_code": 0, "stdout": "".join(verbose) + table}
+    return to_ipc(check_concat(parts))
 
 
-def _timed_unit_check(unit: WorkerUnit, fanout: _CheckFanout) -> tuple[list[MappingUnitResults], str]:
+def _timed_unit_check(unit: WorkerUnit, fanout: _CheckFanout) -> CheckResult:
     job_started = time.perf_counter()
+    extra_exclude = bool(fanout.request.get("extra_exclude"))
+    output_format = OutputFormat(str(fanout.request.get("output_format") or OutputFormat.TABLE))
     try:
         if _is_cancelled(fanout.request):
             with fanout.lock:
                 fanout.skipped.append(unit.name)
-            return [], ""
+            return CheckResult(
+                exit_code=0,
+                extra_exclude=extra_exclude,
+                output_format=output_format,
+                rows=(),
+                not_found=None,
+            )
         try:
-            result = collect_check_results(
-                fanout.request_config,
+            result = check(
                 unit.live.projects,
-                fanout.request,
-                _check_item_progress(unit.name, fanout),
-                fanout.total,
+                load_baseline(fanout.request_config),
+                extra_exclude=extra_exclude,
+                output_format=output_format,
+                on_progress=_check_item_progress(unit.name, fanout),
+                unit_count=fanout.total,
             )
         except Exception:
             if fanout.on_progress is not None:

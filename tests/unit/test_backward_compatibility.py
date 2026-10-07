@@ -100,8 +100,9 @@ def test_verbose_output_format(isolated_home):
 
         # Verify expected output elements
         assert result.exit_code == 0
-        assert "Processing test-project" in result.output
+        assert "Checking test-project" in result.output
         assert "target" in result.output.lower()
+        assert "Processing " not in result.output
 
 
 def test_backward_compatible_config_format_variations():
