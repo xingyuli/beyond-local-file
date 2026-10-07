@@ -11,6 +11,7 @@ import os
 from enum import StrEnum
 from pathlib import Path
 
+from .daemon.live import compute_file_hash, scan_items
 from .daemon.store import BaselineTrees, get_state, state_equal
 
 
@@ -30,22 +31,6 @@ class SyncStatus(StrEnum):
     MANAGED_CHANGED = "managed_changed"
     TARGET_CHANGED = "target_changed"
     BOTH_CHANGED = "both_changed"
-
-
-def compute_file_hash(filepath: Path) -> str:
-    """Compute the SHA-256 hash of a file.
-
-    Args:
-        filepath: Path to the file.
-
-    Returns:
-        Hex-encoded SHA-256 digest.
-    """
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest()
 
 
 def compute_item_hash(path: Path) -> str:
@@ -120,8 +105,6 @@ def _compute_directory_hash(directory: Path) -> str:
 
 
 def _item_changed(baseline: BaselineTrees, root: Path, item_name: str) -> bool:
-    from beyond_local_file.daemon.catchup import scan_items  # noqa: PLC0415 -- avoid import cycle with catch-up
-
     live = scan_items(root, [item_name])
     stored = baseline.get(str(root), {})
     rels = set(live) | {rel for rel in stored if _rel_in_item(rel, item_name)}

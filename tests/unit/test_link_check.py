@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from beyond_local_file.daemon.catchup import scan_items
+from beyond_local_file.daemon.live import scan_items
 from beyond_local_file.model.config import ConfigProject, Mapping
 from beyond_local_file.operations.link_check import check
 from beyond_local_file.operations.result import render

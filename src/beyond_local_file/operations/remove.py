@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from beyond_local_file.config import ConfigUpdater
-from beyond_local_file.daemon.catchup import item_matches
+from beyond_local_file.daemon.live import item_matches
 from beyond_local_file.daemon.log import log_duration
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping

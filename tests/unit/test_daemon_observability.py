@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 
 from beyond_local_file.configuration_set import ConfigurationSet
-from beyond_local_file.daemon.catchup import ScanStats, record_baseline, run_catch_up, scan_items
-from beyond_local_file.daemon.live import LiveSync
+from beyond_local_file.daemon.catchup import record_baseline, run_catch_up
+from beyond_local_file.daemon.live import LiveSync, ScanStats, scan_items
 from beyond_local_file.daemon.log import bind_worker_stream, worker_print
 from beyond_local_file.daemon.store import save_baseline, save_snapshot
 from beyond_local_file.model.config import ConfigProject, Mapping

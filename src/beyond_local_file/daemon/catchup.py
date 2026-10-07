@@ -3,42 +3,19 @@
 from __future__ import annotations
 
 import os
-import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from beyond_local_file.git_manager import GitExcludeManager
-from beyond_local_file.held import HELD_DIR, REASON_CREATE_OVERWRITE, reason_clause, store_held_copy
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.processing import MappingUnit
 from beyond_local_file.model.translator import translate_config_to_mapping_units
-from beyond_local_file.projection import copy_projection
-from beyond_local_file.sync_state import compute_file_hash
 
+from .live import LiveSync, ScanStats, rel_in_items, scan_items
 from .log import log_duration
-from .store import (
-    BaselineTrees,
-    PathState,
-    path_state,
-    state_equal,
-)
-
-if TYPE_CHECKING:
-    from .live import LiveSync
+from .store import BaselineTrees, PathState, path_state
 
 type ProgressFn = Callable[[int, int, str], None]
 type LineFn = Callable[[str], None]
-
-
-@dataclass
-class ScanStats:
-    """Size of one item-tree scan: paths visited, files hashed, bytes read."""
-
-    paths: int = 0
-    files: int = 0
-    hashed_bytes: int = 0
 
 
 def run_catch_up(
@@ -61,9 +38,7 @@ def run_catch_up(
         LiveSync baseline trees after seed and, when a baseline existed, tick.
     """
     del config_dir
-    from .live import LiveSync as _LiveSync  # noqa: PLC0415 -- avoid import cycle with live observe
-
-    live = _LiveSync(projects, baseline or {}, last_seen_from_baseline=True)
+    live = LiveSync(projects, baseline or {}, last_seen_from_baseline=True)
     return catch_up_live(
         live,
         started_with_baseline=baseline is not None,
@@ -325,58 +300,6 @@ def _seed_unrecorded(
             _mark_unit_done(units, index, on_line)
 
 
-def copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
-    """Install hub bytes at *rel* onto *replica*, holding different replica bytes first.
-
-    Equal bytes are left in place. A missing projection is copied with no hold.
-
-    Args:
-        hub: Managed-project directory.
-        replica: Target-project directory.
-        rel: Item path relative to each root.
-    """
-    destination = replica / rel
-    source = hub / rel
-    source_ready = source.exists() or source.is_symlink()
-    dest_ready = destination.exists() or destination.is_symlink()
-    if dest_ready and source_ready and item_matches(hub, replica, rel):
-        return
-    if dest_ready and source_ready:
-        clause = reason_clause(
-            REASON_CREATE_OVERWRITE,
-            path=rel,
-            replica=replica.as_posix(),
-        )
-        slot = store_held_copy(
-            hub,
-            rel_path=Path(rel),
-            source=destination,
-            replica=replica,
-            reason=REASON_CREATE_OVERWRITE,
-        )
-        print(f"WARNING: {clause}", flush=True)
-        print(f"Held at {slot.as_posix()}", flush=True)
-    copy_projection(source, destination)
-
-
-def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
-    """Return whether *item_name* has the same per-file SHA-256 tree on both roots.
-
-    Args:
-        hub_root: Managed-project directory.
-        replica_root: Target-project directory.
-        item_name: Item path relative to each root.
-
-    Returns:
-        True when both trees contain the same relative paths with equal state.
-    """
-    hub_tree = scan_items(hub_root, [item_name])
-    replica_tree = scan_items(replica_root, [item_name])
-    if set(hub_tree) != set(replica_tree):
-        return False
-    return all(state_equal(hub_tree[rel], replica_tree[rel]) for rel in hub_tree)
-
-
 def _item_recorded(tree: dict[str, PathState], item_name: str) -> bool:
     return any(rel_in_items(rel, [item_name]) for rel in tree)
 
@@ -393,65 +316,6 @@ def _emit_unit_items(
         on_progress(index, total, item.name)
 
 
-def add_git_exclude(root: Path, rel: str) -> None:
-    """Add *rel* to ``.git/info/exclude`` when *root* is a Git repository.
-
-    Args:
-        root: Target-project root that starts projecting *rel*.
-        rel: Item path relative to *root*.
-    """
-    manager = GitExcludeManager(root)
-    if not manager.is_git_repo():
-        return
-    manager.write_entries({rel})
-
-
-def remove_git_exclude(root: Path, rel: str) -> None:
-    """Remove *rel* from ``.git/info/exclude`` when *root* is a Git repository.
-
-    Args:
-        root: Target-project root that stops projecting *rel*.
-        rel: Item path relative to *root*.
-    """
-    manager = GitExcludeManager(root)
-    if not manager.is_git_repo():
-        return
-    manager.remove_entries({rel})
-
-
-def remove_path(path: Path) -> None:
-    """Remove a file or directory if it exists.
-
-    Args:
-        path: Path to unlink or rmtree.
-    """
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
-
-
-def scan_items(
-    root: Path,
-    item_names: list[str],
-    stats: ScanStats | None = None,
-) -> dict[str, PathState]:
-    """Scan named items under *root* into a relative-path tree.
-
-    Args:
-        root: Hub or replica directory.
-        item_names: Item names relative to *root*.
-        stats: Optional accumulator for path count, file count, and hashed bytes.
-
-    Returns:
-        Present paths mapped to hash/presence state.
-    """
-    scanned: dict[str, PathState] = {}
-    for name in item_names:
-        _scan_path(root, root / name, scanned, stats)
-    return scanned
-
-
 def _mark_catchup_started(projects: dict[str, ConfigProject]) -> None:
     raw = os.environ.get("BLF_TEST_CATCHUP_STARTED")
     if not raw:
@@ -462,69 +326,6 @@ def _mark_catchup_started(projects: dict[str, ConfigProject]) -> None:
         (root / project.managed_project_name).write_text("1", encoding="utf-8")
 
 
-def scan_path_state(root: Path, rel: str) -> PathState:
-    """Return the current on-disk state of one path under *root*.
-
-    Args:
-        root: Hub or replica directory.
-        rel: Path relative to *root*.
-
-    Returns:
-        Presence and hash for *rel*, or absent when it does not exist.
-    """
-    scanned: dict[str, PathState] = {}
-    _scan_path(root, root / rel, scanned)
-    return scanned.get(rel) or path_state(False, None)
-
-
-def _scan_path(
-    root: Path,
-    path: Path,
-    scanned: dict[str, PathState],
-    stats: ScanStats | None = None,
-) -> None:
-    if not path.exists() and not path.is_symlink():
-        return
-    rel = path.relative_to(root).as_posix()
-    if rel == HELD_DIR or rel.startswith(f"{HELD_DIR}/"):
-        return
-    if path.is_symlink():
-        scanned[rel] = path_state(True, "symlink:" + os.fsdecode(os.readlink(path)))
-        _count_path(stats)
-        return
-    if path.is_file():
-        size = path.stat().st_size
-        scanned[rel] = path_state(True, compute_file_hash(path))
-        _count_path(stats, files=1, hashed_bytes=size)
-        return
-    if path.is_dir():
-        scanned[rel] = path_state(True, None)
-        _count_path(stats)
-        for child in sorted(path.iterdir()):
-            _scan_path(root, child, scanned, stats)
-
-
-def rel_in_items(rel: str, item_names: list[str] | tuple[str, ...]) -> bool:
-    """Return whether *rel* is one of *item_names* or a path under one.
-
-    Args:
-        rel: Path relative to a replica root.
-        item_names: Watched item names.
-
-    Returns:
-        True when *rel* belongs to a watched item.
-    """
-    return any(rel == name or rel.startswith(f"{name}/") for name in item_names)
-
-
 def _merge_tree(trees: BaselineTrees, root: Path, scanned: dict[str, PathState]) -> None:
     slot = trees.setdefault(str(root), {})
     slot.update(scanned)
-
-
-def _count_path(stats: ScanStats | None, *, files: int = 0, hashed_bytes: int = 0) -> None:
-    if stats is None:
-        return
-    stats.paths += 1
-    stats.files += files
-    stats.hashed_bytes += hashed_bytes

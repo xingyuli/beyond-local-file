@@ -2,27 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from beyond_local_file.held import REASON_DELETE_GAP, is_held_item_name, reason_clause, store_held_copy
+from beyond_local_file.git_manager import GitExcludeManager
+from beyond_local_file.held import (
+    HELD_DIR,
+    REASON_CREATE_OVERWRITE,
+    REASON_DELETE_GAP,
+    is_held_item_name,
+    reason_clause,
+    store_held_copy,
+)
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.processing import ManagedProjectItem
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.projection import copy_projection
 
-from .catchup import (
-    ScanStats,
-    add_git_exclude,
-    copy_hub_onto_replica,
-    rel_in_items,
-    remove_git_exclude,
-    remove_path,
-    scan_items,
-    scan_path_state,
-)
 from .log import duration_ms, log_duration, worker_print
 from .store import (
     REASON_FAN_OUT_MISMATCH,
@@ -42,6 +43,206 @@ DELETE_WINDOW = 3
 
 _IDLE_LOG_MS = 100
 """Idle ticks faster than this are omitted from the daemon log."""
+
+
+@dataclass
+class ScanStats:
+    """Size of one item-tree scan: paths visited, files hashed, bytes read."""
+
+    paths: int = 0
+    files: int = 0
+    hashed_bytes: int = 0
+
+
+def compute_file_hash(filepath: Path) -> str:
+    """Compute the SHA-256 hash of a file.
+
+    Args:
+        filepath: Path to the file.
+
+    Returns:
+        Hex-encoded SHA-256 digest.
+    """
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def scan_items(
+    root: Path,
+    item_names: list[str],
+    stats: ScanStats | None = None,
+) -> dict[str, PathState]:
+    """Scan named items under *root* into a relative-path tree.
+
+    Args:
+        root: Hub or replica directory.
+        item_names: Item names relative to *root*.
+        stats: Optional accumulator for path count, file count, and hashed bytes.
+
+    Returns:
+        Present paths mapped to hash/presence state.
+    """
+    scanned: dict[str, PathState] = {}
+    for name in item_names:
+        _scan_path(root, root / name, scanned, stats)
+    return scanned
+
+
+def scan_path_state(root: Path, rel: str) -> PathState:
+    """Return the current on-disk state of one path under *root*.
+
+    Args:
+        root: Hub or replica directory.
+        rel: Path relative to *root*.
+
+    Returns:
+        Presence and hash for *rel*, or absent when it does not exist.
+    """
+    scanned: dict[str, PathState] = {}
+    _scan_path(root, root / rel, scanned)
+    return scanned.get(rel) or path_state(False, None)
+
+
+def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
+    """Return whether *item_name* has the same per-file SHA-256 tree on both roots.
+
+    Args:
+        hub_root: Managed-project directory.
+        replica_root: Target-project directory.
+        item_name: Item path relative to each root.
+
+    Returns:
+        True when both trees contain the same relative paths with equal state.
+    """
+    hub_tree = scan_items(hub_root, [item_name])
+    replica_tree = scan_items(replica_root, [item_name])
+    if set(hub_tree) != set(replica_tree):
+        return False
+    return all(state_equal(hub_tree[rel], replica_tree[rel]) for rel in hub_tree)
+
+
+def rel_in_items(rel: str, item_names: list[str] | tuple[str, ...]) -> bool:
+    """Return whether *rel* is one of *item_names* or a path under one.
+
+    Args:
+        rel: Path relative to a replica root.
+        item_names: Watched item names.
+
+    Returns:
+        True when *rel* belongs to a watched item.
+    """
+    return any(rel == name or rel.startswith(f"{name}/") for name in item_names)
+
+
+def _copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
+    """Install hub bytes at *rel* onto *replica*, holding different replica bytes first.
+
+    Equal bytes are left in place. A missing projection is copied with no hold.
+
+    Args:
+        hub: Managed-project directory.
+        replica: Target-project directory.
+        rel: Item path relative to each root.
+    """
+    destination = replica / rel
+    source = hub / rel
+    source_ready = source.exists() or source.is_symlink()
+    dest_ready = destination.exists() or destination.is_symlink()
+    if dest_ready and source_ready and item_matches(hub, replica, rel):
+        return
+    if dest_ready and source_ready:
+        clause = reason_clause(
+            REASON_CREATE_OVERWRITE,
+            path=rel,
+            replica=replica.as_posix(),
+        )
+        slot = store_held_copy(
+            hub,
+            rel_path=Path(rel),
+            source=destination,
+            replica=replica,
+            reason=REASON_CREATE_OVERWRITE,
+        )
+        print(f"WARNING: {clause}", flush=True)
+        print(f"Held at {slot.as_posix()}", flush=True)
+    copy_projection(source, destination)
+
+
+def _add_git_exclude(root: Path, rel: str) -> None:
+    """Add *rel* to ``.git/info/exclude`` when *root* is a Git repository.
+
+    Args:
+        root: Target-project root that starts projecting *rel*.
+        rel: Item path relative to *root*.
+    """
+    manager = GitExcludeManager(root)
+    if not manager.is_git_repo():
+        return
+    manager.write_entries({rel})
+
+
+def _remove_git_exclude(root: Path, rel: str) -> None:
+    """Remove *rel* from ``.git/info/exclude`` when *root* is a Git repository.
+
+    Args:
+        root: Target-project root that stops projecting *rel*.
+        rel: Item path relative to *root*.
+    """
+    manager = GitExcludeManager(root)
+    if not manager.is_git_repo():
+        return
+    manager.remove_entries({rel})
+
+
+def _remove_path(path: Path) -> None:
+    """Remove a file or directory if it exists.
+
+    Args:
+        path: Path to unlink or rmtree.
+    """
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _scan_path(
+    root: Path,
+    path: Path,
+    scanned: dict[str, PathState],
+    stats: ScanStats | None = None,
+) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    rel = path.relative_to(root).as_posix()
+    if rel == HELD_DIR or rel.startswith(f"{HELD_DIR}/"):
+        return
+    if path.is_symlink():
+        scanned[rel] = path_state(True, "symlink:" + os.fsdecode(os.readlink(path)))
+        _count_path(stats)
+        return
+    if path.is_file():
+        size = path.stat().st_size
+        scanned[rel] = path_state(True, compute_file_hash(path))
+        _count_path(stats, files=1, hashed_bytes=size)
+        return
+    if path.is_dir():
+        scanned[rel] = path_state(True, None)
+        _count_path(stats)
+        for child in sorted(path.iterdir()):
+            _scan_path(root, child, scanned, stats)
+
+
+def _count_path(stats: ScanStats | None, *, files: int = 0, hashed_bytes: int = 0) -> None:
+    if stats is None:
+        return
+    stats.paths += 1
+    stats.files += files
+    stats.hashed_bytes += hashed_bytes
+
 
 type ChangeKind = Literal["create", "update", "delete"]
 
@@ -195,10 +396,10 @@ class LiveSync:
         others = self._other_replica_roots(replica, rel)
         with log_duration("create: fan-out"):
             for other in others:
-                copy_hub_onto_replica(hub, other, rel)
+                _copy_hub_onto_replica(hub, other, rel)
         with log_duration("create: git-exclude"):
             for root in (replica, *others):
-                add_git_exclude(root, rel)
+                _add_git_exclude(root, rel)
         self._record_item(hub, rel, gen=0)
         self._record_item(replica, rel, gen=0)
         for other in others:
@@ -221,9 +422,9 @@ class LiveSync:
         """
         hub = self._hub_for_replica(replica, rel)
         with log_duration("seed: copy"):
-            copy_hub_onto_replica(hub, replica, rel)
+            _copy_hub_onto_replica(hub, replica, rel)
         with log_duration("seed: git-exclude"):
-            add_git_exclude(replica, rel)
+            _add_git_exclude(replica, rel)
         if not self._item_recorded(hub, rel):
             self._record_item(hub, rel, gen=0)
         self._record_item(replica, rel, gen=0)
@@ -244,13 +445,13 @@ class LiveSync:
         hub = self._hub_for_install(rel)
         others = self._other_replica_roots(replica, rel)
         with log_duration("restore: delete-managed"):
-            remove_path(hub / rel)
+            _remove_path(hub / rel)
         with log_duration("restore: undo-fan-out"):
             for other in others:
-                remove_path(other / rel)
+                _remove_path(other / rel)
         with log_duration("restore: git-exclude"):
             for root in (replica, *others):
-                remove_git_exclude(root, rel)
+                _remove_git_exclude(root, rel)
         self._forget_item(hub, rel)
         for other in others:
             self._forget_item(other, rel)
@@ -273,12 +474,12 @@ class LiveSync:
             replicas = [replica, *replicas]
         with log_duration("remove: cleanup-targets"):
             for root in replicas:
-                remove_path(root / rel)
+                _remove_path(root / rel)
         with log_duration("remove: delete-managed"):
-            remove_path(hub / rel)
+            _remove_path(hub / rel)
         with log_duration("remove: git-exclude"):
             for root in replicas:
-                remove_git_exclude(root, rel)
+                _remove_git_exclude(root, rel)
         self._forget_item(hub, rel)
         for root in replicas:
             self._forget_item(root, rel)
@@ -295,8 +496,8 @@ class LiveSync:
             rel: Item path relative to the replica.
         """
         with log_duration("ingest: retract"):
-            remove_path(replica / rel)
-            remove_git_exclude(replica, rel)
+            _remove_path(replica / rel)
+            _remove_git_exclude(replica, rel)
         self._forget_item(replica, rel)
         print(f"live: drop-replica {rel}", flush=True)
 
@@ -468,7 +669,7 @@ class LiveSync:
         if change.kind == "delete":
             if not _delete_allowed(change, old_hub, old_hub_gen):
                 self._hold_delete_gap(change)
-            remove_path(change.hub / change.rel)
+            _remove_path(change.hub / change.rel)
         else:
             if not state_equal(old_hub, path_state(change.base_present, change.base_hash)):
                 winner = self._winning_replica(change.hub, change.rel)
@@ -550,7 +751,7 @@ class LiveSync:
                 else:
                     destination.mkdir(parents=True, exist_ok=True)
             else:
-                remove_path(destination)
+                _remove_path(destination)
             self._record(watch.root, change.rel, scan_path_state(watch.root, change.rel), new_gen)
 
     def _hub_for(self, rel: str) -> Path | None:
@@ -663,7 +864,7 @@ class LiveSync:
             if source.exists() or source.is_symlink():
                 copy_projection(source, destination)
             else:
-                remove_path(destination)
+                _remove_path(destination)
             self._oos.discard((str(watch.root), rel))
             self._record(watch.root, rel, scan_path_state(watch.root, rel), new_gen)
         for replica_str, oos_rel in list(self._oos):
@@ -708,7 +909,7 @@ class LiveSync:
     def _write_file(self, path: Path, content: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and not path.is_file() and not path.is_symlink():
-            remove_path(path)
+            _remove_path(path)
         path.write_bytes(content)
 
     def _record(self, root: Path, rel: str, state: PathState, gen: int) -> None:
