@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from beyond_local_file.contribution import ItemOverlap
 from beyond_local_file.daemon.client import _print_response
 from beyond_local_file.daemon.handlers import handle_request
 from beyond_local_file.operations.link_check import CopyCheckDetails, GitExcludeStatus, LinkCheckResult
@@ -12,6 +13,7 @@ from beyond_local_file.operations.result import (
     CheckRow,
     CreateResult,
     FailedResult,
+    ReloadResult,
     RemoveResult,
     RestoreResult,
     from_ipc,
@@ -401,3 +403,94 @@ def test_render_remove_persist_warning_is_last_and_keeps_exit_zero() -> None:
     result = _remove_result(persist_warning="disk full")
     assert result.exit_code == 0
     assert render(result).endswith("Warning: could not persist mapping snapshot: disk full\n")
+
+
+def _reload_result(**fields: object) -> ReloadResult:
+    """Return a ReloadResult with lab-app / alpha / example stand-ins."""
+    values: dict[str, object] = {
+        "exit_code": 0,
+        "affected": (),
+        "problem": None,
+        "overlaps": (),
+        "missing_hubs": (),
+    }
+    values.update(fields)
+    return ReloadResult(**values)  # type: ignore[arg-type]
+
+
+def test_reload_result_round_trips_through_ipc() -> None:
+    """ReloadResult survives to_ipc then from_ipc, with overlap paths as posix lists."""
+    overlap = ItemOverlap(
+        target=Path("/tmp/alpha"),
+        project_a="lab-app",
+        item_a="example",
+        project_b="beta",
+        item_b="example",
+    )
+    result = _reload_result(
+        exit_code=1,
+        problem="overlap",
+        overlaps=(overlap,),
+        missing_hubs=("/tmp/lab-app/notes.md",),
+        affected=("lab-app",),
+    )
+    payload = to_ipc(result)
+    assert payload["kind"] == "reload"
+    assert payload["problem"] == "overlap"
+    assert payload["affected"] == ["lab-app"]
+    assert payload["overlaps"] == [["/tmp/alpha", "lab-app", "example", "beta", "example"]]
+    assert payload["missing_hubs"] == ["/tmp/lab-app/notes.md"]
+    assert from_ipc(payload) == result
+
+
+def test_render_reload_success_is_empty() -> None:
+    """A successful reload has no transcript; catch-up progress was streamed."""
+    result = _reload_result(affected=("lab-app",))
+    assert render(result) == ""
+    assert payload_text(to_ipc(result)) == ""
+
+
+def test_render_reload_problems_match_today_error_strings() -> None:
+    """Each reload problem renders today's Error: line; overlap uses format_item_overlap."""
+    missing = _reload_result(exit_code=1, problem="snapshot_missing")
+    assert render(missing) == "Error: mapping snapshot is missing\n"
+    overlap = _reload_result(
+        exit_code=1,
+        problem="overlap",
+        overlaps=(
+            ItemOverlap(
+                target=Path("/tmp/alpha"),
+                project_a="lab-app",
+                item_a="example",
+                project_b="beta",
+                item_b="example",
+            ),
+        ),
+    )
+    assert render(overlap) == ("Error: overlapping items on /tmp/alpha: lab-app 'example' and beta 'example'\n")
+    hubs = _reload_result(
+        exit_code=1,
+        problem="missing_hub",
+        missing_hubs=("/tmp/lab-app/example", "/tmp/lab-app/notes.md"),
+    )
+    assert render(hubs) == (
+        "Error: hub file does not exist: /tmp/lab-app/example\nError: hub file does not exist: /tmp/lab-app/notes.md\n"
+    )
+    unconfirmed = _reload_result(exit_code=1, problem="unconfirmed")
+    assert render(unconfirmed) == "Error: mapping removals require interactive confirmation\n"
+    assert payload_text(to_ipc(missing)) == render(missing)
+
+
+def test_reload_without_snapshot_returns_reload_result(tmp_path: Path) -> None:
+    """Reload with no mapping snapshot is a reload envelope, not a stdout blob."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    (hub / "example").write_text("canonical")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app: {alpha}\n")
+    response = handle_request(config_path, {"op": "reload"})
+    assert from_ipc(response) == ReloadResult(1, (), "snapshot_missing", (), ())
+    assert render(from_ipc(response)) == "Error: mapping snapshot is missing\n"
+    assert "stdout" not in response

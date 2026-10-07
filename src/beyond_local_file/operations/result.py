@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from beyond_local_file.contribution import ItemOverlap, format_item_overlap
 from beyond_local_file.options import OutputFormat
 
 if TYPE_CHECKING:
@@ -51,6 +53,7 @@ type GitExcludeAction = Literal["added", "exists"]
 type RestoreGitExcludeStatus = Literal["removed", "not_found"]
 type RemoveArtifactKind = Literal["copy", "symlink"]
 type RemoveConfigStatus = Literal["updated", "skipped", "repair"]
+type ReloadProblem = Literal["snapshot_missing", "overlap", "missing_hub", "unconfirmed"]
 
 
 @dataclass(frozen=True)
@@ -103,14 +106,26 @@ class RemoveResult:
     persist_warning: str | None
 
 
-type OpResult = FailedResult | CheckResult | CreateResult | RestoreResult | RemoveResult
+@dataclass(frozen=True)
+class ReloadResult:
+    """Reload snapshot outcome, ready to render or send over IPC."""
+
+    exit_code: int
+    affected: tuple[str, ...]
+    problem: ReloadProblem | None
+    overlaps: tuple[ItemOverlap, ...]
+    missing_hubs: tuple[str, ...]
+
+
+type OpResult = FailedResult | CheckResult | CreateResult | RestoreResult | RemoveResult | ReloadResult
 
 _CHECK_SKIPS = frozenset({"missing_project", "missing_target"})
 _GIT_EXCLUDE_ACTIONS = frozenset({"added", "exists"})
 _RESTORE_GIT_STATUSES = frozenset({"removed", "not_found"})
 _REMOVE_ARTIFACT_KINDS = frozenset({"copy", "symlink"})
 _REMOVE_CONFIG_STATUSES = frozenset({"updated", "skipped", "repair"})
-_KIND_ENVELOPES = frozenset({"failed", "check", "create", "restore", "remove"})
+_RELOAD_PROBLEMS = frozenset({"snapshot_missing", "overlap", "missing_hub", "unconfirmed"})
+_KIND_ENVELOPES = frozenset({"failed", "check", "create", "restore", "remove", "reload"})
 
 
 def to_ipc(result: OpResult) -> dict[str, Any]:
@@ -130,6 +145,8 @@ def to_ipc(result: OpResult) -> dict[str, Any]:
         return _restore_to_ipc(result)
     if isinstance(result, RemoveResult):
         return _remove_to_ipc(result)
+    if isinstance(result, ReloadResult):
+        return _reload_to_ipc(result)
     return {
         "exit_code": result.exit_code,
         "kind": "failed",
@@ -144,7 +161,7 @@ def from_ipc(payload: dict[str, Any]) -> OpResult:
         payload: Daemon IPC response.
 
     Returns:
-        The failed, check, create, restore, or remove result matching ``kind``.
+        The failed, check, create, restore, remove, or reload result matching ``kind``.
 
     Raises:
         ValueError: If *payload* is not a known operation result.
@@ -158,6 +175,8 @@ def from_ipc(payload: dict[str, Any]) -> OpResult:
         return _restore_from_ipc(payload)
     if kind == "remove":
         return _remove_from_ipc(payload)
+    if kind == "reload":
+        return _reload_from_ipc(payload)
     if kind != "failed":
         raise ValueError("expected failed operation result")
     raw_lines = payload.get("lines", ())
@@ -186,18 +205,18 @@ def render(result: OpResult) -> str:
         return _render_restore(result)
     if isinstance(result, RemoveResult):
         return _render_remove(result)
-    if not result.lines:
-        return ""
-    return "\n".join(result.lines) + "\n"
+    if isinstance(result, ReloadResult):
+        return _render_reload(result)
+    return "" if not result.lines else "\n".join(result.lines) + "\n"
 
 
 def payload_text(response: dict[str, Any]) -> str:
     """Return the shell transcript for an IPC *response*.
 
     Args:
-        response: Daemon IPC payload. A failed, check, create, restore, or
-            remove envelope is rendered; leftover status/wait transcripts
-            still use ``stdout``.
+        response: Daemon IPC payload. A failed, check, create, restore,
+            remove, or reload envelope is rendered; leftover status/wait
+            transcripts still use ``stdout``.
 
     Returns:
         Text the shell should print.
@@ -675,6 +694,80 @@ def _render_remove(result: RemoveResult) -> str:  # noqa: PLR0912 -- story, repa
         lines.extend(formatter.error(message) for message in result.errors)
     if result.persist_warning is not None:
         lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
+def _reload_to_ipc(result: ReloadResult) -> dict[str, Any]:
+    return {
+        "affected": list(result.affected),
+        "exit_code": result.exit_code,
+        "kind": "reload",
+        "missing_hubs": list(result.missing_hubs),
+        "overlaps": [
+            [overlap.target.as_posix(), overlap.project_a, overlap.item_a, overlap.project_b, overlap.item_b]
+            for overlap in result.overlaps
+        ],
+        "problem": result.problem,
+    }
+
+
+def _reload_from_ipc(payload: dict[str, Any]) -> ReloadResult:
+    raw_code = payload.get("exit_code", 0)
+    if not isinstance(raw_code, int):
+        raise ValueError("reload operation result needs an exit_code")
+    problem: ReloadProblem | None = None
+    raw_problem = payload.get("problem")
+    if raw_problem is not None:
+        if raw_problem not in _RELOAD_PROBLEMS:
+            raise ValueError("reload problem is not a known problem")
+        problem = raw_problem
+    return ReloadResult(
+        exit_code=raw_code,
+        affected=_str_tuple(payload.get("affected"), "affected"),
+        problem=problem,
+        overlaps=_overlaps_from_ipc(payload.get("overlaps")),
+        missing_hubs=_str_tuple(payload.get("missing_hubs"), "missing_hubs"),
+    )
+
+
+def _overlaps_from_ipc(raw: object) -> tuple[ItemOverlap, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("reload overlaps must be a list")
+    overlaps: list[ItemOverlap] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("reload overlap must have a target, two projects, and two items")
+        try:
+            target, project_a, item_a, project_b, item_b = item
+        except ValueError:
+            raise ValueError("reload overlap must have a target, two projects, and two items") from None
+        overlaps.append(
+            ItemOverlap(
+                target=Path(str(target)),
+                project_a=str(project_a),
+                item_a=str(item_a),
+                project_b=str(project_b),
+                item_b=str(item_b),
+            )
+        )
+    return tuple(overlaps)
+
+
+def _render_reload(result: ReloadResult) -> str:
+    if result.problem is None:
+        return ""
+    if result.problem == "snapshot_missing":
+        lines = ["Error: mapping snapshot is missing"]
+    elif result.problem == "overlap":
+        lines = [f"Error: {format_item_overlap(overlap)}" for overlap in result.overlaps]
+    elif result.problem == "missing_hub":
+        lines = [f"Error: hub file does not exist: {path}" for path in result.missing_hubs]
+    else:
+        lines = ["Error: mapping removals require interactive confirmation"]
     if not lines:
         return ""
     return "\n".join(lines) + "\n"

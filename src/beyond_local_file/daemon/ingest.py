@@ -9,9 +9,10 @@ from pathlib import Path
 import click
 
 from beyond_local_file.configuration_set import ConfigurationSet
-from beyond_local_file.contribution import echo_item_path_overlaps
+from beyond_local_file.contribution import echo_item_path_overlaps, find_item_path_overlaps
 from beyond_local_file.held import is_held_item_name
 from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.operations.result import ReloadResult
 
 from .catchup import run_catch_up
 from .live import LiveSync
@@ -227,7 +228,7 @@ def affected_unit_names(
     return frozenset(names)
 
 
-def prepare_reload(config_path: Path, *, confirmed: bool) -> tuple[int, frozenset[str]]:
+def prepare_reload(config_path: Path, *, confirmed: bool) -> ReloadResult:
     """Validate and persist a reload snapshot without catch-up.
 
     Args:
@@ -235,34 +236,31 @@ def prepare_reload(config_path: Path, *, confirmed: bool) -> tuple[int, frozense
         confirmed: True when the shell already confirmed removals.
 
     Returns:
-        Exit code and worker-unit names whose mappings changed.
+        Reload outcome, including worker-unit names whose mappings changed.
     """
     file_projects, snapshot_projects = _load_file_and_snapshot(config_path)
     if snapshot_projects is None:
-        click.echo("Error: mapping snapshot is missing")
-        return 1, frozenset()
-    if echo_item_path_overlaps(file_projects):
-        return 1, frozenset()
+        return ReloadResult(1, (), "snapshot_missing", (), ())
+    overlaps = tuple(find_item_path_overlaps(file_projects))
+    if overlaps:
+        return ReloadResult(1, (), "overlap", overlaps, ())
     if mappings_equal(file_projects, snapshot_projects):
-        return 0, frozenset()
+        return ReloadResult(0, (), None, (), ())
     diff = classify(snapshot_projects, file_projects)
     missing = missing_hub_item_adds(file_projects, diff)
     if missing:
-        for path in missing:
-            click.echo(f"Error: hub file does not exist: {path}")
-        return 1, frozenset()
+        return ReloadResult(1, (), "missing_hub", (), tuple(path.as_posix() for path in missing))
     if diff.removals and not confirmed:
-        click.echo("Error: mapping removals require interactive confirmation")
-        return 1, frozenset()
-    affected = affected_unit_names(snapshot_projects, file_projects, diff)
+        return ReloadResult(1, (), "unconfirmed", (), ())
+    affected = tuple(sorted(affected_unit_names(snapshot_projects, file_projects, diff)))
     apply_removals(snapshot_projects, diff.removals)
     save_snapshot(config_path, file_projects)
     keep = {project.managed_project_name for project in file_projects.values()}
     drop_removed_baseline_projects(config_path, keep)
-    return 0, affected
+    return ReloadResult(0, affected, None, (), ())
 
 
-def commit_reload(config_path: Path, *, confirmed: bool) -> int:
+def commit_reload(config_path: Path, *, confirmed: bool) -> ReloadResult:
     """Apply the config file as the new snapshot inside the running daemon.
 
     Args:
@@ -270,17 +268,17 @@ def commit_reload(config_path: Path, *, confirmed: bool) -> int:
         confirmed: True when the shell already confirmed removals.
 
     Returns:
-        0 after commit and catch-up, 1 when ingest cannot proceed.
+        Reload outcome after commit and catch-up, or the prepare problem.
     """
-    code, affected = prepare_reload(config_path, confirmed=confirmed)
-    if code != 0 or not affected:
-        return code
+    result = prepare_reload(config_path, confirmed=confirmed)
+    if result.problem is not None or not result.affected:
+        return result
     file_projects = ConfigurationSet(config_path).projects()
-    subset = {key: project for key, project in file_projects.items() if project.managed_project_name in affected}
+    subset = {key: project for key, project in file_projects.items() if project.managed_project_name in result.affected}
     if subset:
         trees = run_catch_up(subset, ConfigurationSet(config_path).run_directory, load_baseline(config_path))
         save_baseline(config_path, trees, subset)
-    return 0
+    return result
 
 
 def missing_hub_item_adds(new: dict[str, ConfigProject], diff: MappingDiff) -> list[Path]:

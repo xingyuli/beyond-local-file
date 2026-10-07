@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import redirect_stdout
 from dataclasses import replace
-from io import StringIO
 from pathlib import Path
 
 from beyond_local_file.configuration_set import ConfigurationSet
@@ -52,8 +50,7 @@ def handle_request(
             the yaml drop. When omitted, mutating shells build a throwaway observer.
 
     Returns:
-        A check, create, restore, remove, or failed envelope, or ``exit_code``
-        and captured ``stdout`` for reload.
+        A check, create, restore, remove, reload, or failed envelope.
     """
     op = request.get("op")
     created: dict[str, LiveSync] = {}
@@ -67,17 +64,13 @@ def handle_request(
         return _handle_restore(config_path, request, created, on_progress, previous_trees)
     if op == "remove":
         return _handle_remove(config_path, request, created, on_progress, previous_trees)
-    if op != "reload":
-        return to_ipc(FailedResult(1, (f"Error: unknown daemon operation {op!r}",)))
-
-    buffer = StringIO()
-    with redirect_stdout(buffer):
-        exit_code = _handle_reload(config_path, request)
-    return {"exit_code": exit_code, "stdout": buffer.getvalue()}
+    if op == "reload":
+        return _handle_reload(config_path, request)
+    return to_ipc(FailedResult(1, (f"Error: unknown daemon operation {op!r}",)))
 
 
-def _handle_reload(config_path: Path, request: Request) -> int:
-    return commit_reload(config_path, confirmed=bool(request.get("confirmed")))
+def _handle_reload(config_path: Path, request: Request) -> Response:
+    return to_ipc(commit_reload(config_path, confirmed=bool(request.get("confirmed"))))
 
 
 def _handle_check(

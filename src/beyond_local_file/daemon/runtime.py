@@ -7,9 +7,7 @@ import signal
 import threading
 import time
 from collections.abc import Callable
-from contextlib import redirect_stdout
 from dataclasses import dataclass, field
-from io import StringIO
 from pathlib import Path
 from types import FrameType
 
@@ -160,24 +158,22 @@ def _reload_changed_units(
     with log_scope("requests"):
         queue_ms = duration_ms(enqueued)
         try:
-            buffer = StringIO()
-            with redirect_stdout(buffer):
-                code, affected = prepare_reload(request_config, confirmed=bool(request.get("confirmed")))
-            names = sorted(affected)
+            result = prepare_reload(request_config, confirmed=bool(request.get("confirmed")))
+            names = sorted(result.affected)
             started_times = RequestTimes(queue_ms, 0, persist_at_start)
             log_request_boundary("request: start", request, names, started_times)
             start_logged = True
             started = time.perf_counter()
-            if code != 0 or not affected:
-                response = {"exit_code": code, "stdout": buffer.getvalue()}
+            if result.problem is not None or not result.affected:
+                response = to_ipc(result)
             else:
-                response = _reload_units(
+                _reload_units(
                     request_config,
                     runtime,
                     names,
-                    buffer.getvalue(),
                     _ReloadProgress(durations, on_progress),
                 )
+                response = to_ipc(result)
             op_ms, persist_ms = _op_and_persist(duration_ms(started), 0, dry_run=dry_run)
         except Exception as error:
             response = {"exit_code": 1, "stdout": f"Error: {error}\n"}
@@ -198,9 +194,8 @@ def _reload_units(
     request_config: Path,
     runtime: _LiveRuntime,
     names: list[str],
-    stdout: str,
     progress: _ReloadProgress,
-) -> Response:
+) -> None:
     on_line = progress.on_line
     if on_line is not None:
         for name in names:
@@ -226,7 +221,6 @@ def _reload_units(
         _timed_new_unit(request_config, subset, runtime, progress)
     for wait in waits:
         wait()
-    return {"exit_code": 0, "stdout": stdout}
 
 
 def _timed_catch_up(config_path: Path, unit: WorkerUnit, progress: _ReloadProgress) -> None:
