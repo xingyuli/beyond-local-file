@@ -120,9 +120,9 @@ def _create_result(**fields: object) -> CreateResult:
         "force_overwrite": None,
         "source": "/tmp/alpha/example",
         "dest": "/tmp/lab-app/example",
-        "git_exclude": "added",
-        "git_exclude_name": "example",
+        "git_excludes": (("/tmp/alpha", "example", "added"),),
         "fan_out": (("/tmp/lab-app/example", "/tmp/example/example"),),
+        "holds": (),
         "config_entry": "example",
         "persist_warning": None,
     }
@@ -136,7 +136,7 @@ def test_create_result_round_trips_through_ipc() -> None:
     payload = to_ipc(result)
     assert payload["kind"] == "create"
     assert payload["fan_out"] == [["/tmp/lab-app/example", "/tmp/example/example"]]
-    assert payload["git_exclude"] == "added"
+    assert payload["git_excludes"] == [["/tmp/alpha", "example", "added"]]
     assert payload["errors"] == []
     assert from_ipc(payload) == result
 
@@ -153,6 +153,22 @@ def test_render_create_success_story_matches_today_order() -> None:
         "Fan-out /tmp/lab-app/example -> /tmp/example/example\n"
     )
     assert payload_text(to_ipc(result)) == render(result)
+
+
+def test_render_create_names_other_replica_git_exclude_and_holds() -> None:
+    """Other replicas get a git-exclude line, and holds print from facts."""
+    result = _create_result(
+        git_excludes=(
+            ("/tmp/alpha", "example", "added"),
+            ("/tmp/example", "example", "added"),
+        ),
+        holds=(("installing an item replaced different bytes", "/tmp/lab-app/held"),),
+    )
+    text = render(result)
+    assert "Added 'example' to .git/info/exclude\n" in text
+    assert "Added 'example' to .git/info/exclude (/tmp/example)\n" in text
+    assert "WARNING: installing an item replaced different bytes\n" in text
+    assert "Held at /tmp/lab-app/held\n" in text
 
 
 def test_render_create_dry_run_prefixes_each_line() -> None:
@@ -172,8 +188,7 @@ def test_render_create_errors_and_already_managed() -> None:
     missing = _create_result(
         exit_code=1,
         errors=("Path does not exist: /tmp/alpha/example",),
-        git_exclude=None,
-        git_exclude_name=None,
+        git_excludes=(),
         fan_out=(),
         config_entry=None,
     )
@@ -184,8 +199,7 @@ def test_render_create_errors_and_already_managed() -> None:
         already_managed=(
             "'.kiro' is a managed symlink — '.kiro/specs/foo.txt' is already managed through it. Nothing to do."
         ),
-        git_exclude=None,
-        git_exclude_name=None,
+        git_excludes=(),
         fan_out=(),
         config_entry=None,
     )

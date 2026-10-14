@@ -90,9 +90,9 @@ def _create_result(**fields: object) -> CreateResult:
         "force_overwrite": None,
         "source": "/tmp/alpha/example",
         "dest": "/tmp/lab-app/example",
-        "git_exclude": None,
-        "git_exclude_name": None,
+        "git_excludes": (),
         "fan_out": (),
+        "holds": (),
         "config_entry": None,
         "persist_warning": None,
     }
@@ -119,8 +119,7 @@ class TestGitExcludePreview:
 
         exclude_file = repo_dir / ".git" / "info" / "exclude"
         assert not exclude_file.exists()
-        assert result.git_exclude == "added"
-        assert result.git_exclude_name == "myfile.txt"
+        assert result.git_excludes == ()
 
     def test_skipped_when_not_in_git_repo(self, tmp_path: Path) -> None:
         """No .git/info/exclude is created when source is not inside a git repo."""
@@ -133,8 +132,7 @@ class TestGitExcludePreview:
         result = _make_operation(source, tmp_path / "managed", context=context).run()
 
         assert not (plain_dir / ".git").exists(), ".git dir should not be created"
-        assert result.git_exclude is None
-        assert result.git_exclude_name is None
+        assert result.git_excludes == ()
 
     def test_preview_exists_when_entry_already_present(self, tmp_path: Path) -> None:
         """Preview reports an existing entry without rewriting the file."""
@@ -149,8 +147,7 @@ class TestGitExcludePreview:
         result = _make_operation(source, tmp_path / "managed", context=context).run()
 
         assert exclude_file.read_text() == "myfile.txt\n"
-        assert result.git_exclude == "exists"
-        assert result.git_exclude_name == "myfile.txt"
+        assert result.git_excludes == ()
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +177,7 @@ class TestCreateFormatterNoDryRun:
 
         Requirements: 7.5
         """
-        text = render(_create_result(git_exclude="added", git_exclude_name="example"))
+        text = render(_create_result(git_excludes=(("/tmp/alpha", "example", "added"),)))
         assert "Added 'example' to .git/info/exclude" in text
 
     def test_git_exclude_exists(self) -> None:
@@ -188,7 +185,7 @@ class TestCreateFormatterNoDryRun:
 
         Requirements: 7.5
         """
-        text = render(_create_result(git_exclude="exists", git_exclude_name="example"))
+        text = render(_create_result(git_excludes=(("/tmp/alpha", "example", "exists"),)))
         assert "'example' already in .git/info/exclude" in text
 
     def test_force_warning(self) -> None:
@@ -232,7 +229,7 @@ class TestCreateFormatterDryRun:
 
         Requirements: 7.5, 7.6
         """
-        text = render(_create_result(dry_run=True, git_exclude="added", git_exclude_name="example"))
+        text = render(_create_result(dry_run=True, git_excludes=(("/tmp/alpha", "example", "added"),)))
         assert "[dry-run] Added 'example' to .git/info/exclude" in text
 
     def test_git_exclude_exists_dry_run(self) -> None:
@@ -240,7 +237,7 @@ class TestCreateFormatterDryRun:
 
         Requirements: 7.5, 7.6
         """
-        text = render(_create_result(dry_run=True, git_exclude="exists", git_exclude_name="example"))
+        text = render(_create_result(dry_run=True, git_excludes=(("/tmp/alpha", "example", "exists"),)))
         assert "[dry-run] 'example' already in .git/info/exclude" in text
 
     def test_force_warning_dry_run(self) -> None:
@@ -289,8 +286,7 @@ class TestContextNoneSkipsGitExclude:
 
         assert result.exit_code == 0
         assert not (plain_dir / ".git").exists(), ".git dir should not be created"
-        assert result.git_exclude is None
-        assert result.git_exclude_name is None
+        assert result.git_excludes == ()
 
     def test_restore_operation_context_none_returns_zero_without_error(self, tmp_path: Path) -> None:
         """RestoreOperation git-exclude collection is empty when context is None.

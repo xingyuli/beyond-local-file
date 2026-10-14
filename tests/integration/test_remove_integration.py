@@ -5,7 +5,9 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from beyond_local_file.cli import cli
+from beyond_local_file.config import Config
 from beyond_local_file.daemon.handlers import handle_request
+from beyond_local_file.daemon.live import LiveSync
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.operations.remove import RemoveOperation
 from beyond_local_file.project_processor import RevlinkResolveError, resolve_revlink_context
@@ -51,9 +53,13 @@ def _run_remove_operation(config_path: Path, source: Path, rel_path: Path) -> in
     """Run remove in-process so monkeypatches apply."""
     del source
     try:
+        cfg = Config(config_path)
+        cfg.load()
+        live = LiveSync(cfg.get_config_projects(), {})
         response = handle_request(
             config_path,
             {"op": "remove", "cwd": str(Path.cwd()), "path": rel_path.as_posix()},
+            live=live,
         )
     except OSError:
         return 1

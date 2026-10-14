@@ -15,104 +15,6 @@ from beyond_local_file.operations.result import RemoveArtifactKind, RemoveConfig
 from beyond_local_file.operations.revlink import RevlinkContext
 
 
-class RemoveFormatter:
-    """Render adapter for remove: string builders used only by ``render``.
-
-    When ``dry_run`` is ``True`` every line of a message is prefixed with
-    ``[dry-run]``.
-    """
-
-    def __init__(self, dry_run: bool) -> None:
-        """Initialise the formatter.
-
-        Args:
-            dry_run: Whether every message must be labelled as a preview.
-        """
-        self._dry_run = dry_run
-
-    def _line(self, message: str) -> str:
-        """Return message lines, prefixing each one when this is a dry run.
-
-        Args:
-            message: Human-readable removal status text, possibly multiline.
-        """
-        prefix = "[dry-run] " if self._dry_run else ""
-        return "\n".join(f"{prefix}{line}" for line in message.splitlines() or [""])
-
-    def error(self, message: str) -> str:
-        """Return a fatal validation or cleanup error.
-
-        Args:
-            message: Explanation of the failed safety condition or action.
-        """
-        return self._line(f"Error: {message}")
-
-    def artifact_removed(self, artifact: str, strategy: str) -> str:
-        """Return deletion of one target-side projection.
-
-        Args:
-            artifact: Removed target-side item path.
-            strategy: Projection strategy represented by the deleted item.
-        """
-        return self._line(f"Removed {strategy} artifact: {artifact}")
-
-    def artifact_absent(self, artifact: str) -> str:
-        """Return that a missing expected target artifact needs no cleanup.
-
-        Args:
-            artifact: Expected projection path that is absent.
-        """
-        return self._line(f"Skipping absent artifact: {artifact}")
-
-    def exclude_removed(self, entry: str, exclude_file: str) -> str:
-        """Return deletion of one Git-exclude entry.
-
-        Args:
-            entry: Relative item path removed from the exclude file.
-            exclude_file: Repository exclude file updated by the removal.
-        """
-        return self._line(f"Removed Git exclude entry {entry!r} from {exclude_file}")
-
-    def exclude_absent(self, entry: str, exclude_file: str) -> str:
-        """Return that an absent Git-exclude entry needs no cleanup.
-
-        Args:
-            entry: Relative item path that was not present.
-            exclude_file: Repository exclude file that was inspected.
-        """
-        return self._line(f"Skipping absent Git exclude entry {entry!r} in {exclude_file}")
-
-    def managed_copy_deleted(self, managed_copy: str) -> str:
-        """Return permanent deletion of the authoritative managed item.
-
-        Args:
-            managed_copy: Removed canonical managed item path.
-        """
-        return self._line(f"Deleted managed copy: {managed_copy}")
-
-    def config_updated(self, entry: str, config_path: str) -> str:
-        """Return removal of selective-sync configuration entries.
-
-        Args:
-            entry: Relative item path removed from selective mappings.
-            config_path: Updated configuration file.
-        """
-        return self._line(f"Removed {entry!r} from selective-sync configuration: {config_path}")
-
-    def config_skipped(self) -> str:
-        """Return that no participating selective mapping needs updating."""
-        return self._line("Skipping configuration update: no participating selective mapping")
-
-    def config_repair_needed(self, managed_copy: str, entry: str) -> str:
-        """Return the manual repair needed after a post-deletion config failure.
-
-        Args:
-            managed_copy: Managed item already deleted before the failed write.
-            entry: Configuration entry that may require manual removal.
-        """
-        return self._line(f"Managed copy {managed_copy} was deleted; remove {entry!r} from configuration manually.")
-
-
 @dataclass(frozen=True)
 class _Artifact:
     """A validated target-side representation of one managed item."""
@@ -160,14 +62,13 @@ class RemoveOperation:
             return self._result(managed_copy, exit_code=1, errors=errors)
 
         artifact_rows = tuple(self._artifact_row(artifact) for artifact in artifacts)
-        excludes, exclude_errors = self._collect_excludes(artifacts)
+        _excludes, exclude_errors = self._collect_excludes(artifacts)
         if exclude_errors:
             return self._result(
                 managed_copy,
                 exit_code=1,
                 errors=exclude_errors,
                 artifacts=artifact_rows,
-                excludes=excludes,
             )
         config: RemoveConfigStatus | None = None
         config_path: str | None = None
@@ -182,7 +83,6 @@ class RemoveOperation:
         return self._result(
             managed_copy,
             artifacts=artifact_rows,
-            excludes=excludes,
             config=config,
             config_path=config_path,
             config_entry=config_entry,
@@ -222,6 +122,7 @@ class RemoveOperation:
             config=config,
             config_path=config_path,
             config_entry=config_entry,
+            holds=(),
             persist_warning=None,
         )
 

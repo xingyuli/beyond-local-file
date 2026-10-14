@@ -116,6 +116,27 @@ def test_install_item_leaves_equal_replica_bytes(tmp_path: Path) -> None:
     assert get_generation(live.baseline, example, "notes.md") == 0
 
 
+def test_install_item_dry_run_returns_facts_without_writing(tmp_path: Path) -> None:
+    """Dry-run names every replica's git exclude and does not copy or hold."""
+    config_path, hub, alpha, example = _write_lab_workspace(tmp_path)
+    _make_git_repo(alpha)
+    _make_git_repo(example)
+    (alpha / "notes.md").write_text("adopt me")
+    (example / "notes.md").write_text("other bytes")
+    live = _live_sync(config_path)
+
+    facts = live.install_item(alpha, "notes.md", dry_run=True)
+
+    assert not (hub / "notes.md").exists()
+    assert (example / "notes.md").read_text() == "other bytes"
+    assert facts.holds == ()
+    assert facts.fan_out == ((str(hub / "notes.md"), str(example / "notes.md")),)
+    assert {Path(root).name: action for root, name, action in facts.excludes if name == "notes.md"} == {
+        "alpha": "added",
+        "example": "added",
+    }
+
+
 def test_install_item_writes_git_exclude_on_projecting_replicas(tmp_path: Path) -> None:
     """Git exclude is added on every replica that starts projecting the item."""
     config_path, _hub, alpha, example = _write_lab_workspace(tmp_path)

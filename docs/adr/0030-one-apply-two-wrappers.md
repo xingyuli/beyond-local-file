@@ -2,6 +2,8 @@
 
 The module is LiveSync. Hub write, fan-out, hold, out-of-sync, git exclude, and baseline record sit in one `apply`. `tick` (idle / update catch-up) and `request` (shell / fresh catch-up / resolve) wrap it. There is no sibling Apply type. How work arrives differs: idle observe discovers path changes from disk (passive); a shell request names the job (proactive). Those are two wrappers over the same implementation. A mutating shell still applies the mailbox then the named job and does not start an observe (0021). Mapping yaml splice stays in the wrapper (`ConfigUpdater`); apply does not write yaml. Create splices then names the install job. Ingest only names the job. Restore and remove name the disk job, then splice the drop. After a splice, watch roots change without forgetting last-seen (`replace_projects`, not `reload`). Create, restore, remove, and resolve are no longer a second write engine. Update catch-up is the idle wrapper (detect vs baseline). Fresh catch-up and target-add are named install jobs on the shell-style wrapper.
 
+`install_item`, `restore_item`, and `remove_item` return the facts of what they wrote and accept dry-run. `restore_item` materializes a leftover symlink at the requesting path before deleting the hub. The handler uses the worker LiveSync and does not construct another. `seed_item`, `drop_replica`, and idle tick do not return those facts.
+
 ## Status
 
 accepted

@@ -7,10 +7,17 @@ from dataclasses import replace
 from pathlib import Path
 
 from beyond_local_file.configuration_set import ConfigurationSet
-from beyond_local_file.model.config import ConfigProject
+from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.operations.link_check import check
 from beyond_local_file.operations.remove import RemoveOperation
-from beyond_local_file.operations.result import CheckResult, FailedResult, to_ipc
+from beyond_local_file.operations.result import (
+    CheckResult,
+    CreateResult,
+    FailedResult,
+    RemoveResult,
+    RestoreResult,
+    to_ipc,
+)
 from beyond_local_file.operations.revlink import (
     CreateOperation,
     RestoreOperation,
@@ -25,7 +32,7 @@ from beyond_local_file.project_processor import (
 from .catchup import record_baseline, record_item_baseline
 from .ingest import commit_reload
 from .ipc import ProgressCallback, Request, Response, format_status_line
-from .live import LiveSync
+from .live import ApplyFacts, LiveSync
 from .log import log_duration, note_persist_ms
 from .store import BaselineTrees, load_baseline, load_snapshot, save_baseline, save_snapshot
 
@@ -113,7 +120,7 @@ def _handle_check(
     )
 
 
-def _handle_create(
+def _handle_create(  # noqa: PLR0911 -- each failed resolve returns before the job
     config_path: Path,
     request: Request,
     created: dict[str, LiveSync],
@@ -147,19 +154,24 @@ def _handle_create(
         force=bool(request.get("force")),
         context=context,
     ).run()
-    if result.exit_code != 0 or result.dry_run or result.already_managed is not None:
+    if result.exit_code != 0 or result.already_managed is not None:
         return to_ipc(result)
-    observer, subset = _observer_for(config_path, created, context)
-    if subset:
-        observer.replace_projects(subset)
-    observer.install_item(cwd, rel_path.as_posix())
+    observer = _require_live(created)
+    if isinstance(observer, FailedResult):
+        return to_ipc(observer)
+    if not dry_run:
+        _replace_project(config_path, observer, context)
+    facts = observer.install_item(cwd, rel_path.as_posix(), dry_run=dry_run)
+    result = _merge_create(result, facts)
+    if dry_run:
+        return to_ipc(result)
     warning = _try_persist(config_path, request, created, on_progress, previous_trees)
     if warning is not None:
         result = replace(result, persist_warning=warning)
     return to_ipc(result)
 
 
-def _handle_restore(
+def _handle_restore(  # noqa: PLR0911 -- each failed resolve returns before the job
     config_path: Path,
     request: Request,
     created: dict[str, LiveSync],
@@ -186,12 +198,19 @@ def _handle_restore(
         context=context,
     )
     result = operation.run()
-    if result.exit_code != 0 or result.dry_run:
+    if result.exit_code != 0:
         return to_ipc(result)
-    observer, subset = _observer_for(config_path, created, context)
-    if subset:
-        observer.replace_projects(subset)
-    observer.restore_item(cwd, rel_path.as_posix())
+    observer = _require_live(created)
+    if isinstance(observer, FailedResult):
+        return to_ipc(observer)
+    if not dry_run:
+        _replace_project(config_path, observer, context)
+    facts = observer.restore_item(cwd, rel_path.as_posix(), dry_run=dry_run)
+    if facts.error is not None:
+        return to_ipc(replace(result, exit_code=1, errors=(facts.error,), leftover_symlink=True))
+    result = _merge_restore(result, facts)
+    if dry_run:
+        return to_ipc(result)
     result = operation.drop_mapping(result)
     _replace_after_mapping_drop(config_path, created, context)
     warning = _try_persist(config_path, request, created, on_progress, previous_trees)
@@ -200,7 +219,7 @@ def _handle_restore(
     return to_ipc(result)
 
 
-def _handle_remove(
+def _handle_remove(  # noqa: PLR0911 -- each failed resolve returns before the job
     config_path: Path,
     request: Request,
     created: dict[str, LiveSync],
@@ -225,12 +244,17 @@ def _handle_remove(
         context=context,
     )
     result = operation.run()
-    if result.exit_code != 0 or result.dry_run:
+    if result.exit_code != 0:
         return to_ipc(result)
-    observer, subset = _observer_for(config_path, created, context)
-    if subset:
-        observer.replace_projects(subset)
-    observer.remove_item(cwd, rel_path.as_posix())
+    observer = _require_live(created)
+    if isinstance(observer, FailedResult):
+        return to_ipc(observer)
+    if not dry_run:
+        _replace_project(config_path, observer, context)
+    facts = observer.remove_item(cwd, rel_path.as_posix(), dry_run=dry_run)
+    result = _merge_remove(result, facts)
+    if dry_run:
+        return to_ipc(result)
     result = operation.drop_mapping(result)
     if result.exit_code != 0:
         return to_ipc(result)
@@ -299,29 +323,68 @@ def _try_persist(
     return None
 
 
-def _observer_for(
-    config_path: Path,
-    created: dict[str, LiveSync],
-    context: RevlinkContext,
-) -> tuple[LiveSync, dict[str, ConfigProject]]:
-    """Return the worker LiveSync, or a throwaway observer for this project.
+def _require_live(created: dict[str, LiveSync]) -> LiveSync | FailedResult:
+    """Return the worker LiveSync.
+
+    Args:
+        created: Handler-scoped slot filled by the worker.
+
+    Returns:
+        The worker observer, or a failed result when the worker omitted one.
+    """
+    observer = created.get("live")
+    if observer is None:
+        return FailedResult(1, ("Error: live observer is missing",))
+    return observer
+
+
+def _replace_project(config_path: Path, observer: LiveSync, context: RevlinkContext) -> None:
+    """Reload this managed project's mappings onto *observer* after a yaml splice.
 
     Args:
         config_path: Path to the loaded config file.
-        created: Handler-scoped LiveSync slot, filled when the worker omitted one.
+        observer: Worker LiveSync.
         context: Resolved project for this request.
-
-    Returns:
-        Observer and the committed mappings for this managed project.
     """
     projects = ConfigurationSet(config_path).projects()
     subset = {key: project for key, project in projects.items() if project.managed_project_name == context.project_name}
-    observer = created.get("live")
-    if observer is None:
-        trees = load_baseline(config_path) or {}
-        observer = LiveSync(subset or projects, trees, last_seen_from_baseline=True)
-        created["live"] = observer
-    return observer, subset
+    if subset:
+        observer.replace_projects(subset)
+
+
+def _merge_create(result: CreateResult, facts: ApplyFacts) -> CreateResult:
+    """Attach install facts to a validated create result."""
+    excludes = tuple(
+        (root, name, "added" if action == "added" else "exists") for root, name, action in facts.excludes
+    )
+    return replace(result, git_excludes=excludes, fan_out=facts.fan_out, holds=facts.holds)
+
+
+def _merge_restore(result: RestoreResult, facts: ApplyFacts) -> RestoreResult:
+    """Attach restore facts to a validated restore result."""
+    excludes = tuple(
+        (name, "removed" if action == "removed" else "not_found") for _root, name, action in facts.excludes
+    )
+    return replace(
+        result,
+        leftover_symlink=facts.leftover_symlink,
+        replica_deletes=facts.deletes,
+        git_excludes=excludes,
+        holds=facts.holds,
+    )
+
+
+def _merge_remove(result: RemoveResult, facts: ApplyFacts) -> RemoveResult:
+    """Attach remove facts to a validated remove result."""
+    artifacts = tuple(
+        (path, None if kind is None else ("copy" if kind == "copy" else "symlink"), present)
+        for path, kind, present in facts.artifacts
+    )
+    excludes = tuple(
+        (name, GitExcludeManager(Path(root)).exclude_file.as_posix(), action == "removed")
+        for root, name, action in facts.excludes
+    )
+    return replace(result, artifacts=artifacts, excludes=excludes, holds=facts.holds)
 
 
 def _replace_after_mapping_drop(

@@ -37,6 +37,30 @@ from .store import (
     state_equal,
 )
 
+
+@dataclass(frozen=True)
+class ApplyFacts:
+    """What a named mutating-shell job wrote, or would write on dry-run."""
+
+    excludes: tuple[tuple[str, str, str], ...] = ()
+    """Replica root, entry name, and action (added, exists, removed, not_found)."""
+
+    fan_out: tuple[tuple[str, str], ...] = ()
+    """Hub path and replica path for each fan-out copy."""
+
+    deletes: tuple[str, ...] = ()
+    """Other replicas' projection paths removed, or that a real run would remove."""
+
+    holds: tuple[tuple[str, str], ...] = ()
+    """Hold clause and slot. Empty on dry-run."""
+
+    leftover_symlink: bool = False
+    artifacts: tuple[tuple[str, str | None, bool], ...] = ()
+    """Remove rows: path, kind (copy or symlink) or None, and whether it was present."""
+
+    error: str | None = None
+
+
 DELETE_WINDOW = 3
 """Deletes win on the live path when hub_gen - base_gen is at most this value."""
 
@@ -123,7 +147,13 @@ def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
     return all(state_equal(hub_tree[rel], replica_tree[rel]) for rel in hub_tree)
 
 
-def _copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
+def _copy_hub_onto_replica(
+    hub: Path,
+    replica: Path,
+    rel: str,
+    *,
+    echo_hold: bool = True,
+) -> tuple[str, str] | None:
     """Install hub bytes at *rel* onto *replica*, holding different replica bytes first.
 
     Equal bytes are left in place. A missing projection is copied with no hold.
@@ -132,13 +162,19 @@ def _copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
         hub: Managed-project directory.
         replica: Target-project directory.
         rel: Item path relative to each root.
+        echo_hold: When True, print the hold warning. Named shell jobs pass
+            False and put the hold on apply facts instead.
+
+    Returns:
+        Hold clause and slot when replica bytes were held, otherwise None.
     """
     destination = replica / rel
     source = hub / rel
     source_ready = source.exists() or source.is_symlink()
     dest_ready = destination.exists() or destination.is_symlink()
     if dest_ready and source_ready and item_matches(hub, replica, rel):
-        return
+        return None
+    hold: tuple[str, str] | None = None
     if dest_ready and source_ready:
         clause = reason_clause(
             REASON_CREATE_OVERWRITE,
@@ -152,9 +188,56 @@ def _copy_hub_onto_replica(hub: Path, replica: Path, rel: str) -> None:
             replica=replica,
             reason=REASON_CREATE_OVERWRITE,
         )
-        print(f"WARNING: {clause}", flush=True)
-        print(f"Held at {slot.as_posix()}", flush=True)
+        hold = (clause, slot.as_posix())
+        if echo_hold:
+            print(f"WARNING: {clause}", flush=True)
+            print(f"Held at {slot.as_posix()}", flush=True)
     copy_projection(source, destination)
+    return hold
+
+
+def _exclude_fact(root: Path, rel: str, *, removing: bool) -> tuple[str, str, str] | None:
+    """Return the git-exclude action for *rel* on *root*, or None outside a git repo.
+
+    Args:
+        root: Replica root.
+        rel: Item path relative to *root*.
+        removing: True when the job strips the entry.
+
+    Returns:
+        Root, entry name, and action.
+    """
+    manager = GitExcludeManager(root)
+    if not manager.is_git_repo():
+        return None
+    present = rel in manager.read_entries()
+    if removing:
+        action = "removed" if present else "not_found"
+    else:
+        action = "exists" if present else "added"
+    return root.as_posix(), rel, action
+
+
+def _record_exclude(root: Path, rel: str, *, removing: bool, dry_run: bool) -> tuple[str, str, str] | None:
+    """Read the git-exclude action and, unless *dry_run*, write it.
+
+    Args:
+        root: Replica root.
+        rel: Item path relative to *root*.
+        removing: True when the job strips the entry.
+        dry_run: When True, do not write the exclude file.
+
+    Returns:
+        Root, entry name, and action, or None when *root* is not a git repo.
+    """
+    fact = _exclude_fact(root, rel, removing=removing)
+    if fact is None or dry_run:
+        return fact
+    if removing:
+        _remove_git_exclude(root, rel)
+    else:
+        _add_git_exclude(root, rel)
+    return fact
 
 
 def _add_git_exclude(root: Path, rel: str) -> None:
@@ -364,28 +447,43 @@ class LiveSync:
                 )
             self._last_seen[str(watch.root)] = scanned
 
-    def install_item(self, replica: Path, rel: str) -> None:
+    def install_item(self, replica: Path, rel: str, *, dry_run: bool = False) -> ApplyFacts:
         """Named item-add: copy *rel* from *replica* onto the hub, fan out, exclude, gen 0.
 
         Does not drain the mailbox. Colliding replica bytes are held
         ``create-overwrite`` then overwritten. Equal bytes stay. Generation 0
-        is the first version observed.
+        is the first version observed. Dry-run enumerates the same replicas
+        and git-exclude actions and does not write. A dry-run before the yaml
+        splice still counts selective mappings of the adopting project.
 
         Args:
             replica: Adopting replica that already has the bytes.
             rel: Item path relative to the hub and replicas.
+            dry_run: When True, return facts without writing disks.
+
+        Returns:
+            Fan-out copies, per-replica git-exclude actions, and holds.
         """
         hub = self._hub_for_install(rel)
-        source = replica / rel
-        with log_duration("create: copy"):
-            copy_projection(source, hub / rel)
-        others = self._other_replica_roots(replica, rel)
-        with log_duration("create: fan-out"):
-            for other in others:
-                _copy_hub_onto_replica(hub, other, rel)
+        others = self._other_replica_roots(replica, rel, pending=dry_run)
+        fan_out = tuple(((hub / rel).as_posix(), (other / rel).as_posix()) for other in others)
+        holds: list[tuple[str, str]] = []
+        if not dry_run:
+            with log_duration("create: copy"):
+                copy_projection(replica / rel, hub / rel)
+            with log_duration("create: fan-out"):
+                for other in others:
+                    held = _copy_hub_onto_replica(hub, other, rel, echo_hold=False)
+                    if held is not None:
+                        holds.append(held)
+        excludes: list[tuple[str, str, str]] = []
         with log_duration("create: git-exclude"):
             for root in (replica, *others):
-                _add_git_exclude(root, rel)
+                fact = _record_exclude(root, rel, removing=False, dry_run=dry_run)
+                if fact is not None:
+                    excludes.append(fact)
+        if dry_run:
+            return ApplyFacts(excludes=tuple(excludes), fan_out=fan_out)
         self._record_item(hub, rel, gen=0)
         self._record_item(replica, rel, gen=0)
         for other in others:
@@ -393,6 +491,7 @@ class LiveSync:
         self._last_source[(str(hub), rel)] = replica
         self._watch_roots = _build_watch_roots(self._projects)
         print(f"live: install {rel} gen 0", flush=True)
+        return ApplyFacts(excludes=tuple(excludes), fan_out=fan_out, holds=tuple(holds))
 
     def seed_item(self, replica: Path, rel: str) -> None:
         """Named install-from-hub: copy *rel* from the hub onto *replica*, exclude, gen 0.
@@ -417,59 +516,107 @@ class LiveSync:
         self._last_source.setdefault((str(hub), rel), hub)
         print(f"live: seed {rel} gen 0", flush=True)
 
-    def restore_item(self, replica: Path, rel: str) -> None:
+    def restore_item(self, replica: Path, rel: str, *, dry_run: bool = False) -> ApplyFacts:
         """Named restore: delete hub and other replicas' copies; leave *replica*.
 
-        Inverse of :meth:`install_item`. Does not drain the mailbox. Git exclude
-        is stripped on every replica that stops projecting *rel*, including
-        *replica*. Absence is recorded without incrementing generation.
+        Inverse of :meth:`install_item`. Does not drain the mailbox. A leftover
+        symlink at *replica* is replaced with hub bytes before the hub is
+        deleted. Git exclude is stripped on every replica that stops projecting
+        *rel*, including *replica*. Absence is recorded without incrementing
+        generation. Dry-run returns the same facts and does not write.
 
         Args:
             replica: Requesting replica whose file stays as an unmanaged local file.
             rel: Item path relative to the hub and replicas.
+            dry_run: When True, return facts without writing disks.
+
+        Returns:
+            Leftover-symlink flag, replica deletes, and git-exclude actions.
         """
         hub = self._hub_for_install(rel)
+        source = replica / rel
+        leftover = source.is_symlink()
         others = self._other_replica_roots(replica, rel)
-        with log_duration("restore: delete-managed"):
-            _remove_path(hub / rel)
-        with log_duration("restore: undo-fan-out"):
-            for other in others:
-                _remove_path(other / rel)
+        deletes = tuple(
+            (other / rel).as_posix() for other in others if (other / rel).exists() or (other / rel).is_symlink()
+        )
+        if not dry_run and leftover:
+            try:
+                source.unlink(missing_ok=False)
+            except PermissionError:
+                return ApplyFacts(
+                    leftover_symlink=True,
+                    error=f"Permission denied removing symlink at {source}",
+                )
+            with log_duration("restore: replace"):
+                copy_projection(hub / rel, source)
+        if not dry_run:
+            with log_duration("restore: delete-managed"):
+                _remove_path(hub / rel)
+            with log_duration("restore: undo-fan-out"):
+                for other in others:
+                    _remove_path(other / rel)
+        excludes: list[tuple[str, str, str]] = []
         with log_duration("restore: git-exclude"):
             for root in (replica, *others):
-                _remove_git_exclude(root, rel)
+                fact = _record_exclude(root, rel, removing=True, dry_run=dry_run)
+                if fact is not None:
+                    excludes.append(fact)
+        if dry_run:
+            return ApplyFacts(excludes=tuple(excludes), deletes=deletes, leftover_symlink=leftover)
         self._forget_item(hub, rel)
         for other in others:
             self._forget_item(other, rel)
         print(f"live: restore {rel}", flush=True)
+        return ApplyFacts(excludes=tuple(excludes), deletes=deletes, leftover_symlink=leftover)
 
-    def remove_item(self, replica: Path, rel: str) -> None:
+    def remove_item(self, replica: Path, rel: str, *, dry_run: bool = False) -> ApplyFacts:
         """Named remove: delete hub and every projection, including *replica*.
 
         Does not drain the mailbox. Git exclude is stripped on every replica
         that stops projecting *rel*. Absence is recorded without incrementing
-        generation.
+        generation. Dry-run returns the same artifact and exclude facts and
+        does not write.
 
         Args:
             replica: Requesting replica; used to identify sibling projections.
             rel: Item path relative to the hub and replicas.
+            dry_run: When True, return facts without writing disks.
+
+        Returns:
+            Target artifacts and git-exclude actions.
         """
         hub = self._hub_for_install(rel)
         replicas = self._replica_roots(rel)
         if not any(root.resolve() == replica.resolve() for root in replicas):
             replicas = [replica, *replicas]
-        with log_duration("remove: cleanup-targets"):
-            for root in replicas:
-                _remove_path(root / rel)
-        with log_duration("remove: delete-managed"):
-            _remove_path(hub / rel)
+        artifacts: list[tuple[str, str | None, bool]] = []
+        for root in replicas:
+            path = root / rel
+            present = path.exists() or path.is_symlink()
+            kind: str | None = None
+            if present:
+                kind = "symlink" if path.is_symlink() else "copy"
+            artifacts.append((path.as_posix(), kind, present))
+        excludes: list[tuple[str, str, str]] = []
+        if not dry_run:
+            with log_duration("remove: cleanup-targets"):
+                for root in replicas:
+                    _remove_path(root / rel)
+            with log_duration("remove: delete-managed"):
+                _remove_path(hub / rel)
         with log_duration("remove: git-exclude"):
             for root in replicas:
-                _remove_git_exclude(root, rel)
+                fact = _record_exclude(root, rel, removing=True, dry_run=dry_run)
+                if fact is not None:
+                    excludes.append(fact)
+        if dry_run:
+            return ApplyFacts(excludes=tuple(excludes), artifacts=tuple(artifacts))
         self._forget_item(hub, rel)
         for root in replicas:
             self._forget_item(root, rel)
         print(f"live: remove {rel}", flush=True)
+        return ApplyFacts(excludes=tuple(excludes), artifacts=tuple(artifacts))
 
     def drop_replica(self, replica: Path, rel: str) -> None:
         """Named ingest retract: delete *replica*'s copy of *rel*; keep the hub.
@@ -772,20 +919,27 @@ class LiveSync:
                 return _owner_hub(watch, rel)
         return self._hub_for_install(rel)
 
-    def _replica_roots(self, rel: str) -> list[Path]:
+    def _replica_roots(self, rel: str, *, pending_on: Path | None = None) -> list[Path]:
         """Return mapping targets that declare *rel*.
 
         Args:
             rel: Item path relative to each replica.
+            pending_on: Adopting replica whose project's selective mappings
+                will gain *rel* on the yaml splice. Dry-run create passes this
+                before the splice.
 
         Returns:
             Unique target roots in first-seen order.
         """
+        pending = pending_on.resolve() if pending_on is not None else None
         seen: set[Path] = set()
         roots: list[Path] = []
         for project in self._projects.values():
+            project_pending = pending is not None and any(
+                target.resolve() == pending for mapping in project.mappings for target in mapping.targets
+            )
             for mapping in project.mappings:
-                if mapping.subpaths is not None and rel not in mapping.subpaths:
+                if mapping.subpaths is not None and rel not in mapping.subpaths and not project_pending:
                     continue
                 for target in mapping.targets:
                     resolved = target.resolve()
@@ -795,18 +949,21 @@ class LiveSync:
                     roots.append(target)
         return roots
 
-    def _other_replica_roots(self, source: Path, rel: str) -> list[Path]:
+    def _other_replica_roots(self, source: Path, rel: str, *, pending: bool = False) -> list[Path]:
         """Return other mapping targets that declare *rel*.
 
         Args:
             source: Adopting replica to exclude.
             rel: Item path relative to each replica.
+            pending: When True, count selective mappings of *source*'s project
+                that do not list *rel* yet.
 
         Returns:
             Unique target roots in first-seen order.
         """
         source_resolved = source.resolve()
-        return [root for root in self._replica_roots(rel) if root.resolve() != source_resolved]
+        pending_on = source if pending else None
+        return [root for root in self._replica_roots(rel, pending_on=pending_on) if root.resolve() != source_resolved]
 
     def _forget_item(self, root: Path, item_name: str) -> None:
         """Record absence of *item_name* and nested paths without incrementing generation.

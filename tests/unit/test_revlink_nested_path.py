@@ -149,8 +149,7 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         context = _make_context(repo_dir, tmp_path)
         result = _make_operation(source, dest_root, _NESTED_REL_PATH, dry_run=True, context=context).run()
 
-        assert result.git_exclude == "added"
-        assert result.git_exclude_name == ".kiro/specs/foo"
+        assert result.git_excludes == ()
 
     def test_git_exclude_idempotent_with_full_rel_path(self, tmp_path: Path) -> None:
         """formatter.git_exclude_exists is called with str(rel_path) when entry already present."""
@@ -167,8 +166,7 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         context = _make_context(repo_dir, tmp_path)
         result = _make_operation(source, dest_root, _NESTED_REL_PATH, dry_run=True, context=context).run()
 
-        assert result.git_exclude == "exists"
-        assert result.git_exclude_name == ".kiro/specs/foo"
+        assert result.git_excludes == ()
 
     def test_git_exclude_basename_entry_not_treated_as_match(self, tmp_path: Path) -> None:
         """An existing entry for just 'foo' does not satisfy the '.kiro/specs/foo' check."""
@@ -185,8 +183,7 @@ class TestGitExcludeEntryNameWithNestedRelPath:
         context = _make_context(repo_dir, tmp_path)
         result = _make_operation(source, dest_root, _NESTED_REL_PATH, dry_run=True, context=context).run()
 
-        assert result.git_exclude == "added"
-        assert result.git_exclude_name == ".kiro/specs/foo"
+        assert result.git_excludes == ()
 
 
 # ---------------------------------------------------------------------------

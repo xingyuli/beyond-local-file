@@ -1,9 +1,8 @@
-"""Property-based tests for RestoreOperation._replace unlink-not-rmtree invariant.
+"""Property test: restore_item unlinks a leftover symlink instead of rmtree.
 
-This module verifies that invoking ``RestoreOperation._replace`` on a symlink
-whose target is a directory never deletes the target directory — proving that
-``shutil.rmtree`` is not called on the symlink path (which would follow the
-link and destroy the managed copy).
+``shutil.rmtree`` on the symlink would follow it and destroy the hub copy
+before the bytes are copied back. ``restore_item`` must leave those bytes on
+the requesting path.
 """
 
 from __future__ import annotations
@@ -14,7 +13,8 @@ from pathlib import Path
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from beyond_local_file.operations.revlink import RestoreOperation
+from beyond_local_file.daemon.live import LiveSync
+from beyond_local_file.model.config import ConfigProject, Mapping
 from tests.path_strategies import is_safe_fs_name
 
 # ---------------------------------------------------------------------------
@@ -53,20 +53,10 @@ def test_replace_does_not_rmtree_symlink_target(
     file_name: str,
     file_content: bytes,
 ) -> None:
-    """Verify that _replace removes the symlink with unlink, not rmtree.
+    """restore_item unlinks the symlink, then copies hub bytes onto PATH.
 
-    For any symlink at ``source`` whose target is a real directory, invoking
-    ``RestoreOperation._replace`` must leave the target directory intact after
-    the call completes.  If ``shutil.rmtree`` were called on the symlink path
-    it would follow the link and delete the target directory; using
-    ``source.unlink()`` removes only the symlink inode, leaving the target
-    untouched.
-
-    The assertion is: after ``_replace`` returns, the managed directory that
-    was the symlink target still exists on disk.
-
-    A fresh ``tempfile.TemporaryDirectory`` is used inside the test body so
-    each Hypothesis example gets a fully isolated directory.
+    If ``shutil.rmtree`` followed the symlink, the hub bytes would be gone
+    before the copy and the requesting path would not contain *file_content*.
 
     Args:
         dir_name: Name of the managed directory (the symlink target).
@@ -97,24 +87,17 @@ def test_replace_does_not_rmtree_symlink_target(
         symlink_path = cwd_dir / dir_name
         symlink_path.symlink_to(managed_dir)
 
-        assert symlink_path.is_symlink(), "Pre-condition: symlink must exist before _replace"
-        assert managed_dir.is_dir(), "Pre-condition: managed directory must exist before _replace"
+        assert symlink_path.is_symlink(), "Pre-condition: symlink must exist before restore"
+        assert managed_dir.is_dir(), "Pre-condition: managed directory must exist before restore"
 
-        # Invoke _replace directly.  dest_root is set so that
-        # dest_root / source.name == managed_dir.
         dest_root = tmp_path / "managed"
-        operation = RestoreOperation(
-            source=symlink_path,
-            dest_root=dest_root,
-            rel_path=Path(dir_name),
-            dry_run=False,
+        project = ConfigProject(
+            managed_project_name="lab-app",
+            managed_project_path=dest_root,
+            mappings=[Mapping(targets=[cwd_dir], subpaths=[dir_name])],
         )
-        operation._replace(managed_dir)
+        LiveSync({"lab-app": project}, {}).restore_item(cwd_dir, dir_name)
 
-        # The managed directory must still exist — rmtree was NOT called.
-        assert managed_dir.exists(), (
-            f"_replace deleted the symlink target directory at {managed_dir}. "
-            f"This indicates shutil.rmtree was called on the symlink path "
-            f"instead of source.unlink()."
-        )
-        assert managed_dir.is_dir(), f"Managed directory at {managed_dir} is no longer a directory after _replace."
+        assert symlink_path.is_dir()
+        assert not symlink_path.is_symlink()
+        assert (symlink_path / file_name).read_bytes() == file_content

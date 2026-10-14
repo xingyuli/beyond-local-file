@@ -12,7 +12,9 @@ Stop-syncing a path is three daemon operations, not one:
 
 Reload is plan → prompt on removals → commit. Path changes are create/update/delete. Mapping changes are item-add/item-remove/target-add/target-remove/project-add/project-remove. Trigger hooks attach to these types later.
 
-Daemon operations return structured results over IPC. The **shell** renders once (`from_ipc` → `render`). Progress stays streamed. Check is projects × baseline → rows. User-visible strings are unchanged. `CmdOperation` and stdout capture are gone.
+Daemon operations return structured results over IPC. The **shell** renders once (`from_ipc` → `render`). Progress stays streamed. Check is projects × baseline → rows. `CmdOperation` and stdout capture are gone.
+
+Named create, restore, and remove jobs return what they wrote. Render prints those facts: a git-exclude line per replica, fan-out or deletes, and any hold. Create's git-exclude is per replica, not only the requesting working directory. Dry-run uses the same enumeration and does not write. Holds are absent on dry-run.
 
 ## Status
 

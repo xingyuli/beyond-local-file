@@ -67,11 +67,11 @@ class CreateResult:
     force_overwrite: str | None
     source: str
     dest: str
-    git_exclude: GitExcludeAction | None
-    git_exclude_name: str | None
-    fan_out: tuple[tuple[str, str], ...]
-    config_entry: str | None
-    persist_warning: str | None
+    git_excludes: tuple[tuple[str, str, GitExcludeAction], ...] = ()
+    fan_out: tuple[tuple[str, str], ...] = ()
+    holds: tuple[tuple[str, str], ...] = ()
+    config_entry: str | None = None
+    persist_warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,9 +85,10 @@ class RestoreResult:
     source: str
     managed: str
     replica_deletes: tuple[str, ...]
-    git_excludes: tuple[tuple[str, RestoreGitExcludeStatus], ...]
-    config_removed: str | None
-    persist_warning: str | None
+    git_excludes: tuple[tuple[str, RestoreGitExcludeStatus], ...] = ()
+    holds: tuple[tuple[str, str], ...] = ()
+    config_removed: str | None = None
+    persist_warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,10 +101,11 @@ class RemoveResult:
     artifacts: tuple[tuple[str, RemoveArtifactKind | None, bool], ...]
     excludes: tuple[tuple[str, str, bool], ...]
     managed_copy: str
-    config: RemoveConfigStatus | None
-    config_path: str | None
-    config_entry: str | None
-    persist_warning: str | None
+    config: RemoveConfigStatus | None = None
+    config_path: str | None = None
+    config_entry: str | None = None
+    holds: tuple[tuple[str, str], ...] = ()
+    persist_warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -393,6 +395,20 @@ def _skip_line(row: CheckRow) -> str | None:
     return None
 
 
+def _story_line(dry_run: bool, message: str) -> str:
+    """Prefix each line when *dry_run* is set."""
+    prefix = "[dry-run] " if dry_run else ""
+    return "\n".join(f"{prefix}{line}" for line in message.splitlines() or [""])
+
+
+def _hold_lines(dry_run: bool, holds: tuple[tuple[str, str], ...]) -> list[str]:
+    lines: list[str] = []
+    for clause, slot in holds:
+        lines.append(_story_line(dry_run, f"WARNING: {clause}"))
+        lines.append(_story_line(dry_run, f"Held at {slot}"))
+    return lines
+
+
 def _create_to_ipc(result: CreateResult) -> dict[str, Any]:
     return {
         "already_managed": result.already_managed,
@@ -403,24 +419,54 @@ def _create_to_ipc(result: CreateResult) -> dict[str, Any]:
         "exit_code": result.exit_code,
         "fan_out": [list(pair) for pair in result.fan_out],
         "force_overwrite": result.force_overwrite,
-        "git_exclude": result.git_exclude,
-        "git_exclude_name": result.git_exclude_name,
+        "git_excludes": [list(item) for item in result.git_excludes],
+        "holds": [list(item) for item in result.holds],
         "kind": "create",
         "persist_warning": result.persist_warning,
         "source": result.source,
     }
 
 
+def _create_excludes_from_ipc(raw: object) -> tuple[tuple[str, str, GitExcludeAction], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("create git_excludes must be a list")
+    items: list[tuple[str, str, GitExcludeAction]] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("create git_exclude must have a root, name, and action")
+        try:
+            root, name, action = item
+        except ValueError:
+            raise ValueError("create git_exclude must have a root, name, and action") from None
+        if action not in _GIT_EXCLUDE_ACTIONS:
+            raise ValueError("create git_exclude is not a known status")
+        items.append((str(root), str(name), "added" if action == "added" else "exists"))
+    return tuple(items)
+
+
+def _holds_from_ipc(raw: object) -> tuple[tuple[str, str], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list | tuple):
+        raise ValueError("holds must be a list")
+    items: list[tuple[str, str]] = []
+    for item in raw:
+        if not isinstance(item, list | tuple):
+            raise ValueError("hold must have a clause and a slot")
+        try:
+            clause, slot = item
+        except ValueError:
+            raise ValueError("hold must have a clause and a slot") from None
+        items.append((str(clause), str(slot)))
+    return tuple(items)
+
+
 def _create_from_ipc(payload: dict[str, Any]) -> CreateResult:
     raw_code = payload.get("exit_code", 0)
     if not isinstance(raw_code, int):
         raise ValueError("create operation result needs an exit_code")
-    git_exclude: GitExcludeAction | None = None
-    raw_git = payload.get("git_exclude")
-    if raw_git is not None:
-        if raw_git not in _GIT_EXCLUDE_ACTIONS:
-            raise ValueError("create git_exclude is not a known status")
-        git_exclude = "added" if raw_git == "added" else "exists"
     return CreateResult(
         exit_code=raw_code,
         dry_run=bool(payload.get("dry_run")),
@@ -429,9 +475,9 @@ def _create_from_ipc(payload: dict[str, Any]) -> CreateResult:
         force_overwrite=_opt_str(payload.get("force_overwrite"), "force_overwrite"),
         source=str(payload.get("source") or ""),
         dest=str(payload.get("dest") or ""),
-        git_exclude=git_exclude,
-        git_exclude_name=_opt_str(payload.get("git_exclude_name"), "git_exclude_name"),
+        git_excludes=_create_excludes_from_ipc(payload.get("git_excludes")),
         fan_out=_fan_out_from_ipc(payload.get("fan_out")),
+        holds=_holds_from_ipc(payload.get("holds")),
         config_entry=_opt_str(payload.get("config_entry"), "config_entry"),
         persist_warning=_opt_str(payload.get("persist_warning"), "persist_warning"),
     )
@@ -471,27 +517,30 @@ def _fan_out_from_ipc(raw: object) -> tuple[tuple[str, str], ...]:
 
 
 def _render_create(result: CreateResult) -> str:
-    from .revlink import CreateFormatter  # noqa: PLC0415
-
-    formatter = CreateFormatter(dry_run=result.dry_run)
+    dry = result.dry_run
     lines: list[str] = []
     if result.errors:
-        lines.extend(formatter.error(message) for message in result.errors)
+        lines.extend(_story_line(dry, f"Error: {message}") for message in result.errors)
     elif result.already_managed is not None:
-        lines.append(formatter.info(result.already_managed))
+        lines.append(_story_line(dry, result.already_managed))
     else:
         if result.force_overwrite is not None:
-            lines.append(formatter.force_warning(result.force_overwrite))
-        lines.append(formatter.copying(result.source, result.dest))
-        lines.append(formatter.target_left_in_place(result.source))
-        if result.git_exclude == "added" and result.git_exclude_name is not None:
-            lines.append(formatter.git_exclude_added(result.git_exclude_name))
-        elif result.git_exclude == "exists" and result.git_exclude_name is not None:
-            lines.append(formatter.git_exclude_exists(result.git_exclude_name))
+            lines.append(_story_line(dry, f"Warning: overwriting existing managed copy at {result.force_overwrite}"))
+        lines.append(_story_line(dry, f"Copying {result.source} -> {result.dest}"))
+        lines.append(_story_line(dry, f"✓ Target path left in place: {result.source}"))
+        for index, (root, name, action) in enumerate(result.git_excludes):
+            if action == "added":
+                text = f"Added {name!r} to .git/info/exclude"
+            else:
+                text = f"{name!r} already in .git/info/exclude"
+            if index > 0:
+                text = f"{text} ({root})"
+            lines.append(_story_line(dry, text))
         if result.config_entry is not None:
-            lines.append(formatter.config_updated(result.config_entry))
+            lines.append(_story_line(dry, f"Added {result.config_entry!r} to config subpath list"))
         for hub, replica in result.fan_out:
-            lines.append(formatter.fan_out_copying(hub, replica))
+            lines.append(_story_line(dry, f"Fan-out {hub} -> {replica}"))
+        lines.extend(_hold_lines(dry, result.holds))
     if result.persist_warning is not None:
         lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
     if not lines:
@@ -506,6 +555,7 @@ def _restore_to_ipc(result: RestoreResult) -> dict[str, Any]:
         "errors": list(result.errors),
         "exit_code": result.exit_code,
         "git_excludes": [list(item) for item in result.git_excludes],
+        "holds": [list(item) for item in result.holds],
         "kind": "restore",
         "leftover_symlink": result.leftover_symlink,
         "managed": result.managed,
@@ -528,6 +578,7 @@ def _restore_from_ipc(payload: dict[str, Any]) -> RestoreResult:
         managed=str(payload.get("managed") or ""),
         replica_deletes=_str_tuple(payload.get("replica_deletes"), "replica_deletes"),
         git_excludes=_restore_git_from_ipc(payload.get("git_excludes")),
+        holds=_holds_from_ipc(payload.get("holds")),
         config_removed=_opt_str(payload.get("config_removed"), "config_removed"),
         persist_warning=_opt_str(payload.get("persist_warning"), "persist_warning"),
     )
@@ -562,6 +613,7 @@ def _remove_to_ipc(result: RemoveResult) -> dict[str, Any]:
         "errors": list(result.errors),
         "excludes": [list(item) for item in result.excludes],
         "exit_code": result.exit_code,
+        "holds": [list(item) for item in result.holds],
         "kind": "remove",
         "managed_copy": result.managed_copy,
         "persist_warning": result.persist_warning,
@@ -588,6 +640,7 @@ def _remove_from_ipc(payload: dict[str, Any]) -> RemoveResult:
         config=config,
         config_path=_opt_str(payload.get("config_path"), "config_path"),
         config_entry=_opt_str(payload.get("config_entry"), "config_entry"),
+        holds=_holds_from_ipc(payload.get("holds")),
         persist_warning=_opt_str(payload.get("persist_warning"), "persist_warning"),
     )
 
@@ -634,29 +687,28 @@ def _remove_excludes_from_ipc(raw: object) -> tuple[tuple[str, str, bool], ...]:
 
 
 def _render_restore(result: RestoreResult) -> str:
-    from .revlink import RestoreFormatter  # noqa: PLC0415
-
-    formatter = RestoreFormatter(dry_run=result.dry_run)
+    dry = result.dry_run
     lines: list[str] = []
     if result.errors:
         if result.leftover_symlink:
-            lines.append(formatter.removing_symlink(result.source))
-        lines.extend(formatter.error(message) for message in result.errors)
+            lines.append(_story_line(dry, f"Removing symlink at {result.source}"))
+        lines.extend(_story_line(dry, f"Error: {message}") for message in result.errors)
     else:
         if result.leftover_symlink:
-            lines.append(formatter.removing_symlink(result.source))
-            lines.append(formatter.copying_back(result.managed, result.source))
+            lines.append(_story_line(dry, f"Removing symlink at {result.source}"))
+            lines.append(_story_line(dry, f"Copying {result.managed} -> {result.source}"))
         else:
-            lines.append(formatter.leaving_target_file(result.source))
-        lines.append(formatter.managed_copy_deleted(result.managed))
-        lines.extend(formatter.replica_copy_deleted(path) for path in result.replica_deletes)
+            lines.append(_story_line(dry, f"Leaving target file in place: {result.source}"))
+        lines.append(_story_line(dry, f"✓ Managed copy deleted: {result.managed}"))
+        lines.extend(_story_line(dry, f"Deleted replica copy: {path}") for path in result.replica_deletes)
         for name, status in result.git_excludes:
             if status == "removed":
-                lines.append(formatter.git_exclude_removed(name))
+                lines.append(_story_line(dry, f"Removed {name!r} from .git/info/exclude"))
             else:
-                lines.append(formatter.git_exclude_not_found(name))
+                lines.append(_story_line(dry, f"{name!r} not in .git/info/exclude"))
         if result.config_removed is not None:
-            lines.append(formatter.config_entry_removed(result.config_removed))
+            lines.append(_story_line(dry, f"Removed {result.config_removed!r} from config subpath list"))
+        lines.extend(_hold_lines(dry, result.holds))
     if result.persist_warning is not None:
         lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
     if not lines:
@@ -665,33 +717,37 @@ def _render_restore(result: RestoreResult) -> str:
 
 
 def _render_remove(result: RemoveResult) -> str:  # noqa: PLR0912 -- story, repair, and error branches
-    from .remove import RemoveFormatter  # noqa: PLC0415
-
-    formatter = RemoveFormatter(dry_run=result.dry_run)
+    dry = result.dry_run
     lines: list[str] = []
     story = result.config == "repair" or not result.errors
     for path, kind, present in result.artifacts:
         if present and kind is not None:
-            lines.append(formatter.artifact_removed(path, kind))
+            lines.append(_story_line(dry, f"Removed {kind} artifact: {path}"))
         else:
-            lines.append(formatter.artifact_absent(path))
+            lines.append(_story_line(dry, f"Skipping absent artifact: {path}"))
     for entry, exclude_file, present in result.excludes:
         if present:
-            lines.append(formatter.exclude_removed(entry, exclude_file))
+            lines.append(_story_line(dry, f"Removed Git exclude entry {entry!r} from {exclude_file}"))
         else:
-            lines.append(formatter.exclude_absent(entry, exclude_file))
+            lines.append(_story_line(dry, f"Skipping absent Git exclude entry {entry!r} in {exclude_file}"))
     if story:
-        lines.append(formatter.managed_copy_deleted(result.managed_copy))
+        lines.append(_story_line(dry, f"Deleted managed copy: {result.managed_copy}"))
         if result.config == "repair":
-            lines.extend(formatter.error(message) for message in result.errors)
+            lines.extend(_story_line(dry, f"Error: {message}") for message in result.errors)
             if result.config_entry is not None:
-                lines.append(formatter.config_repair_needed(result.managed_copy, result.config_entry))
+                repair = (
+                    f"Managed copy {result.managed_copy} was deleted; "
+                    f"remove {result.config_entry!r} from configuration manually."
+                )
+                lines.append(_story_line(dry, repair))
         elif result.config == "updated" and result.config_entry is not None and result.config_path is not None:
-            lines.append(formatter.config_updated(result.config_entry, result.config_path))
+            updated = f"Removed {result.config_entry!r} from selective-sync configuration: {result.config_path}"
+            lines.append(_story_line(dry, updated))
         elif result.config == "skipped":
-            lines.append(formatter.config_skipped())
+            lines.append(_story_line(dry, "Skipping configuration update: no participating selective mapping"))
+        lines.extend(_hold_lines(dry, result.holds))
     else:
-        lines.extend(formatter.error(message) for message in result.errors)
+        lines.extend(_story_line(dry, f"Error: {message}") for message in result.errors)
     if result.persist_warning is not None:
         lines.append(f"Warning: could not persist mapping snapshot: {result.persist_warning}")
     if not lines:
