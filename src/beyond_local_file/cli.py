@@ -26,6 +26,7 @@ from .operations.daemon import (
     status_daemon,
     stop_daemon,
 )
+from .operations.notice import run_notice_check
 from .operations.upgrade import run_upgrade
 from .options import OutputFormat
 
@@ -91,6 +92,26 @@ def check(ctx, project_name, extra_exclude, output_format):
             "output_format": output_format,
         },
     )
+
+
+@cli.group()
+def debug():
+    """Exercise one mechanism and report whether it worked.
+
+    A probe does not read or change the configuration set, and it does not
+    need the daemon.
+    """
+
+
+@debug.command("notice")
+@click.pass_context
+def debug_notice(ctx):
+    """Send one desktop notice so you can see whether this machine shows it.
+
+    Uses the same sender as the daemon. Ignores ``BLF_NOTIFY``. Exits 0 when
+    the notice was handed to the OS, and 1 when this process cannot show one.
+    """
+    ctx.exit(run_notice_check())
 
 
 @cli.command()

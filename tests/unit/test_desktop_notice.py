@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import subprocess
 from pathlib import Path
 
 import pytest
+from desktop_notifier.backends.dummy import DummyNotificationCenter
 
 from beyond_local_file.daemon.live import LiveSync
-from beyond_local_file.daemon.notice import Banner, banners_for, emit_desktop_notices
+from beyond_local_file.daemon.notice import Banner, banners_for, emit_desktop_notices, send_banner
 from beyond_local_file.daemon.oos_held import OosAndHeld, OosRow, list_oos_and_held, new_rels
 from beyond_local_file.held import REASON_DELETE_GAP, store_held_copy
 from tests.unit.test_out_of_sync_and_held import (
@@ -120,6 +123,125 @@ def test_emit_respects_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
         skip=False,
     )
     assert sent == []
+
+
+def test_macos_without_a_bundle_posts_through_osascript(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS with no app bundle posts the same title and body through osascript."""
+    calls: list[list[str]] = []
+
+    def _run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def _refuse_desktop_notifier(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("desktop-notifier should not send when macOS has no app bundle")
+
+    monkeypatch.setattr("beyond_local_file.daemon.notice.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("desktop_notifier.main.get_backend_class", lambda: DummyNotificationCenter)
+    monkeypatch.setattr("desktop_notifier.sync.DesktopNotifierSync", _refuse_desktop_notifier)
+    monkeypatch.setattr("beyond_local_file.daemon.notice.subprocess.run", _run)
+
+    send_banner("blf: out-of-sync", "shared.txt in lab-app")
+
+    assert len(calls) == 1
+    assert calls[0][0] == "osascript"
+    assert calls[0][-2:] == ["blf: out-of-sync", "shared.txt in lab-app"]
+    assert "display notification" in calls[0][2]
+
+
+def test_macos_fallback_hides_the_bundle_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A successful osascript fallback does not log the bundle refusal."""
+
+    def _dummy() -> type[DummyNotificationCenter]:
+        logging.getLogger("desktop_notifier.main").warning(
+            "Notification Center can only be used from an app bundle"
+        )
+        return DummyNotificationCenter
+
+    def _run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr("beyond_local_file.daemon.notice.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("desktop_notifier.main.get_backend_class", _dummy)
+    monkeypatch.setattr("beyond_local_file.daemon.notice.subprocess.run", _run)
+
+    with caplog.at_level(logging.WARNING, logger="desktop_notifier"):
+        send_banner("blf: notice check", "hello")
+
+    assert "app bundle" not in caplog.text
+
+
+def test_osascript_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-zero osascript exit is the sender error."""
+
+    def _run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(args, 1, "", "osascript failed")
+
+    monkeypatch.setattr("beyond_local_file.daemon.notice.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("desktop_notifier.main.get_backend_class", lambda: DummyNotificationCenter)
+    monkeypatch.setattr("beyond_local_file.daemon.notice.subprocess.run", _run)
+
+    with pytest.raises(RuntimeError, match="osascript failed"):
+        send_banner("blf: notice check", "hello")
+
+
+def test_real_backend_uses_desktop_notifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real desktop-notifier backend is the sender. osascript stays unused."""
+    sent: list[tuple[str, str]] = []
+    scripted: list[list[str]] = []
+
+    class _Notifier:
+        def __init__(self, app_name: str) -> None:
+            assert app_name == "blf"
+
+        def send(self, *, title: str, message: str) -> None:
+            sent.append((title, message))
+
+    monkeypatch.setattr("beyond_local_file.daemon.notice.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("desktop_notifier.main.get_backend_class", lambda: _Notifier)
+    monkeypatch.setattr("desktop_notifier.sync.DesktopNotifierSync", _Notifier)
+    monkeypatch.setattr(
+        "beyond_local_file.daemon.notice.subprocess.run",
+        lambda args, **kwargs: scripted.append(args),
+    )
+
+    send_banner("blf: held copy", "notes.md in lab-app")
+
+    assert sent == [("blf: held copy", "notes.md in lab-app")]
+    assert scripted == []
+
+
+def test_linux_dummy_backend_stays_on_desktop_notifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux keeps desktop-notifier even when its backend is the dummy."""
+    sent: list[tuple[str, str]] = []
+    scripted: list[list[str]] = []
+
+    class _Notifier:
+        def __init__(self, app_name: str) -> None:
+            del app_name
+
+        def send(self, *, title: str, message: str) -> None:
+            sent.append((title, message))
+
+    monkeypatch.setattr("beyond_local_file.daemon.notice.platform.system", lambda: "Linux")
+    monkeypatch.setattr("desktop_notifier.main.get_backend_class", lambda: DummyNotificationCenter)
+    monkeypatch.setattr("desktop_notifier.sync.DesktopNotifierSync", _Notifier)
+    monkeypatch.setattr(
+        "beyond_local_file.daemon.notice.subprocess.run",
+        lambda args, **kwargs: scripted.append(args),
+    )
+
+    send_banner("blf: out-of-sync", "shared.txt in lab-app")
+
+    assert sent == [("blf: out-of-sync", "shared.txt in lab-app")]
+    assert scripted == []
 
 
 def test_sender_failure_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:

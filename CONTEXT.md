@@ -152,6 +152,10 @@ _Avoid_: Desktop app, isolation page, status screen, shell screen, source badge,
 The daemon's OS banner when an out-of-sync mark or held copy is first persisted in this process. It names the kind, the managed project, and the path, not a replica basename, a reason clause, or a URL. ``status`` is still the door to the resolve UI.
 _Avoid_: Notification, alert, warning, desktop app
 
+**Debug**:
+The command group for a probe. A probe exercises one mechanism and reports whether it worked. It does not read or change the configuration set, and it does not need the daemon. ``daemon status``, ``link check``, and ``logs`` stay outside it.
+_Avoid_: doctor, inspect, diagnostic, diag
+
 **Sequential replica merge**:
 Producing a confirmed fact by folding one differing replica at a time into the current left side, starting from hub-now. Replicas already matching hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**.
 _Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict, replica switcher

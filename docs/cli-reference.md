@@ -40,6 +40,19 @@ blf --config /path/to/config.yml link check
 
 ## Commands
 
+### `debug` — Probes
+
+A probe exercises one mechanism and reports whether it worked. It does not read or change the configuration set, and it does not need the daemon. `daemon status`, `link check`, and `logs` stay outside this group.
+
+```bash
+blf debug SUBCOMMAND
+```
+
+**Subcommands:**
+- `notice` — Send one desktop notice so you can see whether this machine shows it
+
+---
+
 ### `daemon` — Runtime
 
 One OS process per **configuration set**. It catch-up's copy projections, observes the hub and replicas in that set, and is the only writer of mappings that originate from blf commands. Two sets never watch the same mapping file at once.
@@ -157,7 +170,9 @@ On a terminal, a running daemon opens a shell screen and leaves it up until you 
 
 The ready daemon owns a second localhost HTTP port for the resolve UI (`127.0.0.1` only), authenticated by a token in the set run directory. JSON IPC stays on `daemon.port`. If the daemon is not running, status prints `Daemon is not running` and does not open a screen. Without a terminal, status prints the same text and does not wait for a key. When out-of-sync or held copies exist, non-TTY status also prints the resolve UI URL and does not open a browser.
 
-The first time this process persists a **new** out-of-sync mark or held copy, the daemon shows a **desktop notice** (OS banner): title `blf: out-of-sync` or `blf: held copy`, body `{rel} in {managed-project}` or `{n} paths in {managed-project}`. It does not open the resolve UI. Use `blf daemon status` (TTY `o`) for that. Restart/reload of leftover rows is silent. A mark or hold caused by a TTY shell is silent (the shell already shows it). Default on; `BLF_NOTIFY=0` opts out. A refused OS permission does not fail persist.
+The first time this process persists a **new** out-of-sync mark or held copy, the daemon shows a **desktop notice** (OS banner): title `blf: out-of-sync` or `blf: held copy`, body `{rel} in {managed-project}` or `{n} paths in {managed-project}`. It does not open the resolve UI. Use `blf daemon status` (TTY `o`) for that. Restart/reload of leftover rows is silent. A mark or hold caused by a TTY shell is silent (the shell already shows it). Default on; `BLF_NOTIFY=0` opts out. A refused OS permission does not fail persist. On macOS, a process that is not an app bundle posts that banner through `osascript` (Script Editor). Linux and Windows stay on `desktop-notifier`.
+
+On macOS the on-screen lifetime follows Script Editor's Alert Style under System Settings → Notifications. **Temporary** lets the banner leave after a few seconds; the notice stays in Notification Center until you clear it. **Persistent** keeps it on screen until you close it. The tool leaves that setting as you set it. Either style, `blf daemon status` still lists the isolation.
 
 ### Output
 
@@ -783,6 +798,22 @@ Upgrade manually using the command that matches how you installed the tool:
   pipx upgrade beyond-local-file
   uv tool install --upgrade git+https://github.com/xingyuli/beyond-local-file.git
 ```
+
+---
+
+## `debug notice` — Check the desktop notice
+
+Send one desktop notice with the same sender the daemon uses, so you can see whether this machine shows it. The daemon does not need to be running. `BLF_NOTIFY` is ignored.
+
+### Syntax
+
+```bash
+blf debug notice
+```
+
+### Behavior
+
+The title is `blf: notice check`. The body is `If you can see this, the desktop notice works on this machine.` Exit 0 prints `Sent desktop notice: …` when the sender accepts the banner. On macOS that is `osascript` when this Python is not an app bundle, and the banner is attributed to Script Editor. How long it stays on screen follows Script Editor's Alert Style (Temporary or Persistent), described under [`daemon status`](#daemon-status--runtime-status). Exit 1 prints `Desktop notice was not shown: …` when the sender fails. A check does not change out-of-sync marks or held copies.
 
 ---
 

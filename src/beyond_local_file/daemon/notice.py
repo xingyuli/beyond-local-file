@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import platform
+import subprocess
 import threading
 from dataclasses import dataclass
 
@@ -12,6 +15,12 @@ _TITLE_OOS = "blf: out-of-sync"
 _TITLE_HELD = "blf: held copy"
 _NOTIFY_ENV = "BLF_NOTIFY"
 _SEND_LOCK = threading.Lock()
+_OSASCRIPT_TIMEOUT_S = 5
+_OSASCRIPT_BANNER = (
+    "on run argv\n"
+    "display notification (item 2 of argv) with title (item 1 of argv)\n"
+    "end run"
+)
 
 
 @dataclass(frozen=True)
@@ -76,10 +85,47 @@ def send_banner(title: str, body: str) -> None:
     Args:
         title: Banner title (kind).
         body: Banner body (path and managed project, or a count).
+
+    Raises:
+        RuntimeError: macOS ``osascript`` exited non-zero.
+        subprocess.TimeoutExpired: ``osascript`` did not finish in time.
     """
+    if _macos_script_banner():
+        _send_osascript(title, body)
+        return
     from desktop_notifier.sync import DesktopNotifierSync  # noqa: PLC0415 -- import OS adapter only when sending
 
     DesktopNotifierSync(app_name="blf").send(title=title, message=body)
+
+
+def _macos_script_banner() -> bool:
+    """Return True when macOS cannot use Notification Center from this process."""
+    if platform.system() != "Darwin":
+        return False
+    from desktop_notifier.backends.dummy import DummyNotificationCenter  # noqa: PLC0415
+    from desktop_notifier.main import get_backend_class  # noqa: PLC0415
+
+    logger = logging.getLogger("desktop_notifier")
+    previous = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        return get_backend_class() is DummyNotificationCenter
+    finally:
+        logger.setLevel(previous)
+
+
+def _send_osascript(title: str, body: str) -> None:
+    """Post one banner through Script Editor."""
+    completed = subprocess.run(
+        ["osascript", "-e", _OSASCRIPT_BANNER, title, body],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_OSASCRIPT_TIMEOUT_S,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"osascript exited {completed.returncode}"
+        raise RuntimeError(detail)
 
 
 def _notices_enabled() -> bool:

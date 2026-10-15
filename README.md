@@ -247,6 +247,7 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 | `blf revlink restore PATH` | Stop managing PATH and leave the target file in place |
 | `blf remove PATH` | Permanently remove a managed item and its validated projections |
 | `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
+| `blf debug notice` | Send one desktop notice so you can see whether this machine shows it |
 
 There is no `link sync`. The daemon is the runtime.
 
@@ -258,7 +259,7 @@ If two target projects edit the same path, the first apply wins. The loser is **
 
 A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path.
 
-When an out-of-sync mark or held copy is first persisted, the daemon shows a desktop notice naming the kind, the managed project, and the path. It does not open the resolve UI. `BLF_NOTIFY=0` turns notices off.
+When an out-of-sync mark or held copy is first persisted, the daemon shows a desktop notice naming the kind, the managed project, and the path. It does not open the resolve UI. `BLF_NOTIFY=0` turns notices off. On macOS the notice is posted as Script Editor. Alert Style **Temporary** lets the banner leave after a few seconds; **Persistent** keeps it until you close it. The tool leaves that setting as you set it.
 
 ### Mapping edits
 
