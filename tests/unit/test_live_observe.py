@@ -140,6 +140,86 @@ def test_hub_edit_fans_out_to_all_targets_without_rewriting_hub(
     assert after_tick.st_ino == after_write.st_ino
 
 
+def test_append_after_a_new_directory_stays_in_sync(tmp_path: Path) -> None:
+    """A file still being written inside a new directory stays an ordinary update."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+    (managed / "nested").mkdir()
+    (managed / "nested" / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    live = _live_sync(config_path)
+
+    log = target_a / "nested" / "run" / "log.txt"
+    log.parent.mkdir()
+    log.write_text("line1\n")
+    live.tick()
+
+    assert (managed / "nested" / "run" / "log.txt").read_text() == "line1\n"
+    assert (target_b / "nested" / "run" / "log.txt").read_text() == "line1\n"
+    assert (target_a, "nested/run/log.txt") not in live.out_of_sync
+
+    log.write_text("line1\nline2\n")
+    live.tick()
+
+    assert (managed / "nested" / "run" / "log.txt").read_text() == "line1\nline2\n"
+    assert (target_b / "nested" / "run" / "log.txt").read_text() == "line1\nline2\n"
+    assert (target_a, "nested/run/log.txt") not in live.out_of_sync
+    assert (target_b, "nested/keep.txt") not in live.out_of_sync
+    assert (target_b / "nested" / "keep.txt").read_text() == "keep"
+
+
+def test_hub_new_directory_file_fans_out_without_out_of_sync(tmp_path: Path) -> None:
+    """A directory and file created on the hub reach both replicas still in sync."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+    (managed / "nested").mkdir()
+    (managed / "nested" / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    live = _live_sync(config_path)
+
+    log = managed / "nested" / "run" / "log.txt"
+    log.parent.mkdir()
+    log.write_text("from-hub\n")
+    live.tick()
+
+    assert (target_a / "nested" / "run" / "log.txt").read_text() == "from-hub\n"
+    assert (target_b / "nested" / "run" / "log.txt").read_text() == "from-hub\n"
+    assert (target_a, "nested/run/log.txt") not in live.out_of_sync
+    assert (target_b, "nested/run/log.txt") not in live.out_of_sync
+    assert (target_a / "nested" / "keep.txt").read_text() == "keep"
+
+
+def test_delete_directory_tree_removes_it_on_hub_and_other_replica(tmp_path: Path) -> None:
+    """Deleting a directory tree on one replica removes those paths everywhere in sync."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+    (managed / "nested").mkdir()
+    (managed / "nested" / "keep.txt").write_text("keep")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    live = _live_sync(config_path)
+
+    (target_a / "nested" / "keep.txt").unlink()
+    (target_a / "nested").rmdir()
+    live.tick()
+
+    assert not (managed / "nested").exists()
+    assert not (target_b / "nested").exists()
+    assert not (target_a / "nested").exists()
+    assert live.out_of_sync == ()
+
+
 def test_create_under_directory_item_appears_on_hub_and_other_targets(tmp_path: Path) -> None:
     """A new path inside a directory item is queued per path, not as a tree hash."""
     managed = tmp_path / "proj"

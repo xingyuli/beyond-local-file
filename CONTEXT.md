@@ -105,7 +105,7 @@ Classify external mapping edits by diffing the configuration set's mapping files
 _Avoid_: Hot reload, config watch, live config
 
 **Path change**:
-A typed unit of work on a path under an item: create, update, or delete. Idle observe discovers them; a shell request names them. Both apply the same way.
+A typed unit of work on a path under an item: create, update, or delete. A directory path is only that directory. A file or nested directory inside it is its own path change. Idle observe discovers them; a shell request names them. Both apply the same way.
 _Avoid_: Event, delta, mutation
 
 **Mailbox**:
@@ -129,7 +129,7 @@ A stable clause naming why a held copy exists. WARNINGs and the resolve UI show 
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
-A replica is excluded from a path after a lost compare-and-swap, or after fan-out skipped it because its disk bytes were not the expected base. Fan-out of that path skips it. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, or when **resolve** overwrites that path. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
+A replica is excluded from a path when its update lost to a different writer — another replica, or a direct edit on the managed project — or when fan-out skipped it because its disk bytes were not the expected base. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, or when **resolve** overwrites that path. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
 _Avoid_: Freeze, conflict, diverge, partition
 
 **Out-of-sync reason**:

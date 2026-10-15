@@ -267,15 +267,71 @@ def _remove_git_exclude(root: Path, rel: str) -> None:
 
 
 def _remove_path(path: Path) -> None:
-    """Remove a file or directory if it exists.
+    """Remove a file or directory tree if it exists.
 
     Args:
-        path: Path to unlink or rmtree.
+        path: Path to unlink or rmtree. Item install and remove use this for a
+            whole item. A live directory path change uses
+            :func:`_remove_directory_node` instead.
     """
     if path.is_symlink() or path.is_file():
         path.unlink()
     elif path.is_dir():
         shutil.rmtree(path)
+
+
+def _is_directory_node(path: Path) -> bool:
+    """Return whether *path* is a real directory, not a symlink to one."""
+    return path.is_dir() and not path.is_symlink()
+
+
+def _is_directory_state(state: PathState) -> bool:
+    """Return whether *state* is a present directory node.
+
+    Directory scans store presence with a null hash. An absent path also has a
+    null hash, so presence is required.
+    """
+    return bool(state.get("present")) and state.get("hash") is None
+
+
+def _place_directory_node(destination: Path) -> None:
+    """Create the directory node at *destination* without copying children.
+
+    A file or symlink already at *destination* is replaced by the directory.
+    An existing directory is left in place, including any children.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        destination.unlink()
+    if not destination.is_dir():
+        destination.mkdir()
+
+
+def _remove_directory_node(destination: Path) -> None:
+    """Remove the directory node at *destination* and leave children alone.
+
+    Raises:
+        OSError: The directory exists and is not empty.
+    """
+    if destination.is_symlink() or destination.is_file():
+        destination.unlink()
+    elif destination.is_dir():
+        destination.rmdir()
+
+
+def _remove_changed_path(path: Path) -> None:
+    """Remove one live path change: a directory node, or a file tree.
+
+    A non-empty directory stays. Its remaining children are their own path
+    changes. ``OSError`` from :func:`_remove_directory_node` is that case.
+    """
+    if _is_directory_node(path):
+        try:
+            _remove_directory_node(path)
+        except OSError:
+            return
+        return
+    _remove_path(path)
 
 
 def _scan_path(
@@ -802,7 +858,7 @@ class LiveSync:
         if change.kind == "delete":
             if not _delete_allowed(change, old_hub, old_hub_gen):
                 self._hold_delete_gap(change)
-            _remove_path(change.hub / change.rel)
+            _remove_changed_path(change.hub / change.rel)
         else:
             if not state_equal(old_hub, path_state(change.base_present, change.base_hash)):
                 winner = self._winning_replica(change.hub, change.rel)
@@ -822,7 +878,10 @@ class LiveSync:
             source = change.replica / change.rel
             if not source.exists() and not source.is_symlink():
                 return
-            copy_projection(source, change.hub / change.rel)
+            if _is_directory_node(source):
+                _place_directory_node(change.hub / change.rel)
+            else:
+                copy_projection(source, change.hub / change.rel)
         new_gen = old_hub_gen + 1
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
@@ -864,28 +923,61 @@ class LiveSync:
                 continue
             disk = scan_path_state(watch.root, change.rel)
             if not state_equal(disk, old_hub):
-                self._mark_oos(
-                    watch.root,
-                    change.rel,
-                    reason=REASON_FAN_OUT_MISMATCH,
-                    clause=oos_reason_clause(
-                        REASON_FAN_OUT_MISMATCH,
-                        replica=watch.root.as_posix(),
-                        path=change.rel,
-                        gen=new_gen,
-                    ),
-                )
+                self._mark_fan_out_mismatch(watch.root, change.rel, new_gen)
                 continue
-            destination = watch.root / change.rel
-            if new_hub.get("present"):
-                source = change.hub / change.rel
-                if source.exists() or source.is_symlink():
-                    copy_projection(source, destination)
-                else:
-                    destination.mkdir(parents=True, exist_ok=True)
-            else:
-                _remove_path(destination)
+            if not self._write_fan_out(change, old_hub, new_hub, new_gen, watch.root):
+                continue
             self._record(watch.root, change.rel, scan_path_state(watch.root, change.rel), new_gen)
+
+    def _write_fan_out(
+        self,
+        change: PathChange,
+        old_hub: PathState,
+        new_hub: PathState,
+        new_gen: int,
+        replica: Path,
+    ) -> bool:
+        """Write *change* onto *replica*.
+
+        A directory path creates or removes that directory only. Children stay
+        on their own path changes.
+
+        Returns:
+            False when the replica was marked out-of-sync instead of written.
+        """
+        destination = replica / change.rel
+        if new_hub.get("present"):
+            source = change.hub / change.rel
+            if _is_directory_node(source):
+                _place_directory_node(destination)
+            elif source.exists() or source.is_symlink():
+                copy_projection(source, destination)
+            else:
+                destination.mkdir(parents=True, exist_ok=True)
+            return True
+        if _is_directory_state(old_hub):
+            try:
+                _remove_directory_node(destination)
+            except OSError:
+                self._mark_fan_out_mismatch(replica, change.rel, new_gen)
+                return False
+            return True
+        _remove_path(destination)
+        return True
+
+    def _mark_fan_out_mismatch(self, replica: Path, rel: str, gen: int) -> None:
+        """Exclude *replica* because its disk was not the expected base."""
+        self._mark_oos(
+            replica,
+            rel,
+            reason=REASON_FAN_OUT_MISMATCH,
+            clause=oos_reason_clause(
+                REASON_FAN_OUT_MISMATCH,
+                replica=replica.as_posix(),
+                path=rel,
+                gen=gen,
+            ),
+        )
 
     def _hub_for(self, rel: str) -> Path | None:
         for watch in self._watch_roots:
