@@ -105,8 +105,8 @@ Classify external mapping edits by diffing the configuration set's mapping files
 _Avoid_: Hot reload, config watch, live config
 
 **Path change**:
-A typed unit of work on a path under an item: create, update, or delete. A directory path is only that directory. A file or nested directory inside it is its own path change. Idle observe discovers them; a shell request names them. Both apply the same way.
-_Avoid_: Event, delta, mutation
+A typed unit of work on a path under an item: create, update, delete, or symlink. A directory path is only that directory. A file or nested directory inside it is its own path change. `symlink` makes that one path a symlink node; paths beneath it are not path changes and are not stored. Idle observe discovers them; a shell request names them. Both apply the same way.
+_Avoid_: Event, delta, mutation, symlinkify
 
 **Mailbox**:
 At most one not-yet-applied path change per (path, replica). A later event from the same replica replaces the pending change. Two replicas dirty on the same path are not merged.

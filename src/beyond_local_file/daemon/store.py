@@ -297,8 +297,10 @@ def path_state(present: bool, digest: str | None, gen: int = 0, oos: bool = Fals
     """Build a baseline entry for one path.
 
     Args:
-        present: Whether the path exists.
-        digest: File hash, or None for a directory or an absent path.
+        present: Whether this snapshotted node is in the tree. A path under a
+            symlink is not a node and is not stored.
+        digest: File hash, ``symlink:`` plus the link text, or None for a
+            directory or a node that is gone.
         gen: Per-path hub generation last applied to this replica.
         oos: Whether this replica is out-of-sync for the path.
 

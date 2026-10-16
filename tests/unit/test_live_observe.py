@@ -197,6 +197,116 @@ def test_hub_new_directory_file_fans_out_without_out_of_sync(tmp_path: Path) -> 
     assert (target_a / "nested" / "keep.txt").read_text() == "keep"
 
 
+def _replace_with_symlink(directory: Path, name: str, target: str) -> None:
+    path = directory / name
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        for child in path.iterdir():
+            child.unlink()
+        path.rmdir()
+    path.symlink_to(target, target_is_directory=True)
+
+
+def test_symlink_kind_replaces_a_directory_and_drops_its_rows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Replacing a directory with a symlink drops that directory and does not follow the link."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+        (directory / "canon").mkdir()
+        (directory / "canon" / "body.txt").write_text("v1")
+        (directory / "alias").mkdir()
+        (directory / "alias" / "body.txt").write_text("v1")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    live = _live_sync(config_path)
+    capsys.readouterr()
+
+    _replace_with_symlink(target_a, "alias", "canon")
+    (target_b / "alias" / "body.txt").write_text("only-alias")
+    (target_b / "alias" / "extra.txt").write_text("extra")
+    live.tick()
+
+    assert "live: symlink alias " in capsys.readouterr().out
+    for root in (managed, target_a, target_b):
+        assert (root / "canon" / "body.txt").read_text() == "v1"
+        assert not (root / "canon" / "extra.txt").exists()
+        assert (root / "alias").is_symlink()
+        assert (root / "alias").readlink().as_posix() == "canon"
+        assert "alias/body.txt" not in live.baseline[str(root)]
+        assert "alias/extra.txt" not in live.baseline[str(root)]
+    assert live.out_of_sync == ()
+
+    (target_a / "canon" / "body.txt").write_text("v2")
+    (target_a / "canon" / "extra.txt").write_text("new")
+    live.tick()
+    live.tick()
+
+    for root in (managed, target_a, target_b):
+        assert (root / "canon" / "body.txt").read_text() == "v2"
+        assert (root / "canon" / "extra.txt").read_text() == "new"
+        assert (root / "alias").readlink().as_posix() == "canon"
+    assert live.out_of_sync == ()
+
+
+def test_replica_already_holding_the_same_symlink_stays_in_sync(tmp_path: Path) -> None:
+    """A replica that already shows the new symlink text is recorded in sync."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+        (directory / "canon").mkdir()
+        (directory / "canon" / "body.txt").write_text("v1")
+        (directory / "alias").mkdir()
+        (directory / "alias" / "body.txt").write_text("v1")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    live = _live_sync(config_path)
+
+    _replace_with_symlink(target_a, "alias", "canon")
+    _replace_with_symlink(target_b, "alias", "canon")
+    live.tick()
+
+    for root in (managed, target_a, target_b):
+        assert (root / "alias").readlink().as_posix() == "canon"
+        assert "alias/body.txt" not in live.baseline[str(root)]
+    assert live.out_of_sync == ()
+
+
+def test_different_symlink_text_stays_out_of_sync(tmp_path: Path) -> None:
+    """A replica whose symlink text differs keeps that link and is out of sync."""
+    managed = tmp_path / "proj"
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    for directory in (managed, target_a, target_b):
+        directory.mkdir()
+        (directory / "canon").mkdir()
+        (directory / "canon" / "body.txt").write_text("v1")
+        (directory / "alias").mkdir()
+        (directory / "alias" / "body.txt").write_text("v1")
+    (target_b / "other").mkdir()
+    (target_b / "other" / "body.txt").write_text("other")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target_a}\n  - {target_b}\n")
+    live = _live_sync(config_path)
+
+    _replace_with_symlink(target_a, "alias", "canon")
+    _replace_with_symlink(target_b, "alias", "other")
+    live.tick()
+
+    assert (managed / "alias").readlink().as_posix() == "canon"
+    assert (target_a / "alias").readlink().as_posix() == "canon"
+    assert (target_b / "alias").readlink().as_posix() == "other"
+    assert (managed / "canon" / "body.txt").read_text() == "v1"
+    assert (target_b, "alias") in live.out_of_sync
+    assert (target_a, "alias") not in live.out_of_sync
+
+
 def test_delete_directory_tree_removes_it_on_hub_and_other_replica(tmp_path: Path) -> None:
     """Deleting a directory tree on one replica removes those paths everywhere in sync."""
     managed = tmp_path / "proj"

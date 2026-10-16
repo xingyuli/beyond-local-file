@@ -117,13 +117,19 @@ def scan_items(
 def scan_path_state(root: Path, rel: str) -> PathState:
     """Return the current on-disk state of one path under *root*.
 
+    A path beneath a symlink is absent. The symlink itself is the only node
+    there; the walk does not descend into it.
+
     Args:
         root: Hub or replica directory.
         rel: Path relative to *root*.
 
     Returns:
-        Presence and hash for *rel*, or absent when it does not exist.
+        Presence and hash for *rel*, or absent when it does not exist or sits
+        under a symlink.
     """
+    if _path_under_symlink(root, rel):
+        return path_state(False, None)
     scanned: dict[str, PathState] = {}
     _scan_path(root, root / rel, scanned)
     return scanned.get(rel) or path_state(False, None)
@@ -319,12 +325,47 @@ def _remove_directory_node(destination: Path) -> None:
         destination.rmdir()
 
 
-def _remove_changed_path(path: Path) -> None:
+def _path_under_symlink(root: Path, rel: str) -> bool:
+    """Return whether *rel* is beneath a symlink inside *root*.
+
+    The symlink node itself is a path. Creates, updates, and deletes of paths
+    under it are not, and must not follow the link.
+
+    Args:
+        root: Hub or replica directory.
+        rel: Path relative to *root*.
+
+    Returns:
+        True when an ancestor of *rel* inside *root* is a symlink.
+    """
+    current = root
+    for part in Path(rel).parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return True
+        if not current.exists():
+            return False
+    return False
+
+
+def _remove_changed_path(path: Path, *, root: Path | None = None) -> None:
     """Remove one live path change: a directory node, or a file tree.
 
-    A non-empty directory stays. Its remaining children are their own path
+    A path under a symlink is left in place, link and target included. A
+    non-empty directory stays. Its remaining children are their own path
     changes. ``OSError`` from :func:`_remove_directory_node` is that case.
+
+    Args:
+        path: File or directory to remove.
+        root: Hub or replica root that contains *path*, when the caller has it.
     """
+    if root is not None:
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            rel = ""
+        if rel and _path_under_symlink(root, rel):
+            return
     if _is_directory_node(path):
         try:
             _remove_directory_node(path)
@@ -369,7 +410,7 @@ def _count_path(stats: ScanStats | None, *, files: int = 0, hashed_bytes: int = 
     stats.hashed_bytes += hashed_bytes
 
 
-type ChangeKind = Literal["create", "update", "delete"]
+type ChangeKind = Literal["create", "update", "delete", "symlink"]
 
 
 @dataclass(frozen=True)
@@ -469,7 +510,7 @@ class LiveSync:
         return changed
 
     def observe(self, stats: ScanStats | None = None) -> None:
-        """Queue create/update/delete for paths that differ from the last scan.
+        """Queue create, update, delete, or symlink for paths that differ from the last scan.
 
         Args:
             stats: Optional accumulator for this scan's path/file/byte counts.
@@ -482,6 +523,9 @@ class LiveSync:
                 new = scanned.get(rel) or path_state(False, None)
                 old = last.get(rel) or path_state(False, None)
                 if state_equal(old, new):
+                    continue
+                if _path_under_symlink(watch.root, rel):
+                    self._drop_unsnapshotted(watch.root, rel)
                     continue
                 kind = _classify(old, new)
                 owner = _owner_hub(watch, rel)
@@ -774,6 +818,9 @@ class LiveSync:
         hub = self._hub_for(rel)
         if hub is None:
             raise ValueError(f"no managed project owns {rel}")
+        if _path_under_symlink(hub, rel):
+            self._drop_unsnapshotted(hub, rel)
+            return
         old_hub_gen = get_generation(self._baseline, hub, rel)
         self._write_file(hub / rel, content)
         new_gen = old_hub_gen + 1
@@ -848,6 +895,10 @@ class LiveSync:
         return trees
 
     def _apply_one(self, change: PathChange) -> None:
+        if self._drop_if_covered(change):
+            return
+        if self._join_same_symlink(change):
+            return
         if change.replica == change.hub:
             self._commit_hub_source(change)
             return
@@ -858,7 +909,7 @@ class LiveSync:
         if change.kind == "delete":
             if not _delete_allowed(change, old_hub, old_hub_gen):
                 self._hold_delete_gap(change)
-            _remove_changed_path(change.hub / change.rel)
+            _remove_changed_path(change.hub / change.rel, root=change.hub)
         else:
             if not state_equal(old_hub, path_state(change.base_present, change.base_hash)):
                 winner = self._winning_replica(change.hub, change.rel)
@@ -890,9 +941,15 @@ class LiveSync:
         self._last_source[(str(change.hub), change.rel)] = change.replica
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
+        if change.kind == "symlink":
+            self._drop_rows_under(change.hub, change.rel)
+            self._drop_rows_under(change.replica, change.rel)
         self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
 
     def _commit_hub_source(self, change: PathChange) -> None:
+        if _path_under_symlink(change.hub, change.rel):
+            self._drop_unsnapshotted(change.hub, change.rel)
+            return
         previous = get_state(self._baseline, change.hub, change.rel)
         old_hub = path_state(bool(previous.get("present")), previous.get("hash") if previous.get("present") else None)
         new_gen = get_generation(self._baseline, change.hub, change.rel) + 1
@@ -901,7 +958,53 @@ class LiveSync:
         self._last_source[(str(change.hub), change.rel)] = change.replica
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
+        if change.kind == "symlink":
+            self._drop_rows_under(change.hub, change.rel)
         self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
+
+    def _drop_if_covered(self, change: PathChange) -> bool:
+        """Drop *change* when its path is under a symlink. Return whether it did.
+
+        Args:
+            change: Pending path change.
+
+        Returns:
+            True when the path is not a node on the hub or the source replica.
+        """
+        covered = False
+        if _path_under_symlink(change.hub, change.rel):
+            self._drop_unsnapshotted(change.hub, change.rel)
+            covered = True
+        if _path_under_symlink(change.replica, change.rel):
+            self._drop_unsnapshotted(change.replica, change.rel)
+            covered = True
+        return covered
+
+    def _join_same_symlink(self, change: PathChange) -> bool:
+        """Record *change* when hub and replica already show the same symlink.
+
+        A second replica that reached the same link text does not lose
+        compare-and-swap and is not marked out of sync.
+
+        Args:
+            change: Symlink path change observed on a replica.
+
+        Returns:
+            True when both sides are that symlink and the change was joined.
+        """
+        if change.kind != "symlink" or change.replica == change.hub:
+            return False
+        current = scan_path_state(change.hub, change.rel)
+        source = scan_path_state(change.replica, change.rel)
+        if not _is_symlink_state(current) or not state_equal(current, source):
+            return False
+        gen = get_generation(self._baseline, change.hub, change.rel)
+        self._record(change.hub, change.rel, current, gen)
+        self._record(change.replica, change.rel, source, gen)
+        self._oos.discard((str(change.replica), change.rel))
+        self._drop_rows_under(change.hub, change.rel)
+        self._drop_rows_under(change.replica, change.rel)
+        return True
 
     def _fan_out(
         self,
@@ -919,15 +1022,25 @@ class LiveSync:
                 continue
             if self._is_oos(watch.root, change.rel):
                 continue
+            if _path_under_symlink(watch.root, change.rel):
+                self._drop_unsnapshotted(watch.root, change.rel)
+                continue
             if (change.rel, str(watch.root)) in self._mailbox:
                 continue
             disk = scan_path_state(watch.root, change.rel)
+            if change.kind == "symlink" and state_equal(disk, new_hub):
+                self._record(watch.root, change.rel, new_hub, new_gen)
+                self._oos.discard((str(watch.root), change.rel))
+                self._drop_rows_under(watch.root, change.rel)
+                continue
             if not state_equal(disk, old_hub):
                 self._mark_fan_out_mismatch(watch.root, change.rel, new_gen)
                 continue
             if not self._write_fan_out(change, old_hub, new_hub, new_gen, watch.root):
                 continue
             self._record(watch.root, change.rel, scan_path_state(watch.root, change.rel), new_gen)
+            if change.kind == "symlink":
+                self._drop_rows_under(watch.root, change.rel)
 
     def _write_fan_out(
         self,
@@ -1185,6 +1298,33 @@ class LiveSync:
     def _winning_replica(self, hub: Path, rel: str) -> Path:
         return self._last_source.get((str(hub), rel), hub)
 
+    def _drop_unsnapshotted(self, root: Path, rel: str) -> None:
+        """Remove a baseline row for a path under a symlink.
+
+        The path is not a node. Nothing is written, and no absent row is stored.
+
+        Args:
+            root: Hub or replica that still has a row for *rel*.
+            rel: Path relative to *root*, beneath a symlink.
+        """
+        self._oos.discard((str(root), rel))
+        self._baseline.get(str(root), {}).pop(rel, None)
+        self._last_seen.get(str(root), {}).pop(rel, None)
+
+    def _drop_rows_under(self, root: Path, rel: str) -> None:
+        """Drop snapshotted paths beneath *rel* after it became a symlink.
+
+        Args:
+            root: Hub or replica whose *rel* node is a symlink.
+            rel: Symlink path relative to *root*.
+        """
+        prefix = f"{rel}/"
+        slot = self._baseline.get(str(root), {})
+        seen = self._last_seen.get(str(root), {})
+        covered = [path for path in set(slot) | set(seen) if path.startswith(prefix)]
+        for path in covered:
+            self._drop_unsnapshotted(root, path)
+
     def _clear_oos(self, replica: Path, rel: str, hub: Path) -> None:
         self._oos.discard((str(replica), rel))
         self._record(replica, rel, scan_path_state(replica, rel), get_generation(self._baseline, hub, rel))
@@ -1273,7 +1413,15 @@ def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
     return sorted([*hubs.values(), *replicas.values()], key=lambda watch: str(watch.root))
 
 
+def _is_symlink_state(state: PathState) -> bool:
+    """Return whether *state* is a symlink node."""
+    digest = state.get("hash")
+    return bool(state.get("present")) and isinstance(digest, str) and digest.startswith("symlink:")
+
+
 def _classify(old: PathState, new: PathState) -> ChangeKind:
+    if _is_symlink_state(new):
+        return "symlink"
     old_present = bool(old.get("present"))
     new_present = bool(new.get("present"))
     if new_present and not old_present:
