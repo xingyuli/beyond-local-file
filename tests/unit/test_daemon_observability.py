@@ -20,7 +20,7 @@ import pytest
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.catchup import record_baseline, run_catch_up
 from beyond_local_file.daemon.live import LiveSync, ScanStats, scan_items
-from beyond_local_file.daemon.log import bind_worker_stream, worker_print
+from beyond_local_file.daemon.log import bind_worker_stream, open_worker_logs, worker_print
 from beyond_local_file.daemon.store import save_baseline, save_snapshot
 from beyond_local_file.model.config import ConfigProject, Mapping
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
@@ -355,6 +355,209 @@ def test_check_on_two_worker_units_lists_each_duration(
         stop_daemon(config_path, isolated_home)
 
 
+def test_daemon_rotates_a_log_past_eight_mebibytes(tmp_path: Path) -> None:
+    """A log past 8 MiB rotates between lines and keeps three generations."""
+    directory = tmp_path / "run"
+    logs = directory / "logs"
+    logs.mkdir(parents=True)
+    (logs / "daemon.log").write_bytes(b"SEED-MARKER\n" + b"q" * (8 * 1024 * 1024))
+    stdout, stderr = sys.stdout, sys.stderr
+    open_worker_logs(directory)
+    try:
+        worker_print("marker-a")
+        for marker in ("marker-b", "marker-c", "marker-d"):
+            worker_print("q" * (8 * 1024 * 1024))
+            worker_print(marker)
+    finally:
+        bind_worker_stream(None)
+        sys.stdout = stdout
+        sys.stderr = stderr
+    live = (logs / "daemon.log").read_text(encoding="utf-8")
+    assert "marker-d" in live
+    assert "SEED-MARKER" not in live
+    assert "marker-a" in (logs / "daemon.log.3").read_text(encoding="utf-8")
+    assert "marker-c" in (logs / "daemon.log.1").read_text(encoding="utf-8")
+    kept = "\n".join((logs / f"daemon.log.{generation}").read_text(encoding="utf-8") for generation in (1, 2, 3))
+    assert "SEED-MARKER" not in kept
+    assert not (logs / "daemon.log.4").exists()
+
+
+def test_blf_logs_omits_an_idle_tick_that_found_nothing(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A merged follow shows work and leaves out an idle tick that found nothing."""
+    config_path = _write_log_fixture(tmp_path)
+    logs = _log_dir(config_path)
+    (logs / "idle.log").write_text(
+        "2026-09-21T18:55:09.300+08:00 live: tick reason=idle applied=false unit=hub\n"
+        "2026-09-21T18:55:09.400+08:00 live: update notes.md unit=hub\n"
+        "2026-09-21T18:55:09.500+08:00 live: tick reason=idle applied=true unit=hub\n",
+        encoding="utf-8",
+    )
+    (logs / "daemon.log").write_text(
+        "2026-09-21T18:55:09.100+08:00 daemon worker starting\n"
+        "2026-09-21T18:55:09.150+08:00 live: tick reason=catch-up applied=false unit=hub\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, **isolated_home}
+    merged = _follow_lines(config_path, ["logs"], env, count=5)
+    assert merged == [
+        "[daemon] 2026-09-21T18:55:09.100+08:00 daemon worker starting",
+        "[daemon] 2026-09-21T18:55:09.150+08:00 live: tick reason=catch-up applied=false unit=hub",
+        "[requests] 2026-09-21T18:55:09.200+08:00 request: start op=create unit=hub",
+        "[idle] 2026-09-21T18:55:09.400+08:00 live: update notes.md unit=hub",
+        "[idle] 2026-09-21T18:55:09.500+08:00 live: tick reason=idle applied=true unit=hub",
+    ]
+    idle = _follow_lines(config_path, ["logs", "idle"], env, count=2)
+    assert idle == [
+        "2026-09-21T18:55:09.400+08:00 live: update notes.md unit=hub",
+        "2026-09-21T18:55:09.500+08:00 live: tick reason=idle applied=true unit=hub",
+    ]
+
+
+def test_blf_logs_prints_the_latest_included_lines(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A follow opens on the latest 40 included lines, not the start of the file."""
+    config_path = _write_log_fixture(tmp_path)
+    logs = _log_dir(config_path)
+    stored = [f"2026-09-21T18:55:09.{index:03d}+08:00 daemon line {index}\n" for index in range(45)]
+    (logs / "daemon.log").write_text("".join(stored), encoding="utf-8")
+    (logs / "requests.log").write_text("", encoding="utf-8")
+    (logs / "idle.log").write_text("", encoding="utf-8")
+    env = {**os.environ, **isolated_home}
+    merged = _follow_lines(config_path, ["logs"], env, count=40)
+    assert merged[0] == "[daemon] 2026-09-21T18:55:09.005+08:00 daemon line 5"
+    assert merged[-1] == "[daemon] 2026-09-21T18:55:09.044+08:00 daemon line 44"
+    one = _follow_lines(config_path, ["logs", "daemon"], env, count=40)
+    assert one[0] == "2026-09-21T18:55:09.005+08:00 daemon line 5"
+    assert one[-1] == "2026-09-21T18:55:09.044+08:00 daemon line 44"
+
+
+def test_blf_logs_fills_the_window_from_kept_generations(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """The opening window reads .1, .2, and .3, and still stops at 40 lines."""
+    config_path = _write_log_fixture(tmp_path)
+    logs = _log_dir(config_path)
+    (logs / "requests.log.3").write_text(
+        "2026-09-21T18:00:00.000+08:00 request generation 3\n",
+        encoding="utf-8",
+    )
+    (logs / "requests.log.2").write_text(
+        "2026-09-21T18:00:00.001+08:00 request generation 2\n",
+        encoding="utf-8",
+    )
+    (logs / "requests.log.1").write_text(
+        "2026-09-21T18:00:00.002+08:00 request generation 1\n",
+        encoding="utf-8",
+    )
+    (logs / "requests.log.4").write_text(
+        "2026-09-21T18:00:00.003+08:00 request generation 4\n",
+        encoding="utf-8",
+    )
+    (logs / "requests.log").write_text(
+        "2026-09-21T18:00:00.004+08:00 request live\n",
+        encoding="utf-8",
+    )
+    (logs / "idle.log.1").write_text(
+        "2026-09-21T18:00:00.010+08:00 live: tick reason=idle applied=false unit=hub\n"
+        "2026-09-21T18:00:00.011+08:00 live: update from-generation unit=hub\n",
+        encoding="utf-8",
+    )
+    (logs / "idle.log").write_text(
+        "2026-09-21T18:00:00.012+08:00 live: tick reason=idle applied=false unit=hub\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, **isolated_home}
+    kept = _follow_lines(config_path, ["logs", "requests"], env, count=4)
+    assert kept == [
+        "2026-09-21T18:00:00.000+08:00 request generation 3",
+        "2026-09-21T18:00:00.001+08:00 request generation 2",
+        "2026-09-21T18:00:00.002+08:00 request generation 1",
+        "2026-09-21T18:00:00.004+08:00 request live",
+    ]
+    idle = _follow_lines(config_path, ["logs", "idle"], env, count=1)
+    assert idle == ["2026-09-21T18:00:00.011+08:00 live: update from-generation unit=hub"]
+
+    older = [f"2026-09-21T18:10:00.{index:03d}+08:00 request aged {index}\n" for index in range(40)]
+    (logs / "requests.log.1").write_text("".join(older), encoding="utf-8")
+    (logs / "requests.log").write_text(
+        "2026-09-21T18:55:09.100+08:00 request live 0\n2026-09-21T18:55:09.200+08:00 request live 1\n",
+        encoding="utf-8",
+    )
+    (logs / "requests.log.4").write_text(
+        "2026-09-21T19:00:00.000+08:00 request generation 4\n",
+        encoding="utf-8",
+    )
+    window = _follow_lines(config_path, ["logs"], env, count=40)
+    assert window[0] == "[requests] 2026-09-21T18:10:00.003+08:00 request aged 3"
+    assert window[-1] == "[requests] 2026-09-21T18:55:09.200+08:00 request live 1"
+    assert all("generation 4" not in line for line in window)
+    assert all("generation 3" not in line for line in window)
+
+
+def test_blf_logs_follows_a_replaced_live_file(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A follow reads lines written to the live path after that file is replaced."""
+    config_path = _write_log_fixture(tmp_path)
+    logs = _log_dir(config_path)
+    (logs / "daemon.log").write_text(
+        "2026-09-21T18:55:09.100+08:00 daemon first\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, **isolated_home}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "beyond_local_file", "--config", str(config_path), "logs", "daemon"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+    )
+    collected: list[str] = []
+    try:
+        assert proc.stdout is not None
+        stream = proc.stdout.fileno()
+        pending = b""
+
+        def read_until(marker: str, timeout: float) -> None:
+            nonlocal pending
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline and marker not in collected:
+                if b"\n" not in pending:
+                    remaining = deadline - time.monotonic()
+                    ready, _, _ = select.select([stream], [], [], max(remaining, 0))
+                    if not ready:
+                        return
+                    chunk = os.read(stream, 4096)
+                    if not chunk:
+                        return
+                    pending += chunk
+                while b"\n" in pending:
+                    raw, pending = pending.split(b"\n", 1)
+                    collected.append(raw.decode("utf-8", errors="replace"))
+
+        read_until("daemon first", 5)
+        assert collected == ["2026-09-21T18:55:09.100+08:00 daemon first"]
+        live = logs / "daemon.log"
+        live.replace(logs / "daemon.log.1")
+        live.write_text("2026-09-21T18:55:09.200+08:00 daemon rotated\n", encoding="utf-8")
+        read_until("daemon rotated", 5)
+        assert collected[-1] == "2026-09-21T18:55:09.200+08:00 daemon rotated"
+    finally:
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+
 def test_blf_logs_merges_with_a_prefix_and_daemon_logs_does_not_follow(
     tmp_path: Path,
     isolated_home: dict[str, str],
@@ -525,14 +728,22 @@ def _follow_lines(config_path: Path, args: list[str], env: dict[str, str], *, co
     collected: list[str] = []
     try:
         assert proc.stdout is not None
+        stream = proc.stdout.fileno()
+        pending = b""
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and len(collected) < count:
-            line = proc.stdout.readline()
-            if line:
-                collected.append(line.rstrip("\n"))
-                continue
-            if proc.poll() is not None:
-                break
+            if b"\n" not in pending:
+                remaining = deadline - time.monotonic()
+                ready, _, _ = select.select([stream], [], [], max(remaining, 0))
+                if not ready:
+                    break
+                chunk = os.read(stream, 4096)
+                if not chunk:
+                    break
+                pending += chunk
+            while b"\n" in pending and len(collected) < count:
+                raw, pending = pending.split(b"\n", 1)
+                collected.append(raw.decode("utf-8", errors="replace"))
         proc.send_signal(signal.SIGINT)
         proc.wait(timeout=5)
     finally:

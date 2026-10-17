@@ -21,6 +21,8 @@ from typing import ClassVar, TextIO
 
 _UNIT_FIELD = re.compile(r"(^|\s)unit=")
 _LOG_CHANNELS = ("daemon", "idle", "requests")
+LOG_CAP_BYTES = 8 * 1024 * 1024
+LOG_GENERATIONS = 3
 
 
 class _BoundStream:
@@ -192,6 +194,7 @@ class _RoutingStream:
     """Text stream that stamps each finished line and writes it to one log."""
 
     def __init__(self, directory: Path) -> None:
+        self._directory = directory
         self._files = {
             name: open(directory / f"{name}.log", "a", encoding="utf-8", buffering=1)  # noqa: SIM115
             for name in _LOG_CHANNELS
@@ -241,9 +244,29 @@ class _RoutingStream:
         text = f"{_line_stamp()} {line}"
         if not text.endswith("\n"):
             text += "\n"
-        handle = self._files.get(channel, self._files["daemon"])
+        name = channel if channel in self._files else "daemon"
+        self._rotate_if_full(name)
+        handle = self._files[name]
         handle.write(text)
         handle.flush()
+
+    def _rotate_if_full(self, name: str) -> None:
+        path = self._directory / f"{name}.log"
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size <= LOG_CAP_BYTES:
+            return
+        self._files[name].close()
+        oldest = self._directory / f"{name}.log.{LOG_GENERATIONS}"
+        oldest.unlink(missing_ok=True)
+        for generation in range(LOG_GENERATIONS - 1, 0, -1):
+            source = self._directory / f"{name}.log.{generation}"
+            if source.is_file():
+                source.replace(self._directory / f"{name}.log.{generation + 1}")
+        path.replace(self._directory / f"{name}.log.1")
+        self._files[name] = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._files["daemon"], name)

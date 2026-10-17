@@ -17,6 +17,7 @@ import click
 from beyond_local_file.blfrc import get_home_directory, runtime_home
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.constants import HUB_LOCAL_DIR
+from beyond_local_file.daemon.log import LOG_GENERATIONS as _LOG_GENERATIONS
 
 from .pid import _reap_if_child, pid_is_alive, read_pid_file
 
@@ -35,6 +36,7 @@ _START_TIMEOUT_S = 30.0
 _STOP_TIMEOUT_S = 10.0
 _POLL_S = 0.05
 _FOLLOW_POLL_S = 0.2
+_FOLLOW_WINDOW = 40
 
 
 def pid_path(config_path: Path) -> Path:
@@ -282,10 +284,12 @@ def print_status(config_path: Path) -> int:
 def follow_logs(config_path: Path, record: str | None = None) -> int:
     """Follow one worker log, or the three logs merged by their write-time stamp.
 
-    Ctrl-C stops following; the daemon process is left running. A merged follow
-    prefixes each stored line with ``[daemon]``, ``[idle]``, or ``[requests]``.
-    The name is colored when stdout is a terminal. A pipe keeps the prefix and
-    drops the color. A single-file follow prints stored lines with no prefix.
+    The command prints the latest 40 included lines, then lines written after
+    that, until Ctrl-C. Ctrl-C stops following and leaves the daemon running.
+    An idle tick that found nothing is left out. A merged follow prefixes each
+    stored line with ``[daemon]``, ``[idle]``, or ``[requests]``. The name is
+    colored when stdout is a terminal. A pipe keeps the prefix and drops the
+    color. A single-file follow prints stored lines with no prefix.
 
     Args:
         config_path: Path to the loaded config file.
@@ -307,39 +311,71 @@ def follow_logs(config_path: Path, record: str | None = None) -> int:
     if not path.exists():
         click.echo("Daemon log not found")
         return 1
-    return _follow_one(path)
+    return _follow_one(path, record)
 
 
-def _follow_one(path: Path) -> int:
+def _idle_tick_found_nothing(record: str, line: str) -> bool:
+    """Return whether *line* is an idle tick that found nothing.
+
+    Those ticks stay in the idle log. A log follow leaves them out. A tick in
+    the daemon log or the request log is kept, including one marked
+    ``applied=false``.
+    """
+    if record != "idle":
+        return False
+    _stamp, _separator, body = line.partition(" ")
+    if not body.startswith("live: tick "):
+        return False
+    return "applied=false" in body.split()
+
+
+def _follow_one(path: Path, record: str) -> int:
+    handle = open(path, encoding="utf-8")  # noqa: SIM115
     try:
-        with open(path, encoding="utf-8") as handle:
-            while True:
-                line = handle.readline()
-                if line:
+        included = _older_included(record, path) + _load_included(record, handle)
+        for line in included[-_FOLLOW_WINDOW:]:
+            click.echo(line, nl=False)
+        while True:
+            line = handle.readline()
+            if line:
+                if not _idle_tick_found_nothing(record, line):
                     click.echo(line, nl=False)
-                else:
-                    time.sleep(_FOLLOW_POLL_S)
+                continue
+            if _live_replaced(handle, path):
+                handle.close()
+                handle = open(path, encoding="utf-8")  # noqa: SIM115
+                continue
+            time.sleep(_FOLLOW_POLL_S)
     except KeyboardInterrupt:
         return 0
+    finally:
+        handle.close()
 
 
 def _follow_merged(paths: dict[str, Path]) -> int:
     handles: dict[str, TextIO] = {}
     try:
+        history: list[tuple[str, int, int, str, str]] = []
+        sequence = 0
+        for name in _LOG_RECORDS:
+            for line in _older_included(name, paths[name]):
+                history.append((_stamp_key(line), _LOG_RECORDS.index(name), sequence, name, line))
+                sequence += 1
+        _open_log_handles(handles, paths)
+        for name in _LOG_RECORDS:
+            handle = handles.get(name)
+            if handle is None:
+                continue
+            for line in _load_included(name, handle):
+                history.append((_stamp_key(line), _LOG_RECORDS.index(name), sequence, name, line))
+                sequence += 1
+        history.sort()
+        for _stamp, _order, _sequence, name, line in history[-_FOLLOW_WINDOW:]:
+            _echo_merged(name, line)
         while True:
+            _reopen_replaced_logs(handles, paths)
             _open_log_handles(handles, paths)
-            batch: list[tuple[str, int, int, str, str]] = []
-            sequence = 0
-            for name in _LOG_RECORDS:
-                handle = handles.get(name)
-                if handle is None:
-                    continue
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        break
-                    batch.append((_stamp_key(line), _LOG_RECORDS.index(name), sequence, name, line))
-                    sequence += 1
+            batch = _read_included_batch(handles)
             if not batch:
                 time.sleep(_FOLLOW_POLL_S)
                 continue
@@ -351,6 +387,68 @@ def _follow_merged(paths: dict[str, Path]) -> int:
     finally:
         for handle in handles.values():
             handle.close()
+
+
+def _older_included(record: str, live: Path) -> list[str]:
+    """Return included lines from kept generations, oldest generation first."""
+    lines: list[str] = []
+    for generation in range(_LOG_GENERATIONS, 0, -1):
+        path = live.with_name(f"{live.name}.{generation}")
+        if not path.is_file():
+            continue
+        with open(path, encoding="utf-8") as handle:
+            lines.extend(_load_included(record, handle))
+    return lines
+
+
+def _load_included(record: str, handle: TextIO) -> list[str]:
+    lines: list[str] = []
+    while True:
+        line = handle.readline()
+        if not line:
+            return lines
+        if not _idle_tick_found_nothing(record, line):
+            lines.append(line)
+
+
+def _read_included_batch(handles: dict[str, TextIO]) -> list[tuple[str, int, int, str, str]]:
+    batch: list[tuple[str, int, int, str, str]] = []
+    sequence = 0
+    for name in _LOG_RECORDS:
+        handle = handles.get(name)
+        if handle is None:
+            continue
+        while True:
+            line = handle.readline()
+            if not line:
+                break
+            if _idle_tick_found_nothing(name, line):
+                continue
+            batch.append((_stamp_key(line), _LOG_RECORDS.index(name), sequence, name, line))
+            sequence += 1
+    return batch
+
+
+def _live_replaced(handle: TextIO, path: Path) -> bool:
+    """Return whether *path* now names a different file than *handle*."""
+    try:
+        current = path.stat()
+    except OSError:
+        return False
+    opened = os.fstat(handle.fileno())
+    if opened.st_ino != 0 or current.st_ino != 0:
+        return (opened.st_ino, opened.st_dev) != (current.st_ino, current.st_dev)
+    # Windows reports inode 0. Creation time stays put while the file is appended.
+    return opened.st_ctime != current.st_ctime
+
+
+def _reopen_replaced_logs(handles: dict[str, TextIO], paths: dict[str, Path]) -> None:
+    for name, path in paths.items():
+        handle = handles.get(name)
+        if handle is None or not _live_replaced(handle, path):
+            continue
+        handle.close()
+        handles[name] = open(path, encoding="utf-8")  # noqa: SIM115
 
 
 def _open_log_handles(handles: dict[str, TextIO], paths: dict[str, Path]) -> None:

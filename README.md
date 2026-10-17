@@ -240,7 +240,7 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 | `blf daemon start` | Start the background runtime that copies, observes, and applies mappings |
 | `blf daemon stop` | Stop the running daemon |
 | `blf daemon status` | Show whether the daemon is running, plus out-of-sync paths and held copies |
-| `blf logs` | Follow idle, request, and daemon logs (Ctrl-C stops following, not the daemon) |
+| `blf logs` | Show recent request, daemon, and idle work, then follow (Ctrl-C stops following, not the daemon) |
 | `blf daemon reload` | Apply external mapping edits from the set's mapping files |
 | `blf link check [PROJECT]` | Check copy projections and Git excludes |
 | `blf revlink create PATH` | Adopt an existing file or directory as a copy projection |

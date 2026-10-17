@@ -253,7 +253,7 @@ def follow_daemon_logs(config: str | None) -> int:
 
 
 def follow_blf_logs(config: str | None, record: str | None = None) -> int:
-    """Follow one worker log, or the three logs merged by stamp.
+    """Show recent lines from one worker log, or from the three logs merged by stamp.
 
     Args:
         config: Optional ``--config`` path.

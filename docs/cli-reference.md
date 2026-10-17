@@ -210,17 +210,21 @@ There are no restore/discard shells for held copies. `start` warns without a que
 
 ## `blf logs` — Follow the Logs
 
-Follow the set's logs until interrupted. Ctrl-C stops following, not the daemon.
+Show a short window of recent work, then follow until interrupted. Ctrl-C stops following, not the daemon. A pipe prints the same lines as a terminal.
 
-The set run directory holds three files (`~/.blf/run/global/logs/` or `~/.blf/run/file-<sha256>/logs/`):
+The set run directory holds three logs (`~/.blf/run/global/logs/` or `~/.blf/run/file-<sha256>/logs/`):
 
 - `idle.log` — idle ticks, and when a tick applies, the apply, held-copy, and baseline persist lines that follow. A tick under 100ms that finds nothing is omitted. Every line names its worker unit.
 - `requests.log` — each shell request and every step of the work that request caused, including a reload's catch-up. Every line names its worker unit.
 - `daemon.log` — process start, the catch-up that belongs to start, ready, stop, and a failure that is neither an idle tick nor a shell request.
 
-`blf logs` merges the three files by their write-time stamp. Each printed line is prefixed with `[daemon]`, `[idle]`, or `[requests]`. On a terminal each name has a stable color. A pipe keeps the prefix and drops the color.
+The daemon rotates each live file between lines once it is past 8 MiB (8388608 bytes). It keeps three older copies, named `idle.log.1`, `idle.log.2`, and `idle.log.3` (and the same for `requests` and `daemon`), and drops anything older. A file that is already over the cap moves to `.1` as one file. Rotation writes no log line.
 
-`blf logs requests`, `blf logs idle`, and `blf logs daemon` follow that one file and print the stored lines with no prefix.
+`blf logs` prints the latest 40 included lines, merged by their write-time stamp, then lines written after that. Included lines are the whole request log, the whole daemon log, and idle lines other than a tick that found nothing (`live: tick` with `applied=false`). A tick that applied a path or changed out-of-sync stays, including its tick line. The opening window may read the live file and `.1`, `.2`, and `.3` to fill those 40 lines. The follow watches the live file only and reopens that path when the daemon replaces it.
+
+Each printed line is prefixed with `[daemon]`, `[idle]`, or `[requests]`. On a terminal each name has a stable color. A pipe keeps the prefix and drops the color.
+
+`blf logs requests`, `blf logs idle`, and `blf logs daemon` print that same selection from the named log, with no prefix. A tick that found nothing stays in the idle log file. The files in the logs directory, including the numbered copies, are the full record. There is no flag that prints a file from the first byte.
 
 Each new line is stamped at write time with the daemon host's local timezone, offset, and milliseconds:
 

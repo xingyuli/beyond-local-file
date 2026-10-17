@@ -154,7 +154,7 @@ def remove(ctx, path, dry_run):
 )
 @click.pass_context
 def logs(ctx, record):
-    """Follow idle, request, and daemon logs. Ctrl-C stops following, not the daemon."""
+    """Show recent log lines, then follow. Ctrl-C stops following, not the daemon."""
     ctx.exit(follow_blf_logs(ctx.obj["config"], record))
 
 
