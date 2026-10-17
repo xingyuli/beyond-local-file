@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-17
+
+### Added
+
+- **Desktop notice when isolation is first recorded** — The daemon shows an OS banner the first time this process records a new out-of-sync path or a held copy. The title is `blf: out-of-sync` or `blf: held copy`. The body names the managed project and the path, or a count when several paths are recorded together. The banner does not open the resolve UI. `blf daemon status` (TTY `o`) still does. Restart or reload of rows that are already isolated stays quiet, and so does isolation caused by the command running in the terminal. Notices are on unless `BLF_NOTIFY=0`. If the OS refuses the banner, the daemon still records the isolation. On macOS the banner is posted through Script Editor. How long it stays on screen follows Script Editor's Alert Style (System Settings → Notifications): Temporary dismisses it after a few seconds, Persistent leaves it until you close it. Either way it remains in Notification Center until you clear it. `blf debug notice` sends one check banner without the daemon running.
+
+### Changed
+
+- **`revlink restore` removes the copies on other projects** — Restore from a target keeps that target's file as a normal local file, deletes the hub copy, and deletes the projection on every other project that was receiving the item. It removes the git exclude entry on each project that stops projecting the item, including the one you restored from, and drops the item from the mapping subpath list.
+- **Installing hub bytes keeps a replica's different files** — On first start, when a target is added, and when a new item is ingested, a replica file that already differs from the hub is stored as a held copy (`create-overwrite`) and then replaced with the hub bytes. Matching bytes stay. A missing file is copied and is not held. `daemon status` lists the held copy. `revlink create` fan-out already held colliding bytes; install now uses that same rule.
+- **`blf logs` shows recent work, and each log stays bounded** — `blf logs` prints the latest 40 lines of real work, then follows new lines until Ctrl+C. Ctrl+C stops the follow and leaves the daemon running. A pipe prints the same lines as a terminal. The reading includes the request log, the daemon log, and idle lines other than a tick that found nothing. Those empty ticks remain in `idle.log` when the scan took 100ms or more. Each of the three logs rotates when the live file passes 8 MiB and keeps three older copies (`idle.log.1`, `.2`, `.3`, and the same for `requests` and `daemon`). Older history is dropped.
+
+### Fixed
+
+- **Writing files into a new directory stays in sync** — A live create, update, or delete of a directory syncs that directory only. Each file and nested directory syncs on its own, including a later append. A replica that is still producing the tree is not marked out of sync for that work. Out of sync stays a second writer: another replica, a fan-out whose disk was not the expected base, or a save over a direct edit on the managed project. Installing an item, a fresh catch-up, and the initial seed still copy the whole item.
+- **Replacing a directory with a symlink syncs the link** — When a managed directory becomes a symlink, that path is synced as the symlink. The files that were inside the directory are not snapshotted, held, or deleted through the link. A replica that already has the same link text stays in sync. A different node, or a different link text, is left untouched. Deleting a symlink removes the link, not the file it points at.
+- **Work done while the daemon is stopped is caught up** — On the next start, update catch-up applies paths that differ from the baseline on the hub and on replicas. A file created or edited only on a target while the daemon was down is copied to the hub and to the other in-sync replicas. A replica-only create that never reached the hub is applied. A content conflict that is already out of sync stays isolated until you resolve it.
+
+[0.8.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.8.0
+
 ## [0.7.0] - 2026-09-26
 
 ### Added
