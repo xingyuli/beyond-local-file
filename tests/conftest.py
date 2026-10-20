@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from hypothesis import settings
 
+from tests.daemon_support import reap_daemons
+
 
 @pytest.fixture
 def temp_dir():
@@ -30,13 +32,19 @@ def isolated_home(tmp_path, monkeypatch):
         tmp_path: Pytest temporary directory fixture.
         monkeypatch: Pytest monkeypatch fixture.
 
-    Returns:
+    Teardown stops any daemon this test left running under the temp home. The
+    daemon is spawned in its own session, so a test that fails between
+    ``daemon start`` and its own ``stop_daemon`` would otherwise leak it.
+
+    Yields:
         dict: Environment variables dict suitable for passing to ``CliRunner.invoke``.
     """
     home_dir = tmp_path / "home"
     home_dir.mkdir(exist_ok=True)
     monkeypatch.setenv("BLF_HOME", str(home_dir))
-    return {"BLF_HOME": str(home_dir)}
+    yield {"BLF_HOME": str(home_dir)}
+
+    reap_daemons(home_dir / ".blf" / "run")
 
 
 @pytest.fixture(autouse=True)
