@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shutil
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +69,24 @@ DELETE_WINDOW = 3
 _IDLE_LOG_MS = 100
 """Idle ticks faster than this are omitted from the daemon log."""
 
+_HASH_RACE_S = 2.0
+"""Re-read a file whose mtime is less than this many seconds older than its last hash."""
+
+_ABSENT_ERRNOS = {errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP}
+"""Stat errors pathlib treats as 'not there': missing, not a directory, bad fd, symlink loop."""
+
+
+@dataclass(frozen=True)
+class _RememberedHash:
+    """One file's last SHA-256, the stat signature that produced it, and when it was hashed."""
+
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    ino: int
+    digest: str
+    hashed_at: float
+
 
 @dataclass
 class ScanStats:
@@ -108,9 +128,18 @@ def scan_items(
     Returns:
         Present paths mapped to hash/presence state.
     """
+    return _scan_items(root, item_names, stats)
+
+
+def _scan_items(
+    root: Path,
+    item_names: list[str],
+    stats: ScanStats | None = None,
+    remembered: dict[tuple[str, str], _RememberedHash] | None = None,
+) -> dict[str, PathState]:
     scanned: dict[str, PathState] = {}
     for name in item_names:
-        _scan_path(root, root / name, scanned, stats)
+        _scan_path(root, root / name, scanned, stats, remembered)
     return scanned
 
 
@@ -375,31 +404,110 @@ def _remove_changed_path(path: Path, *, root: Path | None = None) -> None:
     _remove_path(path)
 
 
+@dataclass
+class _Scan:
+    """One item-tree walk, including the idle-observe hash memory when this scan has one."""
+
+    root: Path
+    scanned: dict[str, PathState]
+    stats: ScanStats | None = None
+    remembered: dict[tuple[str, str], _RememberedHash] | None = None
+
+
+def _same_signature(info: os.stat_result, prior: _RememberedHash) -> bool:
+    """Return whether *info* is the stat signature stored with *prior*."""
+    return (
+        info.st_size == prior.size
+        and info.st_mtime_ns == prior.mtime_ns
+        and info.st_ctime_ns == prior.ctime_ns
+        and info.st_ino == prior.ino
+    )
+
+
+def _reuse_digest(scan: _Scan, rel: str, info: os.stat_result) -> str | None:
+    """Return the stored SHA-256 when *info* matches and the mtime has settled."""
+    if scan.remembered is None:
+        return None
+    prior = scan.remembered.get((str(scan.root), rel))
+    if prior is None or not _same_signature(info, prior):
+        return None
+    if prior.hashed_at - info.st_mtime < _HASH_RACE_S:
+        return None
+    return prior.digest
+
+
+def _store_digest(scan: _Scan, rel: str, info: os.stat_result, digest: str, hashed_at: float) -> None:
+    """Remember *digest* and the stat signature that produced it."""
+    if scan.remembered is None:
+        return
+    scan.remembered[(str(scan.root), rel)] = _RememberedHash(
+        size=info.st_size,
+        mtime_ns=info.st_mtime_ns,
+        ctime_ns=info.st_ctime_ns,
+        ino=info.st_ino,
+        digest=digest,
+        hashed_at=hashed_at,
+    )
+
+
+def _lstat(path: Path) -> os.stat_result | None:
+    """Return lstat of *path*, or None when pathlib would report it missing."""
+    try:
+        return os.lstat(path)
+    except OSError as error:
+        if error.errno in _ABSENT_ERRNOS:
+            return None
+        raise
+
+
 def _scan_path(
     root: Path,
     path: Path,
     scanned: dict[str, PathState],
     stats: ScanStats | None = None,
+    remembered: dict[tuple[str, str], _RememberedHash] | None = None,
 ) -> None:
-    if not path.exists() and not path.is_symlink():
+    info = _lstat(path)
+    if info is None:
         return
-    rel = path.relative_to(root).as_posix()
+    _scan_stat(_Scan(root, scanned, stats, remembered), path, info)
+
+
+def _scan_stat(scan: _Scan, path: Path, info: os.stat_result) -> None:
+    rel = path.relative_to(scan.root).as_posix()
     if rel == HELD_DIR or rel.startswith(f"{HELD_DIR}/"):
         return
-    if path.is_symlink():
-        scanned[rel] = path_state(True, "symlink:" + os.fsdecode(os.readlink(path)))
-        _count_path(stats)
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        scan.scanned[rel] = path_state(True, "symlink:" + os.fsdecode(os.readlink(path)))
+        _count_path(scan.stats)
         return
-    if path.is_file():
-        size = path.stat().st_size
-        scanned[rel] = path_state(True, compute_file_hash(path))
-        _count_path(stats, files=1, hashed_bytes=size)
+    if stat.S_ISREG(mode):
+        reused = _reuse_digest(scan, rel, info)
+        if reused is not None:
+            scan.scanned[rel] = path_state(True, reused)
+            _count_path(scan.stats)
+            return
+        hashed_at = time.time()
+        digest = compute_file_hash(path)
+        _store_digest(scan, rel, info, digest, hashed_at)
+        scan.scanned[rel] = path_state(True, digest)
+        _count_path(scan.stats, files=1, hashed_bytes=info.st_size)
         return
-    if path.is_dir():
-        scanned[rel] = path_state(True, None)
-        _count_path(stats)
-        for child in sorted(path.iterdir()):
-            _scan_path(root, child, scanned, stats)
+    if stat.S_ISDIR(mode):
+        scan.scanned[rel] = path_state(True, None)
+        _count_path(scan.stats)
+        with os.scandir(path) as directory:
+            children = sorted(directory, key=lambda entry: entry.name)
+            for entry in children:
+                child = Path(entry.path)
+                try:
+                    child_info = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    if error.errno in _ABSENT_ERRNOS:
+                        continue
+                    raise
+                _scan_stat(scan, child, child_info)
 
 
 def _count_path(stats: ScanStats | None, *, files: int = 0, hashed_bytes: int = 0) -> None:
@@ -459,6 +567,7 @@ class LiveSync:
         self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
         self._last_source: dict[tuple[str, str], Path] = {}
         self._watch_roots = _build_watch_roots(projects)
+        self._remembered: dict[tuple[str, str], _RememberedHash] = {}
         if last_seen_from_baseline:
             self._last_seen = _last_seen_from_baseline(baseline)
         else:
@@ -517,7 +626,7 @@ class LiveSync:
         """
         collected = stats if stats is not None else ScanStats()
         for watch in self._watch_roots:
-            scanned = scan_items(watch.root, list(watch.item_names), collected)
+            scanned = _scan_items(watch.root, list(watch.item_names), collected, self._remembered)
             last = self._last_seen.get(str(watch.root), {})
             for rel in set(scanned) | set(last):
                 new = scanned.get(rel) or path_state(False, None)
@@ -888,7 +997,7 @@ class LiveSync:
         trees: BaselineTrees = {}
         with log_duration("live: scan", reason=reason, roots=len(self._watch_roots)) as fields:
             for watch in self._watch_roots:
-                trees[str(watch.root)] = scan_items(watch.root, list(watch.item_names), stats)
+                trees[str(watch.root)] = _scan_items(watch.root, list(watch.item_names), stats, self._remembered)
             fields["paths"] = stats.paths
             fields["files"] = stats.files
             fields["hashed_bytes"] = stats.hashed_bytes

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -12,7 +13,7 @@ import pytest
 
 from beyond_local_file.config import Config
 from beyond_local_file.daemon.catchup import record_baseline, run_catch_up
-from beyond_local_file.daemon.live import DELETE_WINDOW, LiveSync
+from beyond_local_file.daemon.live import DELETE_WINDOW, LiveSync, ScanStats
 from beyond_local_file.daemon.runtime import _execute_unit_request
 from beyond_local_file.daemon.store import get_generation, save_baseline, save_snapshot
 from beyond_local_file.daemon.workers import WorkerUnit
@@ -80,6 +81,96 @@ def daemon_workspace(tmp_path: Path) -> Iterator[tuple[Path, Path, Path, Path]]:
     """Two-target workspace used with a spawned daemon."""
     config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
     yield config_path, managed.resolve(), target_a.resolve(), target_b.resolve()
+
+
+def _age_mtime(path: Path) -> None:
+    """Set mtime well before now so a hash taken immediately is past the race window."""
+    past = time.time() - 10
+    os.utime(path, (past, past))
+
+
+def test_second_scan_of_an_unchanged_directory_hashes_no_bytes(tmp_path: Path) -> None:
+    """A second scan of a settled directory tree reads no file bytes."""
+    managed = tmp_path / "proj"
+    target = tmp_path / "target"
+    managed.mkdir()
+    target.mkdir()
+    docs = managed / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_bytes(b"alpha")
+    (docs / "b.md").write_bytes(b"beta!")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"proj:\n  - {target}\n")
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, config_path.parent, None)
+    for copy in (docs / "a.md", docs / "b.md", target / "docs" / "a.md", target / "docs" / "b.md"):
+        _age_mtime(copy)
+    live = LiveSync(projects, baseline)
+    stats = ScanStats()
+
+    live.observe(stats)
+
+    assert stats.hashed_bytes == 0
+
+
+def test_second_scan_of_an_unchanged_tree_hashes_no_bytes(tmp_path: Path) -> None:
+    """A second scan reuses the last hash when every file's stat signature is settled."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, config_path.parent, None)
+    for copy in (managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"):
+        _age_mtime(copy)
+    live = LiveSync(projects, baseline)
+    stats = ScanStats()
+
+    live.observe(stats)
+
+    assert stats.hashed_bytes == 0
+
+
+def test_content_change_is_detected_when_mtime_is_restored(tmp_path: Path) -> None:
+    """New bytes are observed when an edit puts the previous mtime back."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, config_path.parent, None)
+    copies = (managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt")
+    for copy in copies:
+        _age_mtime(copy)
+    aged = (target_a / "shared.txt").stat().st_mtime
+    live = LiveSync(projects, baseline)
+    source = target_a / "shared.txt"
+    source.write_text("v1")
+    os.utime(source, (aged, aged))
+
+    live.tick()
+
+    assert (managed / "shared.txt").read_text() == "v1"
+    assert (target_b / "shared.txt").read_text() == "v1"
+    assert source.read_text() == "v1"
+
+
+def test_file_hashed_within_two_seconds_of_mtime_is_reread(tmp_path: Path) -> None:
+    """The next scan reads a file whose mtime was less than 2 seconds older than the hash."""
+    config_path, managed, target_a, target_b = _write_two_target_workspace(tmp_path)
+    cfg = Config(config_path)
+    cfg.load()
+    projects = cfg.get_config_projects()
+    baseline = run_catch_up(projects, config_path.parent, None)
+    recent = time.time() - 0.5
+    for copy in (managed / "shared.txt", target_a / "shared.txt", target_b / "shared.txt"):
+        os.utime(copy, (recent, recent))
+    live = LiveSync(projects, baseline)
+    stats = ScanStats()
+
+    live.observe(stats)
+
+    assert stats.hashed_bytes == len(b"v0") * 3
 
 
 def test_edit_in_one_target_appears_on_hub_and_other_targets_without_writing_source(

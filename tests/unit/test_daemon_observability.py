@@ -128,6 +128,24 @@ def test_scan_items_counts_paths_files_and_hashed_bytes(tmp_path: Path) -> None:
     assert stats.hashed_bytes == len(b"aa") + len(b"bbbb")
 
 
+def test_scan_items_treats_a_path_under_a_file_as_absent(tmp_path: Path) -> None:
+    """A path whose parent is a file is absent, as a missing path is."""
+    root = tmp_path / "hub"
+    root.mkdir()
+    (root / "docs").write_bytes(b"not-a-directory")
+
+    assert scan_items(root, ["docs/a.md"]) == {}
+
+
+def test_scan_items_treats_a_symlink_loop_as_absent(tmp_path: Path) -> None:
+    """A path reached through a symlink loop is absent."""
+    root = tmp_path / "hub"
+    root.mkdir()
+    (root / "loop").symlink_to("loop")
+
+    assert scan_items(root, ["loop/file"]) == {}
+
+
 def test_record_and_write_log_size_and_duration(tmp_path: Path, worker_log: StringIO) -> None:
     """Baseline record/write and snapshot write log duration and size context."""
     config_path, projects = _one_file_projects(tmp_path)
