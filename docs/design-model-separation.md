@@ -152,7 +152,7 @@ class Mapping:
 - Targets can be a list (from `target: [t1, t2]`)
 - Preserves all mapping-specific rules
 
-A **configuration set** is identified by one path (global config or a mapping yaml). That path is not a third grammar model; `ConfigProject` / `Mapping` remain the yaml shape. See CONTEXT.md and ADR 0017.
+A **configuration set** is identified by one path (global config or a mapping yaml). That path is not a third grammar model; `ConfigProject` / `Mapping` remain the yaml shape. See GLOSSARY.md and ADR 0017.
 
 ---
 

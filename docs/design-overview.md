@@ -1,6 +1,6 @@
 # Design Overview
 
-High-level architecture. Mapping expansion is in [design-model-separation.md](design-model-separation.md). The daemon runtime is in [design-daemon.html](design-daemon.html). Domain language is in [CONTEXT.md](../CONTEXT.md).
+High-level architecture. Mapping expansion is in [design-model-separation.md](design-model-separation.md). The daemon runtime is in [design-daemon.html](design-daemon.html). Domain language is in [GLOSSARY.md](../GLOSSARY.md).
 
 ## Copy-only projection
 
@@ -18,7 +18,7 @@ One OS process per configuration set writes hubs, fans out, and serves shells ov
 
 ## Further reading
 
-- [CONTEXT.md](../CONTEXT.md) — domain language
+- [GLOSSARY.md](../GLOSSARY.md) — domain language
 - [design-model-separation.md](design-model-separation.md) — config vs mapping-unit models
 - [design-daemon.html](design-daemon.html) — daemon runtime
 - [development.md](development.md) — contributing

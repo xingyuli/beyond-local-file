@@ -6,4 +6,4 @@ Work items are tracked as local markdown files under `local-file/tasks/`. See `d
 
 ### Domain docs
 
-Single-context layout — one `CONTEXT.md` at the repo root with ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+Single-context layout — one `GLOSSARY.md` at the repo root with ADRs under `docs/adr/`. See `docs/agents/domain.md`.

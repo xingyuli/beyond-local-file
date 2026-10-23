@@ -1,29 +1,32 @@
 # Domain Docs
 
+How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+
 This repo uses a **single-context** layout.
 
-## Files
+## Before exploring, read these
 
-| File | Purpose |
-|------|---------|
-| `CONTEXT.md` | Primary domain context — project overview, key concepts, ubiquitous language, architecture decisions |
-| `docs/adr/` | Architecture Decision Records (ADRs) — significant technical decisions with context and rationale |
-| `docs/design-daemon.html` | High-level daemon design as flowcharts (process, lifecycle, live path, mappings, resolve) |
+- **`GLOSSARY.md`** at the repo root.
+- **`docs/adr/`**: read ADRs that touch the area you're about to work in.
+- **`docs/design-daemon.html`** when the work is the daemon as a whole (process shape, live path, start/reload, resolve UI).
 
-## Reading rules for agents
+If `GLOSSARY.md` or `docs/adr/` is absent, proceed silently. The `/domain-modeling` skill creates them lazily when a term or decision is actually resolved.
 
-1. **Always read `CONTEXT.md`** before making architectural or domain-level changes. It is the ground truth for domain terminology and design intent.
-2. **Read `docs/design-daemon.html`** when the work is the daemon as a whole (process shape, live path, start/reload, resolve UI).
-3. **Read relevant ADRs** in `docs/adr/` when a change touches an area covered by an existing decision.
-4. **Write a new ADR** in `docs/adr/` when making a significant architectural decision that future contributors (human or agent) would benefit from understanding.
+## File structure
 
-## ADR format
+```
+/
+├── GLOSSARY.md
+├── docs/adr/
+└── src/
+```
 
-ADR files live in `docs/adr/` named `NNNN-short-title.md` (e.g., `0001-use-symlinks-for-sync.md`).
+## Use the glossary's vocabulary
 
-Each ADR contains: Title, Status, Context, Decision, Consequences.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
 
-## Notes
+If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
-- `CONTEXT.md` does not exist yet — create it when the domain model is first formalized.
-- `docs/adr/` does not exist yet — create it when the first architectural decision needs recording.
+## Flag ADR conflicts
+
+If your output contradicts an existing ADR, surface it explicitly rather than silently overriding.
