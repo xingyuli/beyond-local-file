@@ -9,6 +9,7 @@ from pathlib import Path
 from beyond_local_file.config import ConfigUpdater
 from beyond_local_file.daemon.live import item_matches
 from beyond_local_file.daemon.log import log_duration
+from beyond_local_file.discovery import item_names
 from beyond_local_file.git_manager import GitExcludeManager
 from beyond_local_file.model.config import Mapping
 from beyond_local_file.operations.result import RemoveArtifactKind, RemoveConfigStatus, RemoveResult
@@ -32,12 +33,14 @@ class RemoveOperation:
     Disk writes (delete hub and every projection, git exclude, last-seen) are a
     LiveSync remove job. Mapping membership is enough for a leftover
     projection-path symlink; copy artifacts still have to match the hub.
+    ``force`` clears the same set when a copy is absent or does not match.
     ``run`` does not delete, fan out, or git-exclude.
 
     Attributes:
         source: Lexically normalized target-side path supplied by the user.
         rel_path: Source path relative to the configured CWD target root.
         dry_run: Whether to validate and preview without persistent mutation.
+        force: Whether absence or a mismatch still clears the declared item.
         context: Resolved project, mapping, and configuration context.
     """
 
@@ -45,6 +48,7 @@ class RemoveOperation:
     rel_path: Path
     dry_run: bool
     context: RevlinkContext
+    force: bool = False
 
     def run(self) -> RemoveResult:
         """Validate and return planned deletes. Disk writes are a LiveSync job.
@@ -86,6 +90,7 @@ class RemoveOperation:
             config=config,
             config_path=config_path,
             config_entry=config_entry,
+            managed_present=managed_copy.exists() or managed_copy.is_symlink(),
         )
 
     def drop_mapping(self, result: RemoveResult) -> RemoveResult:
@@ -111,6 +116,7 @@ class RemoveOperation:
         config: RemoveConfigStatus | None = None,
         config_path: str | None = None,
         config_entry: str | None = None,
+        managed_present: bool = True,
     ) -> RemoveResult:
         return RemoveResult(
             exit_code=exit_code,
@@ -119,6 +125,7 @@ class RemoveOperation:
             artifacts=artifacts,
             excludes=excludes,
             managed_copy=managed_copy.as_posix(),
+            managed_present=managed_present,
             config=config,
             config_path=config_path,
             config_entry=config_entry,
@@ -142,22 +149,38 @@ class RemoveOperation:
         Returns:
             An error body when the path is not an owned projection, otherwise None.
         """
-        if not managed_copy.exists():
+        if not self.force and not managed_copy.exists():
             return f"Managed copy does not exist: {managed_copy}"
         ancestor_error = self._symlink_ancestor_error()
         if ancestor_error is not None:
             return ancestor_error
-        if not self.source.exists() and not self.source.is_symlink():
+        if not self.force and not self.source.exists() and not self.source.is_symlink():
             return f"Invocation path does not exist: {self.source}"
 
         entry = self.rel_path.as_posix()
+        membership_error = self._membership_error(entry)
+        if membership_error is not None:
+            return membership_error
+
+        if self.force or self.source.is_symlink() or not self.source.exists():
+            return None
+        return self._copy_artifact_error(self.source, managed_copy, "invocation path")
+
+    def _membership_error(self, entry: str) -> str | None:
+        """Refuse a path that is not the declared item.
+
+        Args:
+            entry: Item path relative to the target.
+
+        Returns:
+            An error body when *entry* is outside the mapping, otherwise None.
+        """
         mapping = self.context.matched_mapping
         if mapping.subpaths is not None and entry not in mapping.subpaths:
             return f"Invocation mapping does not manage {entry!r}"
-
-        if self.source.is_symlink():
-            return None
-        return self._copy_artifact_error(self.source, managed_copy, "invocation path")
+        if self.force and mapping.subpaths is None and entry not in item_names(self.context.managed_project_path, None):
+            return f"'{entry}' is not a managed item"
+        return None
 
     def _symlink_ancestor_error(self) -> str | None:
         """Reject a child reached by traversing a directory symlink.
@@ -194,7 +217,7 @@ class RemoveOperation:
                 artifact = target / self.rel_path
                 present = artifact.exists() or artifact.is_symlink()
                 copy_strategy = not artifact.is_symlink()
-                if present and not artifact.is_symlink():
+                if present and not artifact.is_symlink() and not self.force:
                     copy_error = self._copy_artifact_error(artifact, managed_copy, f"target artifact {artifact}")
                     if copy_error is not None:
                         errors.append(copy_error)

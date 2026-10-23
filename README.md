@@ -245,7 +245,7 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 | `blf link check [PROJECT]` | Check copy projections and Git excludes |
 | `blf revlink create PATH` | Adopt an existing file or directory as a copy projection |
 | `blf revlink restore PATH` | Stop managing PATH and leave the target file in place |
-| `blf remove PATH` | Permanently remove a managed item and its validated projections |
+| `blf remove PATH` | Permanently remove a managed item and its projections. `--force` clears it when a copy is absent or does not match |
 | `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
 | `blf debug notice` | Send one desktop notice so you can see whether this machine shows it |
 

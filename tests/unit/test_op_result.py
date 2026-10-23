@@ -372,6 +372,15 @@ def test_render_remove_success_story_matches_today_order() -> None:
     assert payload_text(to_ipc(result)) == render(result)
 
 
+def test_render_remove_reports_an_absent_managed_copy() -> None:
+    """An already-absent managed copy is reported as absent."""
+    result = _remove_result(managed_present=False)
+    text = render(result)
+    assert "Skipping absent managed copy: /tmp/lab-app/example\n" in text
+    assert "Deleted managed copy:" not in text
+    assert from_ipc(to_ipc(result)) == result
+
+
 def test_render_remove_dry_run_prefixes_each_line() -> None:
     """Dry-run is data; render prefixes each remove line with [dry-run]."""
     result = _remove_result(dry_run=True, artifacts=(("/tmp/alpha/example", None, False),), config="skipped")

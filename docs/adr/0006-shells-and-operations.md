@@ -6,7 +6,7 @@ If the process is in phase ``catch-up``, shells other than ``status`` wait until
 
 Stop-syncing a path is three daemon operations, not one:
 
-- `remove` deletes the hub copy and every projection, and drops the subpath.
+- `remove` deletes the hub copy and every projection, and drops the subpath. Unforced remove requires the managed copy to exist and the copies to match. Forced remove is 0035.
 - `restore` deletes the hub copy, leaves the file in the requesting target project, undoes the fan-out (deletes other targets' projections), and drops the subpath. Other-targets-as-unmanaged is superseded by 0027.
 - External item-remove (reload commit) keeps the hub, confirms in the reload shell, and deletes target copies only.
 

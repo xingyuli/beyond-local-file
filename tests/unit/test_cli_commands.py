@@ -215,6 +215,7 @@ def test_remove_is_destructive_top_level_command_with_required_path() -> None:
     assert help_result.exit_code == 0
     assert "PATH" in help_result.output
     assert "--dry-run" in help_result.output
+    assert "--force" in help_result.output
     assert "permanently" in help_result.output.lower()
     assert missing_path_result.exit_code != 0
     assert "Usage:" in missing_path_result.output

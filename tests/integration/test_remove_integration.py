@@ -49,7 +49,7 @@ def _make_git_repository(target: Path, entry: str) -> Path:
     return exclude_file
 
 
-def _run_remove_operation(config_path: Path, source: Path, rel_path: Path) -> int:
+def _run_remove_operation(config_path: Path, source: Path, rel_path: Path, *, force: bool = False) -> int:
     """Run remove in-process so monkeypatches apply."""
     del source
     try:
@@ -58,7 +58,12 @@ def _run_remove_operation(config_path: Path, source: Path, rel_path: Path) -> in
         live = LiveSync(cfg.get_config_projects(), {})
         response = handle_request(
             config_path,
-            {"op": "remove", "cwd": str(Path.cwd()), "path": rel_path.as_posix()},
+            {
+                "op": "remove",
+                "cwd": str(Path.cwd()),
+                "path": rel_path.as_posix(),
+                "force": force,
+            },
             live=live,
         )
     except OSError:
@@ -473,6 +478,333 @@ def test_remove_dry_run_prefixes_config_resolution_errors(isolated_home: dict[st
 
     assert result.exit_code == 1
     assert "Config file not found" in result.output
+
+
+def test_remove_force_clears_declared_item_whose_copies_are_already_absent(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force drops the subpath and git exclude when every copy is already gone."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
+        directory.mkdir()
+    alpha_exclude = _make_git_repository(alpha, "notes.md")
+    example_exclude = _make_git_repository(example, "notes.md")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  - target: {alpha}
+    subpath:
+      - notes.md
+  - target: {example}
+    subpath:
+      - notes.md
+"""
+    )
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "--force", "notes.md"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert "notes.md" not in alpha_exclude.read_text()
+    assert "notes.md" not in example_exclude.read_text()
+    assert "notes.md" not in config_path.read_text()
+    assert "Skipping absent managed copy:" in result.output
+    assert "Interrupt this command?" not in result.output
+
+
+def test_remove_without_force_leaves_an_absent_declared_item(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """A missing managed copy still refuses remove and keeps the declaration."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    exclude_file = _make_git_repository(alpha, "notes.md")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: {alpha}
+  subpath:
+    - notes.md
+"""
+    )
+    before_config = config_path.read_bytes()
+    before_exclude = exclude_file.read_bytes()
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "notes.md"], isolated_home)
+
+    assert result.exit_code == 1
+    assert "Managed copy does not exist" in result.output
+    assert config_path.read_bytes() == before_config
+    assert exclude_file.read_bytes() == before_exclude
+
+
+def test_remove_force_deletes_a_remaining_unmatched_copy(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force deletes a projection whose bytes are not the managed copy."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    example = tmp_path / "example"
+    for directory in (hub, alpha, example):
+        directory.mkdir()
+    hub_item = hub / "notes.md"
+    alpha_item = alpha / "notes.md"
+    hub_item.write_text("hub bytes")
+    alpha_item.write_text("leftover bytes")
+    alpha_exclude = _make_git_repository(alpha, "notes.md")
+    example_exclude = _make_git_repository(example, "notes.md")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  - target: {alpha}
+    subpath:
+      - notes.md
+  - target: {example}
+    subpath:
+      - notes.md
+"""
+    )
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "--force", "notes.md"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert not hub_item.exists()
+    assert not alpha_item.exists()
+    assert not (example / "notes.md").exists()
+    assert "notes.md" not in alpha_exclude.read_text()
+    assert "notes.md" not in example_exclude.read_text()
+    assert "notes.md" not in config_path.read_text()
+    assert "Deleted managed copy:" in result.output
+    assert "Removed copy artifact:" in result.output
+
+
+def test_remove_force_deletes_a_remaining_directory_item(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force removes a directory item as a whole tree when the hub copy is gone."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    leftover = alpha / "notes" / "local.md"
+    leftover.parent.mkdir()
+    leftover.write_text("only copy")
+    exclude_file = _make_git_repository(alpha, "notes")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: {alpha}
+  subpath:
+    - notes
+"""
+    )
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "--force", "notes"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert not leftover.exists()
+    assert not (alpha / "notes").exists()
+    assert "notes" not in exclude_file.read_text()
+    assert "notes" not in config_path.read_text()
+
+
+def test_remove_force_dry_run_writes_nothing(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force dry-run lists the cleanup and leaves the declaration in place."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    leftover = alpha / "notes.md"
+    leftover.write_text("leftover bytes")
+    exclude_file = _make_git_repository(alpha, "notes.md")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: {alpha}
+  subpath:
+    - notes.md
+"""
+    )
+    before = {
+        "config": config_path.read_bytes(),
+        "exclude": exclude_file.read_bytes(),
+        "alpha": leftover.read_bytes(),
+    }
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "--force", "--dry-run", "notes.md"], isolated_home)
+
+    assert result.exit_code == 0, result.output
+    assert all(line.startswith("[dry-run]") for line in result.output.splitlines() if line)
+    assert leftover.read_bytes() == before["alpha"]
+    assert config_path.read_bytes() == before["config"]
+    assert exclude_file.read_bytes() == before["exclude"]
+    assert (hub / "notes.md").exists() is False
+
+
+def test_remove_force_refuses_a_path_that_is_not_the_declared_item(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force does not clear a path that the mapping does not declare."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    stray = alpha / "other.md"
+    stray.write_text("local")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""lab-app:
+  target: {alpha}
+  subpath:
+    - notes.md
+"""
+    )
+    before = config_path.read_bytes()
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "--force", "other.md"], isolated_home)
+
+    assert result.exit_code == 1
+    assert "does not manage 'other.md'" in result.output
+    assert stray.read_text() == "local"
+    assert config_path.read_bytes() == before
+
+
+def test_remove_force_refuses_a_sync_all_name_the_hub_no_longer_has(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force does not clear a sync-all name that discovery has already dropped."""
+    hub = tmp_path / "lab-app"
+    alpha = tmp_path / "alpha"
+    hub.mkdir()
+    alpha.mkdir()
+    leftover = alpha / "notes.md"
+    leftover.write_text("local")
+    exclude_file = _make_git_repository(alpha, "notes.md")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app: {alpha}\n")
+    before_config = config_path.read_bytes()
+    before_exclude = exclude_file.read_bytes()
+
+    monkeypatch.chdir(alpha)
+    result = invoke_with_daemon(config_path, ["remove", "--force", "notes.md"], isolated_home)
+
+    assert result.exit_code == 1
+    assert "not a managed item" in result.output
+    assert leftover.read_text() == "local"
+    assert config_path.read_bytes() == before_config
+    assert exclude_file.read_bytes() == before_exclude
+
+
+def test_remove_force_rejects_path_that_traverses_a_directory_symlink(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force still refuses a child reached through a directory symlink."""
+    managed = tmp_path / "managed"
+    target = tmp_path / "target"
+    managed.mkdir()
+    target.mkdir()
+    managed_directory = managed / "nested"
+    managed_directory.mkdir()
+    managed_item = managed_directory / "item.txt"
+    managed_item.write_text("authoritative content")
+    (target / "nested").symlink_to(managed_directory, target_is_directory=True)
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"managed: {target}\n")
+    before = config_path.read_bytes()
+
+    monkeypatch.chdir(target)
+    exit_code = _run_remove_operation(config_path, target / "nested" / "item.txt", Path("nested/item.txt"), force=True)
+
+    assert exit_code == 1
+    assert managed_item.read_text() == "authoritative content"
+    assert (target / "nested").is_symlink()
+    assert config_path.read_bytes() == before
+
+
+def test_remove_force_rejects_inaccessible_participating_target_without_mutation(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force still stops when a participating target cannot be visited."""
+    managed = tmp_path / "managed"
+    first_target = tmp_path / "target-one"
+    blocked_target = tmp_path / "target-two"
+    for directory in (managed, first_target, blocked_target):
+        directory.mkdir()
+    managed_item = managed / "item.txt"
+    managed_item.write_text("authoritative content")
+    first_item = first_target / "item.txt"
+    blocked_item = blocked_target / "item.txt"
+    first_item.write_text("authoritative content")
+    blocked_item.write_text("other bytes")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""managed:
+  target: [{first_target}, {blocked_target}]
+  subpath:
+    - item.txt
+"""
+    )
+    config_before = config_path.read_bytes()
+
+    monkeypatch.chdir(first_target)
+    monkeypatch.setattr("beyond_local_file.operations.remove.os.access", lambda path, mode: path != blocked_target)
+    exit_code = _run_remove_operation(config_path, first_item, Path("item.txt"), force=True)
+
+    assert exit_code == 1
+    assert first_item.read_text() == "authoritative content"
+    assert blocked_item.read_text() == "other bytes"
+    assert managed_item.exists()
+    assert config_path.read_bytes() == config_before
+
+
+def test_remove_force_rejects_unreadable_git_exclude_without_mutation(
+    tmp_path: Path, monkeypatch, isolated_home: dict[str, str]
+) -> None:
+    """Force still stops when a git exclude file cannot be read."""
+    managed = tmp_path / "managed"
+    target = tmp_path / "target"
+    managed.mkdir()
+    target.mkdir()
+    managed_item = managed / "item.txt"
+    managed_item.write_text("authoritative content")
+    target_item = target / "item.txt"
+    target_item.write_text("other bytes")
+    exclude_file = _make_git_repository(target, "item.txt")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        f"""managed:
+  target: {target}
+  subpath:
+    - item.txt
+"""
+    )
+    config_before = config_path.read_bytes()
+
+    def fail_exclude_read(manager: GitExcludeManager) -> set[str]:
+        """Simulate an unreadable exclude file."""
+        del manager
+        raise OSError("exclude read failed")
+
+    monkeypatch.chdir(target)
+    monkeypatch.setattr(GitExcludeManager, "read_entries", fail_exclude_read)
+    exit_code = _run_remove_operation(config_path, target_item, Path("item.txt"), force=True)
+
+    assert exit_code == 1
+    assert target_item.read_text() == "other bytes"
+    assert managed_item.read_text() == "authoritative content"
+    assert config_path.read_bytes() == config_before
+    assert "item.txt" in exclude_file.read_text()
 
 
 def test_remove_refuses_drifted_copy_projection_without_mutation(

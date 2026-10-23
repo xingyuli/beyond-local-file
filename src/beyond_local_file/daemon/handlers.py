@@ -241,6 +241,7 @@ def _handle_remove(  # noqa: PLR0911 -- each failed resolve returns before the j
         source=source,
         rel_path=rel_path,
         dry_run=dry_run,
+        force=bool(request.get("force")),
         context=context,
     )
     result = operation.run()

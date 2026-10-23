@@ -322,6 +322,7 @@ blf remove [OPTIONS] PATH
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--dry-run` | Flag | Off | Preview validation and cleanup without modifying files, Git excludes, or configuration. |
+| `--force` | Flag | Off | Clear the declared item when a copy is absent or does not match. Deletes a remaining copy, strips git exclude, and drops the subpath. |
 
 #### Behavior
 
@@ -329,15 +330,15 @@ Requires a running daemon. Run it inside the target.
 
 1. Resolves the hub from PATH (contribution source): the unique item whose name equals PATH or is a prefix of it, and that item's managed project. Several managed projects targeting CWD is not CWD-level ambiguity.
 2. Normalizes `PATH` and rejects paths outside the current working directory.
-3. Preflights every configured projection that manages the exact item. A copy must match the managed item; a leftover blf symlink must still point at the managed copy.
-4. Deletes every validated projection, removes its matching `.git/info/exclude` entry when applicable, then deletes the managed copy.
+3. Preflights every configured projection that manages the exact item. A copy must match the managed item; a leftover blf symlink must still point at the managed copy. `--force` skips the absence and match checks and still deletes a remaining copy, including one whose bytes differ.
+4. Deletes every projection that is present, removes its matching `.git/info/exclude` entry when applicable, then deletes the managed copy when it is present. An already-absent path is reported as absent.
 5. Removes the item from participating selective `subpath` lists in the configuration. See the [Configuration Reference](configuration-reference.md) for mapping syntax.
 
-If any projection fails preflight validation, the command leaves all managed items and projections unchanged. If cleanup fails after preflight, it reports the recovery state and retains later destructive phases when possible.
+Without `--force`, a failed preflight leaves all managed items and projections unchanged. `--force` still refuses a path that is not the declared item, an inaccessible target, a path reached through a directory symlink, and a git exclude file that cannot be read. If cleanup fails after preflight, it reports the recovery state and retains later destructive phases when possible. Forced remove does not ask.
 
 #### Terminal
 
-On a terminal, `remove` opens a shell screen and leaves it up until you close it, including a fast removal. The header names `remove` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Removed …`, `Deleted managed copy: …`, and the rest, or the error text).
+On a terminal, `remove` opens a shell screen and leaves it up until you close it, including a fast removal. The header names `remove` and PATH. One row shows this request's worker unit: managed project, state (`waiting`, `working`, `done`, or `failed`), the current step, and elapsed time. The header, the row, and the hint stay put. When the command finishes, the transcript fills the output (`Removed …`, `Deleted managed copy: …` or `Skipping absent managed copy: …`, and the rest, or the error text).
 
 The input line is hidden except while a typed answer is required. It sits directly above the hint.
 
@@ -355,6 +356,9 @@ blf remove .vscode/settings.json
 
 # Preview the validation and cleanup actions
 blf remove --dry-run .vscode/settings.json
+
+# Clear a declared item whose copies are already gone, or that no longer match
+blf remove --force .vscode/settings.json
 
 # Singleton set
 blf --config ~/my-dev-files/config.yml remove .vscode/settings.json

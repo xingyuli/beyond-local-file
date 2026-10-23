@@ -131,8 +131,13 @@ def upgrade(ctx, dry_run):
 @cli.command("remove")
 @click.argument("path")
 @click.option("--dry-run", is_flag=True, help="Preview permanent removal without modifying the filesystem.")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Clear the declared item when a copy is absent or does not match.",
+)
 @click.pass_context
-def remove(ctx, path, dry_run):
+def remove(ctx, path, dry_run, force):
     """Permanently remove one managed item and every validated projection."""
     cwd = _cwd_containing(ctx, path)
     _call_daemon(
@@ -142,6 +147,7 @@ def remove(ctx, path, dry_run):
             "cwd": str(cwd),
             "path": path,
             "dry_run": dry_run,
+            "force": force,
         },
     )
 

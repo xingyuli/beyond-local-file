@@ -189,7 +189,7 @@ The inverse of create: unregister the item, delete the hub copy and the fan-out 
 _Avoid_: unadopt, reverse sync, unlink
 
 **Remove**:
-Delete the hub copy and every projection, including the requesting target's file, and drop the subpath.
+Delete the hub copy and every projection, including the requesting target's file, and drop the subpath. Unforced remove requires the managed copy to exist and the copies to match; forced remove clears that same set, including git exclude, when a copy is absent or unmatched, and deletes a remaining copy.
 _Avoid_: unlink, unmap
 
 **Git exclude**:

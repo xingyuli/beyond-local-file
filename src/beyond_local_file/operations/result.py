@@ -101,6 +101,7 @@ class RemoveResult:
     artifacts: tuple[tuple[str, RemoveArtifactKind | None, bool], ...]
     excludes: tuple[tuple[str, str, bool], ...]
     managed_copy: str
+    managed_present: bool = True
     config: RemoveConfigStatus | None = None
     config_path: str | None = None
     config_entry: str | None = None
@@ -616,6 +617,7 @@ def _remove_to_ipc(result: RemoveResult) -> dict[str, Any]:
         "holds": [list(item) for item in result.holds],
         "kind": "remove",
         "managed_copy": result.managed_copy,
+        "managed_present": result.managed_present,
         "persist_warning": result.persist_warning,
     }
 
@@ -637,6 +639,7 @@ def _remove_from_ipc(payload: dict[str, Any]) -> RemoveResult:
         artifacts=_remove_artifacts_from_ipc(payload.get("artifacts")),
         excludes=_remove_excludes_from_ipc(payload.get("excludes")),
         managed_copy=str(payload.get("managed_copy") or ""),
+        managed_present=True if "managed_present" not in payload else bool(payload.get("managed_present")),
         config=config,
         config_path=_opt_str(payload.get("config_path"), "config_path"),
         config_entry=_opt_str(payload.get("config_entry"), "config_entry"),
@@ -731,7 +734,10 @@ def _render_remove(result: RemoveResult) -> str:  # noqa: PLR0912 -- story, repa
         else:
             lines.append(_story_line(dry, f"Skipping absent Git exclude entry {entry!r} in {exclude_file}"))
     if story:
-        lines.append(_story_line(dry, f"Deleted managed copy: {result.managed_copy}"))
+        if result.managed_present:
+            lines.append(_story_line(dry, f"Deleted managed copy: {result.managed_copy}"))
+        else:
+            lines.append(_story_line(dry, f"Skipping absent managed copy: {result.managed_copy}"))
         if result.config == "repair":
             lines.extend(_story_line(dry, f"Error: {message}") for message in result.errors)
             if result.config_entry is not None:
