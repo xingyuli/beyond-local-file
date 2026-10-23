@@ -5,7 +5,6 @@
 - [Development Installation](#development-installation)
 - [Running Tests](#running-tests)
 - [Code Quality](#code-quality)
-  - [Pre-commit Hooks](#pre-commit-hooks)
 - [Building the Package](#building-the-package)
 - [Project Structure](#project-structure)
 - [Coding Standards](#coding-standards)
@@ -117,17 +116,6 @@ uv run ruff check --fix .
 
 # Format code
 uv run ruff format .
-```
-
-### Pre-commit Hooks
-
-The project uses pre-commit hooks to ensure code quality. Install them with:
-
-```bash
-uv run pre-commit install
-
-# Run manually on all files
-uv run pre-commit run --all-files
 ```
 
 ## Building the Package

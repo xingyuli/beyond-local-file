@@ -8,7 +8,7 @@ according to Ruff's formatting rules:
 1. Single-line docstrings: Collapsed to one line with closing quotes on the same line
 2. Multi-line docstrings: No consecutive blank lines within the docstring
 
-The script can be used as a pre-commit hook or run manually on files/directories.
+Run the script on files or directories.
 """
 
 import re
