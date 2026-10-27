@@ -18,6 +18,7 @@ from beyond_local_file.held import (
     HELD_DIR,
     REASON_CREATE_OVERWRITE,
     REASON_DELETE_GAP,
+    REASON_DELETE_OVERWRITE,
     reason_clause,
     store_held_copy,
 )
@@ -180,6 +181,15 @@ def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
     if set(hub_tree) != set(replica_tree):
         return False
     return all(state_equal(hub_tree[rel], replica_tree[rel]) for rel in hub_tree)
+
+
+def _matches_recorded_item(replica: Path, rel: str, recorded: dict[str, PathState]) -> bool:
+    """Return whether *replica*'s item tree still matches recorded hub rows."""
+    scanned = scan_items(replica, [rel])
+    present = {path: state for path, state in recorded.items() if state.get("present")}
+    if set(scanned) != set(present):
+        return False
+    return all(state_equal(scanned[path], present[path]) for path in scanned)
 
 
 def _copy_hub_onto_replica(
@@ -588,6 +598,23 @@ class LiveSync:
         """Return replica/path pairs isolated after a lost update CAS."""
         return tuple((Path(root), rel) for root, rel in sorted(self._oos))
 
+    def tick_except(self, replicas: set[str], reason: str) -> bool:
+        """Tick every watch root except *replicas*, then restore the full set.
+
+        Args:
+            replicas: Target paths that must not be observed on this tick.
+            reason: Why this tick ran.
+
+        Returns:
+            Whatever :meth:`tick` returns.
+        """
+        saved = self._watch_roots
+        self._watch_roots = [watch for watch in saved if str(watch.root) not in replicas]
+        try:
+            return self.tick(reason)
+        finally:
+            self._watch_roots = saved
+
     def tick(self, reason: str = "idle") -> bool:
         """Observe current trees into the mailbox, then apply pending changes.
 
@@ -724,6 +751,53 @@ class LiveSync:
         self._record_item(replica, rel, gen=0)
         self._last_source.setdefault((str(hub), rel), hub)
         print(f"live: seed {rel} gen 0", flush=True)
+
+    def install_fresh_item(self, replica: Path, rel: str, *, recorded: dict[str, PathState]) -> None:
+        """Install one declared item from the hub onto a new target.
+
+        The hub row is already the catch-up result. A hub file is copied, and
+        different replica bytes are held ``create-overwrite``. When the hub has
+        no file, replica bytes that differ from the recorded hub tree are held
+        ``delete-overwrite`` and the projection is removed. Bytes that still
+        match that tree are removed with no hold. Git exclude stays because
+        the item is still declared. Each path is recorded at that path's hub
+        generation, so a directory child does not take the directory node's
+        generation. A path the hub baseline has never recorded, and that
+        neither side has, stays unrecorded.
+
+        Args:
+            replica: New target project.
+            rel: Item path relative to the hub and the replica.
+            recorded: Hub baseline rows for this item from before the catch-up tick.
+        """
+        hub = self._hub_for_replica(replica, rel)
+        hub_path = hub / rel
+        destination = replica / rel
+        hub_ready = hub_path.exists() or hub_path.is_symlink()
+        dest_ready = destination.exists() or destination.is_symlink()
+        _add_git_exclude(replica, rel)
+        if hub_ready:
+            _copy_hub_onto_replica(hub, replica, rel)
+            self._record_installed_paths(replica, hub, rel)
+            self._last_source.setdefault((str(hub), rel), hub)
+            return
+        if dest_ready and not _matches_recorded_item(replica, rel, recorded):
+            clause = reason_clause(REASON_DELETE_OVERWRITE, path=rel, replica=replica.as_posix())
+            slot = store_held_copy(
+                hub,
+                rel_path=Path(rel),
+                source=destination,
+                replica=replica,
+                reason=REASON_DELETE_OVERWRITE,
+            )
+            print(f"WARNING: {clause}", flush=True)
+            print(f"Held at {slot.as_posix()}", flush=True)
+        elif dest_ready:
+            _remove_path(destination)
+        if not recorded:
+            return
+        self._record_installed_paths(replica, hub, rel)
+        self._last_source.setdefault((str(hub), rel), hub)
 
     def restore_item(self, replica: Path, rel: str, *, dry_run: bool = False) -> ApplyFacts:
         """Named restore: delete hub and other replicas' copies; leave *replica*.
@@ -1307,6 +1381,29 @@ class LiveSync:
             return
         for rel, state in scanned.items():
             self._record(root, rel, state, gen)
+
+    def _record_installed_paths(self, replica: Path, hub: Path, item_name: str) -> None:
+        """Record each path of *item_name* on *replica* at that path's hub generation.
+
+        Present paths take the replica's state after install. An absent path
+        the hub already records stays absent at that path's generation,
+        including a deleted child. When the hub baseline has no path for the
+        item, the replica scan is recorded at generation 0. A path neither
+        side has stays unrecorded.
+
+        Args:
+            replica: Target that just received the hub result.
+            hub: Managed project whose generations are the source.
+            item_name: Declared item relative to *hub* and *replica*.
+        """
+        scanned = scan_items(replica, [item_name])
+        hub_slot = self._baseline.get(str(hub), {})
+        rels = [rel for rel in hub_slot if rel_in_items(rel, (item_name,))]
+        if not rels:
+            rels = list(scanned)
+        for rel in rels:
+            state = scanned.get(rel) or path_state(False, None)
+            self._record(replica, rel, state, get_generation(self._baseline, hub, rel))
 
     def _overwrite_replicas(self, hub: Path, rel: str, new_gen: int) -> None:
         source = hub / rel

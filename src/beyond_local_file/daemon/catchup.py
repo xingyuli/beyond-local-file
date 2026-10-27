@@ -55,12 +55,13 @@ def catch_up_live(
     on_progress: ProgressFn | None = None,
     on_line: LineFn | None = None,
 ) -> BaselineTrees:
-    """Seed unrecorded replicas on *live*, then tick when a baseline existed.
+    """Install fresh targets from the hub, and tick when a baseline existed.
 
     Args:
         live: Observer whose mappings and last-seen to use.
         started_with_baseline: False for fresh catch-up (seed only). True for
-            update catch-up or an existing worker unit (seed then tick).
+            update catch-up: recorded replicas tick, then each new target is
+            installed from that hub result.
         on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
         on_line: Optional shell-screen line, one per worker-unit transition.
 
@@ -76,14 +77,25 @@ def catch_up_live(
     _announce_waiting(units, on_line)
     if started_with_baseline:
         print("catch-up: update", flush=True)
-    else:
-        print("catch-up: fresh", flush=True)
-    _seed_unrecorded(live, units, on_progress, on_line, started_with_baseline=started_with_baseline)
-    if started_with_baseline:
-        live.tick(reason="catch-up")
+        fresh = [unit for unit in units if str(unit.target_project_path) not in live.baseline]
+        _seed_unrecorded(
+            live,
+            [unit for unit in units if unit not in fresh],
+            on_progress,
+            on_line,
+            started_with_baseline=True,
+        )
+        recorded = _recorded_fresh_items(live, fresh)
+        for unit in fresh:
+            print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
+        live.tick_except({str(unit.target_project_path) for unit in fresh}, reason="catch-up")
+        _install_fresh(live, fresh, recorded)
         live.apply_frozen_mismatches()
         for index in range(1, len(units) + 1):
             _mark_unit_done(units, index, on_line)
+    else:
+        print("catch-up: fresh", flush=True)
+        _seed_unrecorded(live, units, on_progress, on_line, started_with_baseline=False)
     return live.baseline
 
 
@@ -260,6 +272,36 @@ def _item_progress(
     return emit
 
 
+def _recorded_fresh_items(
+    live: LiveSync,
+    fresh: list[MappingUnit],
+) -> dict[tuple[str, str], dict[str, PathState]]:
+    """Return each fresh item's hub baseline rows, captured before the tick."""
+    recorded: dict[tuple[str, str], dict[str, PathState]] = {}
+    for unit in fresh:
+        slot = live.baseline.get(str(unit.managed_project_path), {})
+        for name in item_names(unit.managed_project_path, unit.subpaths):
+            recorded[(str(unit.target_project_path), name)] = {
+                rel: state for rel, state in slot.items() if rel_in_items(rel, [name])
+            }
+    return recorded
+
+
+def _install_fresh(
+    live: LiveSync,
+    fresh: list[MappingUnit],
+    recorded: dict[tuple[str, str], dict[str, PathState]],
+) -> None:
+    """Install each fresh target from the hub after the catch-up tick."""
+    for unit in fresh:
+        for name in item_names(unit.managed_project_path, unit.subpaths):
+            live.install_fresh_item(
+                unit.target_project_path,
+                name,
+                recorded=recorded[(str(unit.target_project_path), name)],
+            )
+
+
 def _seed_unrecorded(
     live: LiveSync,
     units: list[MappingUnit],
@@ -275,8 +317,8 @@ def _seed_unrecorded(
         units: Mapping units to seed.
         on_progress: Optional callback of ``(unit_index, unit_count, item_name)``.
         on_line: Optional shell-screen line.
-        started_with_baseline: True when this is update catch-up (or an existing
-            worker unit). Fresh replicas then log as such.
+        started_with_baseline: True when this is update catch-up. A missing
+            project or target directory then does not mark the unit done.
     """
     total = len(units)
     for index, unit in enumerate(units, start=1):
@@ -293,8 +335,6 @@ def _seed_unrecorded(
             continue
         replica_key = str(unit.target_project_path)
         replica_tree = live.baseline.get(replica_key, {})
-        if started_with_baseline and replica_key not in live.baseline:
-            print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
         names = item_names(unit.managed_project_path, unit.subpaths)
         _emit_unit_items(unit, names, index, total, emit)
         for name in names:

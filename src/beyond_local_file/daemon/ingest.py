@@ -10,7 +10,7 @@ import click
 
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps, find_item_path_overlaps
-from beyond_local_file.discovery import item_names
+from beyond_local_file.discovery import item_names, rel_in_items
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.operations.result import ReloadResult
 
@@ -255,6 +255,8 @@ def prepare_reload(config_path: Path, *, confirmed: bool) -> ReloadResult:
     affected = tuple(sorted(affected_unit_names(snapshot_projects, file_projects, diff)))
     apply_removals(snapshot_projects, diff.removals)
     save_snapshot(config_path, file_projects)
+    if diff.removals:
+        _persist_pruned_baseline(config_path, snapshot_projects, diff.removals)
     keep = {project.managed_project_name for project in file_projects.values()}
     drop_removed_baseline_projects(config_path, keep)
     return ReloadResult(0, affected, None, (), ())
@@ -326,9 +328,16 @@ def prune_removed_replicas(
             drop.update(str(target) for target in index[change.project].targets)
         elif change.kind == "target-remove" and change.target is not None:
             drop.add(str(change.target))
-    if not drop:
-        return baseline
-    return {root: tree for root, tree in baseline.items() if root not in drop}
+    kept = {root: dict(tree) for root, tree in baseline.items() if root not in drop}
+    for change in removals:
+        if change.kind != "item-remove" or change.target is None or change.item is None:
+            continue
+        slot = kept.get(str(change.target))
+        if slot is None:
+            continue
+        for rel in [path for path in slot if rel_in_items(path, [change.item])]:
+            del slot[rel]
+    return kept
 
 
 def apply_removals(old: dict[str, ConfigProject], removals: tuple[MappingChange, ...]) -> None:

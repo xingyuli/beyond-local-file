@@ -9,7 +9,7 @@ The directory that holds items projected into target projects. The tool may writ
 _Avoid_: Source project, host project, origin
 
 **Target project**:
-A directory that receives projected items from a managed project. The user works inside target projects day-to-day.
+A directory that receives projected items from a managed project. The user works inside target projects day-to-day. Its path is its identity. A renamed directory is a different target project.
 _Avoid_: Destination project, consumer project
 
 **Item**:
@@ -89,7 +89,7 @@ The daemon's last committed mappings for its configuration set, persisted in the
 _Avoid_: Cache, checkpoint, in-memory config
 
 **Baseline**:
-The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. Persisted as item documents under ``baseline/<managed-project>/`` in the set run directory: ``files`` holds FILE items (hub and each target in the same document); a DIRECTORY item is nested ``files`` plus one document per child subtree (as a file; ``<child>/files`` when a nested declared item needs that path as a directory). A mutating shell rewrites only documents covering paths it changed. No baseline means that managed project has never completed a catch-up. A leftover ``baseline.yml`` is read until a successful document write unlinks it (a partial ``baseline/`` tree does not shadow yaml). After a write, the worker reuses the in-memory trees and does not re-parse documents on the next persist.
+The last recorded hashes and presence for each path on a managed project and its target projects, written after a successful apply or a completed catch-up. Persisted as item documents under ``baseline/<managed-project>/`` in the set run directory: ``files`` holds FILE items (hub and each target in the same document; a target's section lists the file items that target declares); a DIRECTORY item is nested ``files`` plus one document per child subtree (as a file; ``<child>/files`` when a nested declared item needs that path as a directory). A mutating shell rewrites only documents covering paths it changed. No baseline means that managed project has never completed a catch-up. A leftover ``baseline.yml`` is read until a successful document write unlinks it (a partial ``baseline/`` tree does not shadow yaml). After a write, the worker reuses the in-memory trees and does not re-parse documents on the next persist.
 _Avoid_: Checkpoint, watermark, sync-state
 
 **Fresh catch-up**:
@@ -101,7 +101,7 @@ Daemon start (or reload) with a baseline: idle observe against that baseline que
 _Avoid_: Resync, full sync, recover
 
 **Reload**:
-Classify external mapping edits by diffing the configuration set's mapping files against the mapping snapshot, then commit. Removals are confirmed as one plan, coarsest first (project-remove, then target-remove, then item-remove, with inner diffs subsumed); adds apply automatically after. `daemon start` classifies in the foreground when the files differ from the snapshot, then catch-up's (IPC is already up) until phase ``ready``; `daemon reload` runs it when the daemon is already ``ready``. Decline (or no TTY when removals exist) commits nothing. The daemon does not watch mapping files. Internal mapping edits do not go through reload.
+Classify external mapping edits by diffing the configuration set's mapping files against the mapping snapshot, then commit. Removals are confirmed as one plan, coarsest first (project-remove, then target-remove, then item-remove, with inner diffs subsumed); adds apply automatically after. `daemon start` classifies in the foreground when the files differ from the snapshot, then catch-up's (IPC is already up) until phase ``ready``; `daemon reload` runs it when the daemon is already ``ready``. Decline (or no TTY when removals exist) commits nothing. The daemon does not watch mapping files. Internal mapping edits do not go through reload. Target-add catch-up on that commit is ADR 0036.
 _Avoid_: Hot reload, config watch, live config
 
 **Path change**:
@@ -117,7 +117,7 @@ After a successful hub apply, copy or delete that generation onto every in-sync 
 _Avoid_: Broadcast, replicate, push, echo
 
 **Generation**:
-A per-path counter on the hub. Generation 0 is the first version the tool observed (install, fresh catch-up, rescan). It increments once per successful hub apply after that. A delete wins on the live path if the hub generation is at most 3 ahead of the replica's base.
+A per-path counter on the hub. Generation 0 is the first version the tool observed (install, fresh catch-up, rescan). It increments once per successful hub apply of that path after that. A directory node's generation increments when that directory is created, replaced, or removed, not when a child changes. A delete wins on the live path if the hub generation is at most 3 ahead of the replica's base.
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
@@ -125,11 +125,11 @@ Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
-A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a replica), `delete-gap` (delete won past the generation window).
+A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a replica), `delete-gap` (delete won past the generation window), `delete-overwrite` (a new target had different bytes for an item the hub does not have; those bytes were held and the projection removed).
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
-A replica is excluded from a path when its update lost to a different writer — another replica, or a direct edit on the managed project — or when fan-out skipped it because its disk bytes were not the expected base. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, or when **resolve** overwrites that path. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
+A replica is excluded from a path when its update lost to a different writer — another replica, or a direct edit on the managed project — or when fan-out skipped it because its disk bytes were not the expected base. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, when **resolve** overwrites that path, or when that target's baseline rows are dropped. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
 _Avoid_: Freeze, conflict, diverge, partition
 
 **Out-of-sync reason**:
@@ -161,7 +161,7 @@ Producing a confirmed fact by folding one differing replica at a time into the c
 _Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict, replica switcher
 
 **Mapping change**:
-A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove. A mutating shell splices the mapping yaml; apply writes disks.
+A typed unit of work on mappings: item-add, item-remove, target-add, target-remove, project-add, or project-remove. Renaming a target directory is a target-remove of the old path and a target-add of the new path. A mutating shell splices the mapping yaml; apply writes disks.
 _Avoid_: Config diff, reload delta
 
 **Subpath**:
