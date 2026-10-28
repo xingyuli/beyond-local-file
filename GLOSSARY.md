@@ -68,6 +68,10 @@ _Avoid_: starting, booting, warming
 A blf command that sends a request to the daemon. It does not copy, delete, or write mappings itself.
 _Avoid_: Client, wrapper, frontend
 
+**Target-project command**:
+A shell that is run inside a target project and takes a PATH within it: `revlink create`, `revlink restore`, and `remove`. Every other command can be run from any directory.
+_Avoid_: Local command, project command, global command
+
 **Idle log**:
 The record of idle observe. A tick that finds a change or takes time to look is recorded, together with the apply, held copy, and baseline persist that tick causes. A quick tick that finds nothing is absent.
 _Avoid_: request log, daemon log, heartbeat

@@ -235,19 +235,28 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 
 ## Available Commands
 
+`blf --help` lists commands in two groups.
+
+**Run anywhere** — works from any directory:
+
 | Command | Description |
 |---------|-------------|
 | `blf daemon start` | Start the background runtime that copies, observes, and applies mappings |
 | `blf daemon stop` | Stop the running daemon |
 | `blf daemon status` | Show whether the daemon is running, plus out-of-sync paths and held copies |
-| `blf logs` | Show recent request, daemon, and idle work, then follow (Ctrl-C stops following, not the daemon) |
 | `blf daemon reload` | Apply external mapping edits from the set's mapping files |
 | `blf link check [PROJECT]` | Check copy projections and Git excludes |
+| `blf logs` | Show recent request, daemon, and idle work, then follow (Ctrl-C stops following, not the daemon) |
+| `blf debug notice` | Send one desktop notice so you can see whether this machine shows it |
+| `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
+
+**Run inside a target project** — `PATH` must be inside the current directory, which is the target project:
+
+| Command | Description |
+|---------|-------------|
 | `blf revlink create PATH` | Adopt an existing file or directory as a copy projection |
 | `blf revlink restore PATH` | Stop managing PATH and leave the target file in place |
 | `blf remove PATH` | Permanently remove a managed item and its projections. `--force` clears it when a copy is absent or does not match |
-| `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
-| `blf debug notice` | Send one desktop notice so you can see whether this machine shows it |
 
 There is no `link sync`. The daemon is the runtime.
 

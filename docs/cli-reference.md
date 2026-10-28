@@ -18,6 +18,15 @@ Error: daemon is not running. Start it with: blf daemon start
 
 There is no `link sync`.
 
+`blf --help` groups commands by where you run them:
+
+| Group | Commands |
+|-------|----------|
+| **Run anywhere** | `daemon`, `link`, `logs`, `debug`, `upgrade` |
+| **Run inside a target project** | `revlink`, `remove` |
+
+A **target-project command** takes a `PATH` that must be inside the current directory, which it treats as the target project. Every other command can be run from any directory. When neither `-c` nor `~/.blf/config` exists, the config set falls back to `config.yml` in the current directory.
+
 ---
 
 ## Global Options

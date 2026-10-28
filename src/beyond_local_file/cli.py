@@ -43,7 +43,57 @@ def _configure_windows_console_encoding() -> None:
             reconfigure(encoding="utf-8")
 
 
-@click.group()
+_RUN_ANYWHERE = "Run anywhere"
+_RUN_IN_TARGET_PROJECT = "Run inside a target project"
+
+# Root ``--help`` sections, in display order. A command missing here still
+# appears, under a trailing "Other commands" section, so it is never hidden.
+_COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (_RUN_ANYWHERE, ("daemon", "link", "logs", "debug", "upgrade")),
+    (_RUN_IN_TARGET_PROJECT, ("revlink", "remove")),
+)
+
+
+class SectionedGroup(click.Group):
+    """Click group whose ``--help`` lists commands by where they are run."""
+
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        """Write the command list as titled sections.
+
+        Args:
+            ctx: Active Click context.
+            formatter: Help formatter receiving the sections.
+        """
+        sections = [(title, list(names)) for title, names in _COMMAND_SECTIONS]
+        placed = _sectioned_names()
+        sections.append(("Other commands", [name for name in self.list_commands(ctx) if name not in placed]))
+        for title, names in sections:
+            rows = self._help_rows(ctx, formatter, names)
+            if rows:
+                with formatter.section(title):
+                    formatter.write_dl(rows)
+
+    def _help_rows(
+        self,
+        ctx: click.Context,
+        formatter: click.HelpFormatter,
+        names: list[str],
+    ) -> list[tuple[str, str]]:
+        """Return ``(name, short help)`` rows for the visible commands in *names*."""
+        commands = [(name, self.get_command(ctx, name)) for name in names]
+        visible = [(name, command) for name, command in commands if command is not None and not command.hidden]
+        if not visible:
+            return []
+        limit = formatter.width - 6 - max(len(name) for name, _ in visible)
+        return [(name, command.get_short_help_str(limit)) for name, command in visible]
+
+
+def _sectioned_names() -> set[str]:
+    """Return every command name placed in a titled section."""
+    return {name for _, names in _COMMAND_SECTIONS for name in names}
+
+
+@click.group(cls=SectionedGroup)
 @click.version_option(version=__version__, prog_name="beyond-local-file")
 @click.option(
     "-c",
@@ -128,7 +178,7 @@ def upgrade(ctx, dry_run):
     ctx.exit(exit_code)
 
 
-@cli.command("remove")
+@cli.command("remove", short_help="Permanently remove one managed item and its projections.")
 @click.argument("path")
 @click.option("--dry-run", is_flag=True, help="Preview permanent removal without modifying the filesystem.")
 @click.option(
@@ -138,7 +188,10 @@ def upgrade(ctx, dry_run):
 )
 @click.pass_context
 def remove(ctx, path, dry_run, force):
-    """Permanently remove one managed item and every validated projection."""
+    """Permanently remove one managed item and every validated projection.
+
+    Run inside a target project.
+    """
     cwd = _cwd_containing(ctx, path)
     _call_daemon(
         ctx,
@@ -206,9 +259,12 @@ def daemon_reload(ctx):
     ctx.exit(reload_daemon(ctx.obj["config"]))
 
 
-@cli.group()
+@cli.group(short_help="Adopt or release files in the current target project.")
 def revlink():
-    """Manage the lifecycle of files adopted into the managed project."""
+    """Manage the lifecycle of files adopted into the managed project.
+
+    Run inside a target project.
+    """
     pass
 
 
