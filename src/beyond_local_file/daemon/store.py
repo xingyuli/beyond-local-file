@@ -202,10 +202,12 @@ def load_baseline(config_path: Path) -> BaselineTrees | None:
         return _copy_trees(cached)
     yaml_trees = _load_baseline_yaml(baseline_path(config_path))
     if yaml_trees is not None:
+        normalize_baseline(yaml_trees)
         _remember_baseline(config_path, yaml_trees, replace=True)
         return yaml_trees
     doc_trees = _load_baseline_documents(baseline_dir(config_path))
     if doc_trees is not None:
+        normalize_baseline(doc_trees)
         _remember_baseline(config_path, doc_trees, replace=True)
     return doc_trees
 
@@ -219,7 +221,8 @@ def save_baseline(
 ) -> None:
     """Persist the per-path baseline.
 
-    With *projects*, write item documents under ``baseline/<managed-project>/``.
+    Absent rows and directory generations are dropped before the write. With
+    *projects*, write item documents under ``baseline/<managed-project>/``.
     Without *projects*, write the legacy ``baseline.yml``. *changed_rels* limits
     a document write to items covering those relative paths.
 
@@ -230,6 +233,7 @@ def save_baseline(
         changed_rels: Relative paths whose documents should be rewritten. None
             rewrites every item document.
     """
+    normalize_baseline(trees)
     _drop_ancestor_bytes(trees)
     if projects is None:
         _save_baseline_yaml(config_path, trees)
@@ -261,12 +265,65 @@ def _remember_baseline(config_path: Path, trees: BaselineTrees, *, replace: bool
     _baseline_memory[key].update(copied)
 
 
+def is_present(state: PathState | None) -> bool:
+    """Return whether *state* is a node stored in the tree.
+
+    A missing row and an explicit absent sentinel are not present. A legacy
+    ``present`` flag is honored when a baseline still has one.
+
+    Args:
+        state: Baseline path state, or None.
+
+    Returns:
+        True when the node is in the tree.
+    """
+    if not state or state.get("absent"):
+        return False
+    if "present" in state:
+        return bool(state["present"])
+    return "hash" in state
+
+
+def is_directory_row(state: PathState | None) -> bool:
+    """Return whether *state* is a directory node.
+
+    Args:
+        state: Baseline path state, or None.
+
+    Returns:
+        True when the node is present and has no hash.
+    """
+    return is_present(state) and state is not None and state.get("hash") is None
+
+
+def normalize_baseline(trees: BaselineTrees) -> BaselineTrees:
+    """Drop absent rows and directory generations from *trees*.
+
+    Args:
+        trees: Baseline trees, mutated in place.
+
+    Returns:
+        The same trees.
+    """
+    for slot in trees.values():
+        for rel in list(slot):
+            state = slot[rel]
+            if not is_present(state):
+                del slot[rel]
+                continue
+            state.pop("present", None)
+            state.pop("absent", None)
+            if state.get("hash") is None:
+                state.pop("gen", None)
+    return trees
+
+
 def oos_reason_clause(
     reason: str,
     *,
     replica: str,
     path: str,
-    gen: int,
+    gen: int | None,
     winner: str | None = None,
 ) -> str:
     """Return the human clause for an out-of-sync reason.
@@ -275,7 +332,8 @@ def oos_reason_clause(
         reason: Stable out-of-sync reason id.
         replica: Replica that was marked out-of-sync.
         path: Relative path of the item.
-        gen: Hub generation at the mark.
+        gen: Hub generation at the mark, or None when the node is a directory
+            and the clause does not cite a generation.
         winner: Replica whose apply won the compare-and-swap, when *reason* is
             ``stale-base``. Ignored for ``fan-out-mismatch``.
 
@@ -284,12 +342,18 @@ def oos_reason_clause(
     """
     if reason == REASON_STALE_BASE:
         source = winner if winner is not None else replica
+        if gen is None:
+            return f"update lost compare-and-swap at {path} on {replica} (reason: {reason})"
         return (
             f"update lost compare-and-swap at {path} on {replica}; "
             f"hub generation {gen} from {source} (reason: {reason})"
         )
     if reason == REASON_FAN_OUT_MISMATCH:
+        if gen is None:
+            return f"fan-out skipped {path} on {replica} (reason: {reason})"
         return f"fan-out skipped {path} on {replica}; disk was not hub generation {gen} (reason: {reason})"
+    if gen is None:
+        return f"{reason}: {path} on {replica}"
     return f"{reason}: {path} on {replica} gen {gen}"
 
 
@@ -300,14 +364,22 @@ def path_state(present: bool, digest: str | None, gen: int = 0, oos: bool = Fals
         present: Whether this snapshotted node is in the tree. A path under a
             symlink is not a node and is not stored.
         digest: File hash, ``symlink:`` plus the link text, or None for a
-            directory or a node that is gone.
-        gen: Per-path hub generation last applied to this replica.
+            directory. Ignored when *present* is False.
+        gen: Generation stored on a file or symlink. Omitted for a directory
+            and for an absent sentinel.
         oos: Whether this replica is out-of-sync for the path.
 
     Returns:
         Serialisable path state.
     """
-    state: PathState = {"present": present, "hash": digest, "gen": gen}
+    if not present:
+        state: PathState = {"absent": True}
+        if oos:
+            state["oos"] = True
+        return state
+    state = {"hash": digest}
+    if digest is not None:
+        state["gen"] = gen
     if oos:
         state["oos"] = True
     return state
@@ -384,7 +456,7 @@ def iter_out_of_sync(trees: BaselineTrees) -> tuple[tuple[Path, str], ...]:
 
 
 def _generation_of(state: PathState | None) -> int:
-    if not state:
+    if not is_present(state) or state is None or state.get("hash") is None:
         return 0
     try:
         return int(state.get("gen") or 0)
@@ -393,9 +465,10 @@ def _generation_of(state: PathState | None) -> int:
 
 
 def _normalize_state(state: PathState | None) -> tuple[bool, str | None]:
-    if not state:
+    if not is_present(state):
         return (False, None)
-    return (bool(state.get("present")), state.get("hash"))
+    assert state is not None
+    return (True, state.get("hash"))
 
 
 def _load_baseline_yaml(path: Path) -> BaselineTrees | None:
@@ -625,7 +698,7 @@ def _child_is_directory(trees: BaselineTrees, roots: list[str], child_rel: str) 
     for root in roots:
         slot = trees.get(root) or {}
         state = slot.get(child_rel)
-        if state and state.get("present") and state.get("hash") is None:
+        if is_directory_row(state):
             return True
         if any(path.startswith(descendant) for path in slot):
             return True

@@ -117,11 +117,11 @@ At most one not-yet-applied path change per (path, replica). A later event from 
 _Avoid_: Debounce, batch, buffer, timeout
 
 **Fan-out**:
-After a successful hub apply, copy or delete that generation onto every in-sync replica of the owning managed project except the source replica — the tree the change was observed on. The source already has the bytes. Replicas of other managed projects are not written, even when they use the same item name.
+After a successful hub apply, copy or delete that path onto every in-sync replica of the owning managed project except the source replica — the tree the change was observed on. The source already has the bytes. Replicas of other managed projects are not written, even when they use the same item name.
 _Avoid_: Broadcast, replicate, push, echo
 
 **Generation**:
-A per-path counter on the hub. Generation 0 is the first version the tool observed (install, fresh catch-up, rescan). It increments once per successful hub apply of that path after that. A directory node's generation increments when that directory is created, replaced, or removed, not when a child changes. A delete wins on the live path if the hub generation is at most 3 ahead of the replica's base.
+A counter on a file or a symlink. A directory node has no generation. Generation 0 is the first version the tool observed (install, fresh catch-up, rescan). It increments once per successful hub apply of that file or symlink after that. An idle tick that sees the file or symlink gone ends that generation, and the next idle tick that sees it starts at generation 1. A file and a symlink share the counter, so a change between them increments it when the base matches. A directory and a symlink do not: a new symlink starts at generation 1, and a symlink that becomes a directory ends its generation. A delete of a file or a symlink wins on the live path if the hub generation is at most 3 ahead of the replica's base. Past that window the symlink's link text is held. A directory base counts as 0. A directory delete does not use this window.
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
@@ -129,15 +129,15 @@ Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
-A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a replica), `delete-gap` (delete won past the generation window), `delete-overwrite` (a new target had different bytes for an item the hub does not have; those bytes were held and the projection removed).
+A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a replica), `delete-gap` (a file or symlink delete won past the generation window), `delete-overwrite` (a new target had different bytes for an item the hub does not have; those bytes were held and the projection removed), `kind-change` (a file became a directory, or a directory became a file, and the previous file bytes were held).
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
-A replica is excluded from a path when its update lost to a different writer — another replica, or a direct edit on the managed project — or when fan-out skipped it because its disk bytes were not the expected base. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, when **resolve** overwrites that path, or when that target's baseline rows are dropped. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
+A replica is excluded from a path when its update lost to a different writer — another replica, or a direct edit on the managed project — or when fan-out skipped it because its disk bytes were not the expected base. A file becoming a directory, or a directory becoming a file, holds the previous file bytes and does not exclude a replica. A file and a symlink, or a directory and a symlink, apply when the base matches and exclude the replica when it does not. An excluded file is the file that replica still has. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, when **resolve** overwrites that path, or when that target's baseline rows are dropped. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
 _Avoid_: Freeze, conflict, diverge, partition
 
 **Out-of-sync reason**:
-A stable clause naming why a replica is out-of-sync for a path. Status, WARNINGs, and the resolve UI show it. Reasons: `stale-base` (target update lost compare-and-swap), `fan-out-mismatch` (fan-out skipped because disk was not the expected base). The clause names the replica, path, hub generation, and the winning replica when the mark was a lost compare-and-swap.
+A stable clause naming why a replica is out-of-sync for a path. Status, WARNINGs, and the resolve UI show it. Reasons: `stale-base` (target update lost compare-and-swap), `fan-out-mismatch` (fan-out skipped because disk was not the expected base). The clause names the replica and the path. For a file or a symlink it also names the hub generation, and the winning replica when the mark was a lost compare-and-swap.
 _Avoid_: Conflict type, error code, note, isolation reason
 
 **Confirmed fact**:

@@ -398,6 +398,177 @@ def test_different_symlink_text_stays_out_of_sync(tmp_path: Path) -> None:
     assert (target_a, "alias") not in live.out_of_sync
 
 
+def test_directory_replaced_by_a_file_holds_the_child_and_starts_the_file_at_generation_1(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """One tick that sees a directory become a file holds the child and writes generation 1.
+
+    The child row is dropped. The other replica is not marked out of sync.
+    """
+    hub = tmp_path / "lab-app"
+    beta = tmp_path / "beta"
+    alpha = tmp_path / "alpha"
+    for root in (hub, beta, alpha):
+        root.mkdir()
+    (hub / "docs").mkdir()
+    (hub / "docs" / "a.md").write_text("old")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app:\n  - {beta}\n  - {alpha}\n")
+    live = _live_sync(config_path)
+    docs = alpha / "docs"
+    (docs / "a.md").unlink()
+    docs.rmdir()
+    (alpha / "docs").write_text("new")
+
+    live.tick()
+
+    assert (hub / "docs").read_text() == "new"
+    assert (beta / "docs").read_text() == "new"
+    assert not (hub / "docs" / "a.md").exists()
+    hub_docs = live.baseline[str(hub.resolve())]["docs"]
+    assert hub_docs["gen"] == 1
+    assert "present" not in hub_docs
+    assert "docs/a.md" not in live.baseline[str(hub.resolve())]
+    assert "docs/a.md" not in live.baseline[str(beta.resolve())]
+    assert live.out_of_sync == ()
+    held_root = _expected_held_dir(hub.resolve(), Path(isolated_home["BLF_HOME"]))
+    reasons = sorted((slot / "reason.yml").read_text() for slot in held_root.iterdir() if slot.is_dir())
+    assert any("kind-change" in reason for reason in reasons)
+    assert any((slot / "content").read_text() == "old" for slot in held_root.iterdir() if (slot / "content").is_file())
+
+
+def test_file_delete_drops_the_row_and_the_next_create_starts_at_generation_1(
+    live_workspace: tuple[LiveSync, Path, Path, Path],
+) -> None:
+    """An observed delete ends the generation. The next observed create starts at 1."""
+    live, managed, target_a, _target_b = live_workspace
+    (target_a / "shared.txt").unlink()
+    live.tick()
+    assert "shared.txt" not in live.baseline[str(managed)]
+
+    (target_a / "shared.txt").write_text("again")
+    live.tick()
+
+    assert (managed / "shared.txt").read_text() == "again"
+    assert live.baseline[str(managed)]["shared.txt"]["gen"] == 1
+
+
+def test_file_and_symlink_share_one_generation(tmp_path: Path) -> None:
+    """A matching file-to-symlink change increments the file's generation."""
+    hub = tmp_path / "lab-app"
+    beta = tmp_path / "beta"
+    alpha = tmp_path / "alpha"
+    for root in (hub, beta, alpha):
+        root.mkdir()
+    (hub / "docs").write_text("file")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app:\n  - {beta}\n  - {alpha}\n")
+    live = _live_sync(config_path)
+    (alpha / "docs").unlink()
+    (alpha / "docs").symlink_to("elsewhere")
+    (beta / "docs").write_text("divergent")
+
+    live.tick()
+
+    assert (hub / "docs").readlink().as_posix() == "elsewhere"
+    assert live.baseline[str(hub.resolve())]["docs"]["gen"] == 1
+    beta_row = live.baseline[str(beta.resolve())]["docs"]
+    assert beta_row["oos"] is True
+    assert beta_row["hash"] != live.baseline[str(hub.resolve())]["docs"]["hash"]
+    assert (beta, "docs") in live.out_of_sync
+
+
+def test_directory_to_symlink_drops_children_without_a_hold(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Switching a directory to a symlink drops the child and does not hold it."""
+    hub = tmp_path / "lab-app"
+    beta = tmp_path / "beta"
+    alpha = tmp_path / "alpha"
+    for root in (hub, beta, alpha):
+        root.mkdir()
+    (hub / "docs").mkdir()
+    (hub / "docs" / "a.md").write_text("old")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app:\n  - {beta}\n  - {alpha}\n")
+    live = _live_sync(config_path)
+    (alpha / "docs" / "a.md").unlink()
+    (alpha / "docs").rmdir()
+    (alpha / "docs").symlink_to("elsewhere")
+
+    live.tick()
+
+    assert (hub / "docs").readlink().as_posix() == "elsewhere"
+    assert (beta / "docs").readlink().as_posix() == "elsewhere"
+    assert live.baseline[str(hub.resolve())]["docs"]["gen"] == 1
+    assert "docs/a.md" not in live.baseline[str(hub.resolve())]
+    held_root = _expected_held_dir(hub.resolve(), Path(isolated_home["BLF_HOME"]))
+    assert not held_root.exists()
+
+
+def test_file_replaced_by_a_directory_holds_the_file(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """One tick that sees a file become a directory holds that file. The directory has no generation."""
+    hub = tmp_path / "lab-app"
+    beta = tmp_path / "beta"
+    alpha = tmp_path / "alpha"
+    for root in (hub, beta, alpha):
+        root.mkdir()
+    (hub / "docs").write_text("old")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app:\n  - {beta}\n  - {alpha}\n")
+    live = _live_sync(config_path)
+    (alpha / "docs").unlink()
+    (alpha / "docs").mkdir()
+    (alpha / "docs" / "a.md").write_text("child")
+
+    live.tick()
+
+    assert (hub / "docs" / "a.md").read_text() == "child"
+    assert (beta / "docs" / "a.md").read_text() == "child"
+    directory = live.baseline[str(hub.resolve())]["docs"]
+    assert directory["hash"] is None
+    assert "gen" not in directory
+    assert live.baseline[str(hub.resolve())]["docs/a.md"]["gen"] == 1
+    held_root = _expected_held_dir(hub.resolve(), Path(isolated_home["BLF_HOME"]))
+    held = [slot for slot in held_root.iterdir() if slot.is_dir()]
+    assert held
+    assert any("kind-change" in (slot / "reason.yml").read_text() for slot in held)
+    assert any((slot / "content").read_text() == "old" for slot in held if (slot / "content").is_file())
+
+
+def test_symlink_replaced_by_a_directory_ends_the_generation(tmp_path: Path, isolated_home: dict[str, str]) -> None:
+    """A matching symlink-to-directory change drops the generation and holds nothing."""
+    hub = tmp_path / "lab-app"
+    beta = tmp_path / "beta"
+    alpha = tmp_path / "alpha"
+    for root in (hub, beta, alpha):
+        root.mkdir()
+    (hub / "docs").write_text("file")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(f"lab-app:\n  - {beta}\n  - {alpha}\n")
+    live = _live_sync(config_path)
+    (alpha / "docs").unlink()
+    (alpha / "docs").symlink_to("elsewhere")
+    live.tick()
+    (alpha / "docs").unlink()
+    (alpha / "docs").mkdir()
+
+    live.tick()
+
+    directory = live.baseline[str(hub.resolve())]["docs"]
+    assert directory["hash"] is None
+    assert "gen" not in directory
+    assert (hub / "docs").is_dir()
+    assert (beta / "docs").is_dir()
+    held_root = _expected_held_dir(hub.resolve(), Path(isolated_home["BLF_HOME"]))
+    assert not held_root.exists()
+
+
 def test_delete_directory_tree_removes_it_on_hub_and_other_replica(tmp_path: Path) -> None:
     """Deleting a directory tree on one replica removes those paths everywhere in sync."""
     managed = tmp_path / "proj"

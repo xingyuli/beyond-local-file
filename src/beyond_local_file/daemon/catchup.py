@@ -13,7 +13,7 @@ from beyond_local_file.model.translator import translate_config_to_mapping_units
 
 from .live import LiveSync, ScanStats, scan_items
 from .log import log_duration
-from .store import BaselineTrees, PathState, path_state
+from .store import BaselineTrees, PathState, is_directory_row, normalize_baseline
 
 type ProgressFn = Callable[[int, int, str], None]
 type LineFn = Callable[[str], None]
@@ -96,7 +96,7 @@ def catch_up_live(
     else:
         print("catch-up: fresh", flush=True)
         _seed_unrecorded(live, units, on_progress, on_line, started_with_baseline=False)
-    return live.baseline
+    return normalize_baseline(live.baseline)
 
 
 def record_baseline(
@@ -202,26 +202,14 @@ def _preserve_generations(trees: BaselineTrees, previous: BaselineTrees | None) 
         prev_paths = previous.get(root, {})
         for rel, state in paths.items():
             prev = prev_paths.get(rel) or {}
-            try:
-                state["gen"] = int(prev.get("gen") or 0)
-            except (TypeError, ValueError):
-                state["gen"] = 0
+            if is_directory_row(state):
+                state.pop("gen", None)
+            else:
+                try:
+                    state["gen"] = int(prev.get("gen") or 0)
+                except (TypeError, ValueError):
+                    state["gen"] = 0
             _copy_oos_metadata(state, prev)
-    for root, prev_paths in previous.items():
-        slot = trees.setdefault(root, {})
-        for rel, prev in prev_paths.items():
-            if rel in slot:
-                continue
-            oos = bool(prev.get("oos"))
-            if prev.get("present") and not oos:
-                continue
-            try:
-                gen = int(prev.get("gen") or 0)
-            except (TypeError, ValueError):
-                gen = 0
-            recorded = path_state(False, None, gen, oos=oos)
-            _copy_oos_metadata(recorded, prev)
-            slot[rel] = recorded
 
 
 def _copy_oos_metadata(state: PathState, prev: PathState) -> None:

@@ -19,6 +19,7 @@ from beyond_local_file.held import (
     REASON_CREATE_OVERWRITE,
     REASON_DELETE_GAP,
     REASON_DELETE_OVERWRITE,
+    REASON_KIND_CHANGE,
     reason_clause,
     store_held_copy,
 )
@@ -34,7 +35,10 @@ from .store import (
     PathState,
     get_generation,
     get_state,
+    is_directory_row,
     is_out_of_sync,
+    is_present,
+    normalize_baseline,
     oos_reason_clause,
     path_state,
     state_equal,
@@ -186,7 +190,7 @@ def item_matches(hub_root: Path, replica_root: Path, item_name: str) -> bool:
 def _matches_recorded_item(replica: Path, rel: str, recorded: dict[str, PathState]) -> bool:
     """Return whether *replica*'s item tree still matches recorded hub rows."""
     scanned = scan_items(replica, [rel])
-    present = {path: state for path, state in recorded.items() if state.get("present")}
+    present = {path: state for path, state in recorded.items() if is_present(state)}
     if set(scanned) != set(present):
         return False
     return all(state_equal(scanned[path], present[path]) for path in scanned)
@@ -333,10 +337,10 @@ def _is_directory_node(path: Path) -> bool:
 def _is_directory_state(state: PathState) -> bool:
     """Return whether *state* is a present directory node.
 
-    Directory scans store presence with a null hash. An absent path also has a
-    null hash, so presence is required.
+    A directory row has a null hash and no generation. An absent path is not a
+    directory row.
     """
-    return bool(state.get("present")) and state.get("hash") is None
+    return is_directory_row(state)
 
 
 def _place_directory_node(destination: Path) -> None:
@@ -566,13 +570,17 @@ class LiveSync:
 
         Args:
             projects: Committed mappings to watch.
-            baseline: Last applied hashes, presence, and generations.
+            baseline: Last applied hashes and generations. A directory has no
+                generation. A missing row means the path is absent.
             last_seen_from_baseline: When True, treat *baseline* as the last
                 scan so the first tick queues downtime diffs (update catch-up).
                 When False, scan disks now and treat that as already seen.
         """
         self._projects = projects
-        self._baseline = baseline
+        self._baseline = normalize_baseline(baseline)
+        self._kind_change_rels: set[tuple[str, str]] = set()
+        self._unheld_deletes: set[tuple[str, str]] = set()
+        self._deleted_rels: set[tuple[str, str]] = set()
         self._mailbox: dict[tuple[str, str], PathChange] = {}
         self._oos: set[tuple[str, str]] = _oos_from_baseline(baseline)
         self._last_source: dict[tuple[str, str], Path] = {}
@@ -627,6 +635,7 @@ class LiveSync:
             state changed (out-of-sync marked or cleared).
         """
         started = time.perf_counter()
+        self._deleted_rels = set()
         stats = ScanStats()
         before_oos = set(self._oos)
         self.observe(stats)
@@ -672,13 +681,14 @@ class LiveSync:
                         continue
                     if kind != "delete":
                         continue
+                old_present = is_present(old)
                 self._mailbox[(rel, str(watch.root))] = PathChange(
                     rel=rel,
                     replica=watch.root,
                     hub=owner,
                     kind=kind,
-                    base_present=bool(old.get("present")),
-                    base_hash=old.get("hash") if old.get("present") else None,
+                    base_present=old_present,
+                    base_hash=old.get("hash") if old_present else None,
                     base_gen=get_generation(self._baseline, watch.root, rel),
                 )
             self._last_seen[str(watch.root)] = scanned
@@ -925,6 +935,7 @@ class LiveSync:
             when several replicas queued the same path).
         """
         applied: list[str] = []
+        self._kind_change_rels, self._unheld_deletes = _batch_kind_changes(self._mailbox)
         while self._mailbox:
             key = min(self._mailbox, key=lambda item: _apply_sort_key(self._mailbox[item]))
             change = self._mailbox.pop(key)
@@ -965,8 +976,10 @@ class LiveSync:
                 replica_state = replica_now.get(rel) or path_state(False, None)
                 if state_equal(hub_now, replica_state):
                     continue
-                hub_present = bool(hub_now.get("present"))
-                if self._is_oos(watch.root, rel) and hub_present:
+                hub_present = is_present(hub_now)
+                if self._is_oos(watch.root, rel) and (
+                    hub_present or (str(hub), rel) in self._deleted_rels
+                ):
                     continue
                 if not state_equal(hub_now, get_state(self._baseline, hub, rel)):
                     continue
@@ -979,8 +992,8 @@ class LiveSync:
                     replica=watch.root,
                     hub=hub,
                     kind=_classify(hub_now, replica_state),
-                    base_present=bool(hub_now.get("present")),
-                    base_hash=hub_now.get("hash") if hub_now.get("present") else None,
+                    base_present=hub_present,
+                    base_hash=hub_now.get("hash") if hub_present else None,
                     base_gen=get_generation(self._baseline, hub, rel),
                 )
         if not self._mailbox:
@@ -1063,7 +1076,7 @@ class LiveSync:
                     continue
                 if rel not in slot:
                     slot[rel] = dict(state)
-                if rel not in seen and state.get("present"):
+                if rel not in seen and is_present(state):
                     seen[rel] = path_state(True, state.get("hash"))
 
     def _scan_all(self, reason: str) -> BaselineTrees:
@@ -1089,13 +1102,15 @@ class LiveSync:
             return
         old_hub = scan_path_state(change.hub, change.rel)
         old_hub_gen = get_generation(self._baseline, change.hub, change.rel)
+        hold_key = (str(change.hub), change.rel)
         if change.kind == "delete":
-            if not _delete_allowed(change, old_hub, old_hub_gen):
-                self._hold_delete_gap(change)
+            self._hold_before_delete(change, old_hub, old_hub_gen)
             _remove_changed_path(change.hub / change.rel, root=change.hub)
+            self._deleted_rels.add((str(change.hub), change.rel))
         else:
             if not state_equal(old_hub, path_state(change.base_present, change.base_hash)):
                 winner = self._winning_replica(change.hub, change.rel)
+                directory = _is_directory_state(old_hub)
                 self._mark_oos(
                     change.replica,
                     change.rel,
@@ -1104,11 +1119,13 @@ class LiveSync:
                         REASON_STALE_BASE,
                         replica=change.replica.as_posix(),
                         path=change.rel,
-                        gen=old_hub_gen,
+                        gen=None if directory else old_hub_gen,
                         winner=winner.as_posix(),
                     ),
                 )
                 return
+            if hold_key in self._kind_change_rels:
+                self._hold_kind_change(change.hub / change.rel, change)
             source = change.replica / change.rel
             if not source.exists() and not source.is_symlink():
                 return
@@ -1134,10 +1151,15 @@ class LiveSync:
             self._drop_unsnapshotted(change.hub, change.rel)
             return
         previous = get_state(self._baseline, change.hub, change.rel)
-        old_hub = path_state(bool(previous.get("present")), previous.get("hash") if previous.get("present") else None)
+        old_present = is_present(previous)
+        old_hub = path_state(old_present, previous.get("hash") if old_present else None)
+        if (str(change.hub), change.rel) in self._kind_change_rels:
+            self._hold_kind_change(change.hub / change.rel, change)
         new_gen = get_generation(self._baseline, change.hub, change.rel) + 1
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
+        if not is_present(new_hub):
+            self._deleted_rels.add((str(change.hub), change.rel))
         self._last_source[(str(change.hub), change.rel)] = change.replica
         print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
@@ -1216,8 +1238,9 @@ class LiveSync:
                 self._oos.discard((str(watch.root), change.rel))
                 self._drop_rows_under(watch.root, change.rel)
                 continue
-            if not state_equal(disk, old_hub):
-                self._mark_fan_out_mismatch(watch.root, change.rel, new_gen)
+            if not state_equal(disk, old_hub) and (str(change.hub), change.rel) not in self._kind_change_rels:
+                directory = _is_directory_state(old_hub) or _is_directory_state(new_hub)
+                self._mark_fan_out_mismatch(watch.root, change.rel, None if directory else new_gen)
                 continue
             if not self._write_fan_out(change, old_hub, new_hub, new_gen, watch.root):
                 continue
@@ -1242,7 +1265,9 @@ class LiveSync:
             False when the replica was marked out-of-sync instead of written.
         """
         destination = replica / change.rel
-        if new_hub.get("present"):
+        if (str(change.hub), change.rel) in self._kind_change_rels:
+            self._hold_kind_change(destination, change)
+        if is_present(new_hub):
             source = change.hub / change.rel
             if _is_directory_node(source):
                 _place_directory_node(destination)
@@ -1255,13 +1280,13 @@ class LiveSync:
             try:
                 _remove_directory_node(destination)
             except OSError:
-                self._mark_fan_out_mismatch(replica, change.rel, new_gen)
+                self._mark_fan_out_mismatch(replica, change.rel, None)
                 return False
             return True
         _remove_path(destination)
         return True
 
-    def _mark_fan_out_mismatch(self, replica: Path, rel: str, gen: int) -> None:
+    def _mark_fan_out_mismatch(self, replica: Path, rel: str, gen: int | None) -> None:
         """Exclude *replica* because its disk was not the expected base."""
         self._mark_oos(
             replica,
@@ -1274,6 +1299,40 @@ class LiveSync:
                 gen=gen,
             ),
         )
+
+    def _hold_before_delete(self, change: PathChange, old_hub: PathState, old_hub_gen: int) -> None:
+        """Hold file bytes before a delete when the window or a kind change requires it.
+
+        A directory delete holds nothing. Children dropped because a directory
+        became a symlink are not held. A file removed because a directory became
+        a file is ``kind-change``.
+        """
+        hold_key = (str(change.hub), change.rel)
+        if hold_key in self._kind_change_rels:
+            self._hold_kind_change(change.hub / change.rel, change)
+            return
+        if hold_key in self._unheld_deletes or _is_directory_state(old_hub):
+            return
+        if not _delete_allowed(change, old_hub, old_hub_gen):
+            self._hold_delete_gap(change)
+
+    def _hold_kind_change(self, source: Path, change: PathChange) -> None:
+        """Hold a file's bytes when that path changes between a file and a directory.
+
+        A directory node has no bytes. A symlink is not this hold.
+        """
+        if not source.is_file() or source.is_symlink():
+            return
+        clause = reason_clause(REASON_KIND_CHANGE, path=change.rel, replica=str(change.replica))
+        slot = store_held_copy(
+            change.hub,
+            rel_path=Path(change.rel),
+            source=source,
+            replica=change.replica,
+            reason=REASON_KIND_CHANGE,
+        )
+        print(f"WARNING: {clause}", flush=True)
+        print(f"Held at {slot.as_posix()}", flush=True)
 
     def _hub_for(self, rel: str) -> Path | None:
         for watch in self._watch_roots:
@@ -1467,15 +1526,15 @@ class LiveSync:
         path.write_bytes(content)
 
     def _record(self, root: Path, rel: str, state: PathState, gen: int) -> None:
-        present = bool(state.get("present"))
-        digest = state.get("hash") if present else None
-        recorded = path_state(present, digest, gen)
-        self._baseline.setdefault(str(root), {})[rel] = recorded
+        slot = self._baseline.setdefault(str(root), {})
         seen = self._last_seen.setdefault(str(root), {})
-        if present:
-            seen[rel] = path_state(True, digest)
-        else:
+        if not is_present(state):
+            slot.pop(rel, None)
             seen.pop(rel, None)
+            return
+        digest = state.get("hash")
+        slot[rel] = path_state(True, digest, gen)
+        seen[rel] = path_state(True, digest)
 
     def _is_oos(self, replica: Path, rel: str) -> bool:
         return (str(replica), rel) in self._oos
@@ -1489,17 +1548,20 @@ class LiveSync:
         clause: str,
     ) -> None:
         self._oos.add((str(replica), rel))
-        current = get_state(self._baseline, replica, rel)
-        present = bool(current.get("present"))
-        state = path_state(
-            present,
-            current.get("hash") if present else None,
-            get_generation(self._baseline, replica, rel),
-            oos=True,
-        )
+        disk = scan_path_state(replica, rel)
+        slot = self._baseline.setdefault(str(replica), {})
+        if not is_present(disk):
+            slot.pop(rel, None)
+            return
+        if _is_directory_state(disk):
+            state = path_state(True, None, oos=True)
+        else:
+            state = path_state(True, disk.get("hash"), get_generation(self._baseline, replica, rel), oos=True)
+            if not state.get("gen"):
+                state.pop("gen", None)
         state["reason"] = reason
         state["clause"] = clause
-        self._baseline.setdefault(str(replica), {})[rel] = state
+        slot[rel] = state
 
     def _winning_replica(self, hub: Path, rel: str) -> Path:
         return self._last_source.get((str(hub), rel), hub)
@@ -1622,14 +1684,14 @@ def _build_watch_roots(projects: dict[str, ConfigProject]) -> list[_WatchRoot]:
 def _is_symlink_state(state: PathState) -> bool:
     """Return whether *state* is a symlink node."""
     digest = state.get("hash")
-    return bool(state.get("present")) and isinstance(digest, str) and digest.startswith("symlink:")
+    return is_present(state) and isinstance(digest, str) and digest.startswith("symlink:")
 
 
 def _classify(old: PathState, new: PathState) -> ChangeKind:
     if _is_symlink_state(new):
         return "symlink"
-    old_present = bool(old.get("present"))
-    new_present = bool(new.get("present"))
+    old_present = is_present(old)
+    new_present = is_present(new)
     if new_present and not old_present:
         return "create"
     if old_present and not new_present:
@@ -1644,6 +1706,46 @@ def _apply_sort_key(change: PathChange) -> tuple[int, int, str, str]:
     return (kind_rank, depth_rank, change.rel, str(change.replica))
 
 
+def _batch_kind_changes(
+    mailbox: dict[tuple[str, str], PathChange],
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Return kind-change holds and directory-to-symlink deletes that stay unheld.
+
+    A file becoming a directory holds that file. A directory becoming a file
+    holds each file deleted under it in this snapshot. A directory becoming a
+    symlink drops those children with no hold.
+
+    Args:
+        mailbox: Pending changes for one apply.
+
+    Returns:
+        ``(kind_change rels, unheld delete rels)`` keyed by hub path and rel.
+    """
+    kind_change: set[tuple[str, str]] = set()
+    unheld: set[tuple[str, str]] = set()
+    changes = list(mailbox.values())
+    for change in changes:
+        source = change.replica / change.rel
+        base_directory = change.base_present and change.base_hash is None
+        base_file = (
+            change.base_present
+            and isinstance(change.base_hash, str)
+            and not change.base_hash.startswith("symlink:")
+        )
+        prefix = f"{change.rel}/"
+        if change.kind == "update" and base_directory and source.is_file() and not source.is_symlink():
+            for other in changes:
+                if other.hub == change.hub and other.kind == "delete" and other.rel.startswith(prefix):
+                    kind_change.add((str(change.hub), other.rel))
+        if change.kind == "update" and base_file and _is_directory_node(source):
+            kind_change.add((str(change.hub), change.rel))
+        if change.kind == "symlink" and base_directory:
+            for other in changes:
+                if other.hub == change.hub and other.kind == "delete" and other.rel.startswith(prefix):
+                    unheld.add((str(change.hub), other.rel))
+    return kind_change, unheld
+
+
 def _delete_allowed(change: PathChange, hub: PathState, hub_gen: int) -> bool:
     if state_equal(hub, path_state(change.base_present, change.base_hash)):
         return True
@@ -1655,7 +1757,7 @@ def _last_seen_from_baseline(baseline: BaselineTrees) -> BaselineTrees:
     for root, paths in baseline.items():
         slot: dict[str, PathState] = {}
         for rel, state in paths.items():
-            if state.get("present"):
+            if is_present(state):
                 slot[rel] = path_state(True, state.get("hash"))
         seen[root] = slot
     return seen

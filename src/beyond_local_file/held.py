@@ -18,6 +18,7 @@ HELD_DIR = ".blf-held"
 REASON_CREATE_OVERWRITE = "create-overwrite"
 REASON_DELETE_GAP = "delete-gap"
 REASON_DELETE_OVERWRITE = "delete-overwrite"
+REASON_KIND_CHANGE = "kind-change"
 _CONTENT_NAME = "content"
 _META_NAME = "reason.yml"
 
@@ -75,6 +76,11 @@ def reason_clause(reason: str, *, path: str, replica: str) -> str:
         return f"delete applied past the generation window; kept hub bytes of {path} (reason: {reason})"
     if reason == REASON_DELETE_OVERWRITE:
         return f"held different bytes at {path} in {replica} because the hub has no file (reason: {reason})"
+    if reason == REASON_KIND_CHANGE:
+        return (
+            f"a file became a directory or a directory became a file at {path}; "
+            f"kept the previous file bytes (reason: {reason})"
+        )
     return f"{reason}: {path} from {replica}"
 
 

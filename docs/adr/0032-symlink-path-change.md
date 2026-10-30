@@ -17,4 +17,4 @@ accepted
 
 ## Consequences
 
-`present` stays a bool and means the snapshotted node is in the tree, not that a filesystem lookup succeeds. Fan-out copies the symlink text. The same text records the replica at the new generation. A different text does not write and does not drop that replica's child rows while they are still nodes.
+0037 supersedes the stored ``present`` flag: a missing row means the path is absent. Fan-out copies the symlink text. The same text records the replica at the new generation. A different text does not write and does not drop that replica's child rows while they are still nodes.

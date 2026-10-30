@@ -21,4 +21,4 @@ accepted
 - ``daemon reload`` and ``daemon start`` share this catch-up. Decline commits nothing.
 - A removed target's baseline rows are dropped before catch-up, so a renamed-away directory is not observed as deletes of the hub. Item-remove drops that replica's rows for the item and leaves the hub file.
 - A selective target's section of ``files`` lists only the file items it declares. A directory item is one held tree. A new target's baseline rows match the hub generation of each path.
-- Glossary **Hold reason** names `delete-overwrite`. Glossary **Generation** says when a directory node's generation increments. This ADR is the catch-up rule.
+- Glossary **Hold reason** names `delete-overwrite`. A directory node has no generation (0037). Catch-up records a directory without one, and records each file and symlink at that path's hub generation. This ADR is the catch-up rule.

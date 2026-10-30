@@ -97,8 +97,8 @@ def test_save_writes_file_items_under_managed_project_files_document(tmp_path: P
     data = yaml.safe_load(document.read_text(encoding="utf-8"))
     hub_tree = data["trees"][str(managed)]
     replica_tree = data["trees"][str(target)]
-    assert hub_tree["shared.txt"]["present"] is True
-    assert replica_tree["shared.txt"]["present"] is True
+    assert "present" not in hub_tree["shared.txt"]
+    assert "present" not in replica_tree["shared.txt"]
     assert hub_tree["shared.txt"]["hash"] == replica_tree["shared.txt"]["hash"]
     assert load_baseline(config_path) == trees
 
@@ -133,7 +133,8 @@ def test_save_writes_directory_item_as_nested_files_and_subtree_documents(tmp_pa
     requirements_doc = yaml.safe_load((item_dir / "requirements").read_text(encoding="utf-8"))
     tasks_doc = yaml.safe_load((item_dir / "tasks").read_text(encoding="utf-8"))
     hub_files = files_doc["trees"][str(managed)]
-    assert hub_files["local-file"]["present"] is True
+    assert "present" not in hub_files["local-file"]
+    assert "gen" not in hub_files["local-file"]
     assert hub_files["local-file"]["hash"] is None
     assert "local-file/README.md" in hub_files
     assert "local-file/requirements" not in hub_files
@@ -403,7 +404,7 @@ def test_daemon_start_writes_item_documents_not_baseline_yml(
         assert "shared.txt" in data["trees"][str(target.resolve())]
         loaded = load_baseline(config_path)
         assert loaded is not None
-        assert loaded[str(managed.resolve())]["shared.txt"]["present"] is True
+        assert "present" not in loaded[str(managed.resolve())]["shared.txt"]
     finally:
         stop_daemon(config_path, isolated_home)
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from beyond_local_file.config import Config
 from beyond_local_file.daemon.catchup import run_catch_up
 from beyond_local_file.daemon.live import LiveSync
-from beyond_local_file.daemon.store import get_generation, get_state
+from beyond_local_file.daemon.store import get_generation, get_state, is_present
 from beyond_local_file.model.config import ConfigProject, Mapping
 
 
@@ -80,9 +80,9 @@ def test_restore_item_deletes_hub_and_other_replicas_and_leaves_source(tmp_path:
     assert not (alpha / "notes.md").is_symlink()
     assert (alpha / "notes.md").read_text() == "adopt me"
     assert not (example / "notes.md").exists()
-    assert not get_state(live.baseline, hub, "notes.md").get("present")
-    assert not get_state(live.baseline, example, "notes.md").get("present")
-    assert get_state(live.baseline, alpha, "notes.md").get("present")
+    assert not is_present(get_state(live.baseline, hub, "notes.md"))
+    assert not is_present(get_state(live.baseline, example, "notes.md"))
+    assert is_present(get_state(live.baseline, alpha, "notes.md"))
     assert get_generation(live.baseline, hub, "notes.md") == 0
     live.tick()
     assert not (hub / "notes.md").exists()
@@ -108,7 +108,7 @@ def test_restore_item_strips_git_exclude_on_every_replica_that_stops_projecting(
 
 
 def test_restore_item_does_not_increment_generation(tmp_path: Path) -> None:
-    """Restore records absence at the observed generation; it does not apply a new one."""
+    """Restore drops the row. It does not leave a later generation behind."""
     live, hub, alpha, example = _adopt_notes(tmp_path)
     (alpha / "notes.md").write_text("edited")
     live.tick()
@@ -118,8 +118,10 @@ def test_restore_item_does_not_increment_generation(tmp_path: Path) -> None:
 
     assert not (hub / "notes.md").exists()
     assert not (example / "notes.md").exists()
-    assert get_generation(live.baseline, hub, "notes.md") == 1
-    assert get_generation(live.baseline, example, "notes.md") == 1
+    assert "notes.md" not in live.baseline.get(str(hub), {})
+    assert "notes.md" not in live.baseline.get(str(example), {})
+    assert get_generation(live.baseline, hub, "notes.md") == 0
+    assert get_generation(live.baseline, example, "notes.md") == 0
 
 
 def test_restore_item_does_not_drain_mailbox(tmp_path: Path) -> None:
@@ -158,8 +160,8 @@ def test_restore_item_deletes_nested_rel_on_hub_and_other_replica(tmp_path: Path
     assert not (hub / ".kiro" / "specs" / "foo").exists()
     assert (source / "file.txt").read_text() == "content"
     assert not (example / ".kiro" / "specs" / "foo").exists()
-    assert not get_state(live.baseline, hub, ".kiro/specs/foo").get("present")
-    assert not get_state(live.baseline, hub, ".kiro/specs/foo/file.txt").get("present")
+    assert not is_present(get_state(live.baseline, hub, ".kiro/specs/foo"))
+    assert not is_present(get_state(live.baseline, hub, ".kiro/specs/foo/file.txt"))
 
 
 def test_remove_item_deletes_hub_and_every_projection(tmp_path: Path) -> None:
@@ -171,9 +173,9 @@ def test_remove_item_deletes_hub_and_every_projection(tmp_path: Path) -> None:
     assert not (hub / "notes.md").exists()
     assert not (alpha / "notes.md").exists()
     assert not (example / "notes.md").exists()
-    assert not get_state(live.baseline, hub, "notes.md").get("present")
-    assert not get_state(live.baseline, alpha, "notes.md").get("present")
-    assert not get_state(live.baseline, example, "notes.md").get("present")
+    assert not is_present(get_state(live.baseline, hub, "notes.md"))
+    assert not is_present(get_state(live.baseline, alpha, "notes.md"))
+    assert not is_present(get_state(live.baseline, example, "notes.md"))
     assert get_generation(live.baseline, hub, "notes.md") == 0
     live.tick()
     assert not (hub / "notes.md").exists()
@@ -238,9 +240,9 @@ def test_drop_replica_deletes_target_copy_keeps_hub(tmp_path: Path) -> None:
     assert (hub / "notes.md").read_text() == "adopt me"
     assert (alpha / "notes.md").read_text() == "adopt me"
     assert not (example / "notes.md").exists()
-    assert get_state(live.baseline, hub, "notes.md").get("present")
-    assert get_state(live.baseline, alpha, "notes.md").get("present")
-    assert not get_state(live.baseline, example, "notes.md").get("present")
+    assert is_present(get_state(live.baseline, hub, "notes.md"))
+    assert is_present(get_state(live.baseline, alpha, "notes.md"))
+    assert not is_present(get_state(live.baseline, example, "notes.md"))
     assert get_generation(live.baseline, hub, "notes.md") == 0
 
 

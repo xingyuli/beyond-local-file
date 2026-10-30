@@ -481,9 +481,7 @@ def test_update_catch_up_deletes_missing_hub_file_and_holds_new_target_bytes(tmp
     assert not (beta / "notes.md").exists()
     assert not (alpha / "notes.md").exists()
     for root in (hub, beta, alpha):
-        state = get_state(live.baseline, root, "notes.md")
-        assert state.get("present") is False
-        assert get_generation(live.baseline, root, "notes.md") == 1
+        assert "notes.md" not in live.baseline.get(str(root), {})
     copies = list_held_copies(hub)
     assert len(copies) == 1
     assert copies[0].reason == "delete-overwrite"
@@ -520,7 +518,7 @@ def test_update_catch_up_removes_matching_new_target_bytes_without_hold(tmp_path
 
     assert not (alpha / "notes.md").exists()
     assert list_held_copies(hub) == ()
-    assert get_state(live.baseline, alpha, "notes.md").get("present") is False
+    assert "notes.md" not in live.baseline.get(str(alpha), {})
 
 
 def test_absent_hub_item_keeps_git_exclude_on_the_new_target(tmp_path: Path) -> None:
@@ -557,8 +555,8 @@ def test_absent_hub_item_keeps_git_exclude_on_the_new_target(tmp_path: Path) -> 
     assert not (alpha / "shared.txt").exists()
 
 
-def test_update_catch_up_keeps_absent_generation_and_holds_each_new_target(tmp_path: Path) -> None:
-    """An already-absent hub row stays put. Each new target's bytes are held."""
+def test_update_catch_up_drops_a_deleted_row_and_holds_each_new_target(tmp_path: Path) -> None:
+    """A deleted hub file leaves no row. Each new target's bytes are held."""
     hub = tmp_path / "lab-app"
     beta = tmp_path / "beta"
     alpha = tmp_path / "alpha"
@@ -572,8 +570,7 @@ def test_update_catch_up_keeps_absent_generation_and_holds_each_new_target(tmp_p
     live = _committed_live(config_path)
     (hub / "shared.txt").unlink()
     live.tick(reason="catch-up")
-    assert get_generation(live.baseline, hub, "shared.txt") == 1
-    assert get_state(live.baseline, hub, "shared.txt").get("present") is False
+    assert "shared.txt" not in live.baseline.get(str(hub), {})
     (alpha / "shared.txt").write_text("ccc")
     (example / "shared.txt").write_text("ddd")
     project = next(iter(live.projects.values()))
@@ -596,9 +593,9 @@ def test_update_catch_up_keeps_absent_generation_and_holds_each_new_target(tmp_p
     assert not (hub / "shared.txt").exists()
     assert not (alpha / "shared.txt").exists()
     assert not (example / "shared.txt").exists()
-    assert get_generation(live.baseline, hub, "shared.txt") == 1
-    assert get_state(live.baseline, alpha, "shared.txt").get("present") is False
-    assert get_state(live.baseline, example, "shared.txt").get("present") is False
+    assert "shared.txt" not in live.baseline.get(str(hub), {})
+    assert "shared.txt" not in live.baseline.get(str(alpha), {})
+    assert "shared.txt" not in live.baseline.get(str(example), {})
     reasons = sorted(copy.reason for copy in list_held_copies(hub))
     assert reasons == ["delete-overwrite", "delete-overwrite"]
     texts = sorted((copy.slot / "content").read_text() for copy in list_held_copies(hub))
@@ -608,7 +605,7 @@ def test_update_catch_up_keeps_absent_generation_and_holds_each_new_target(tmp_p
 def test_update_catch_up_records_a_directory_child_at_its_hub_generation(tmp_path: Path) -> None:
     """A new target records each path at that path's hub generation.
 
-    The directory node stays at generation 2. The edited child is generation 5
+    The directory node has no generation. The edited child is generation 5
     on the hub, on the target that was already in sync, and on the new target.
     """
     hub = tmp_path / "lab-app"
@@ -642,15 +639,16 @@ def test_update_catch_up_records_a_directory_child_at_its_hub_generation(tmp_pat
 
     catch_up_live(live, started_with_baseline=True)
 
-    directory_generation = 2
     child_generation = 5
     assert (hub / "docs" / "a.md").read_text() == "bbb"
     assert (beta / "docs" / "a.md").read_text() == "bbb"
     assert (alpha / "docs" / "a.md").read_text() == "bbb"
     child_hash = get_state(live.baseline, hub, "docs/a.md").get("hash")
     for root in (hub, beta, alpha):
-        assert get_generation(live.baseline, root, "docs") == directory_generation
-        assert get_state(live.baseline, root, "docs").get("hash") is None
+        directory = get_state(live.baseline, root, "docs")
+        assert get_generation(live.baseline, root, "docs") == 0
+        assert "gen" not in directory
+        assert directory.get("hash") is None
         assert get_generation(live.baseline, root, "docs/a.md") == child_generation
         assert get_state(live.baseline, root, "docs/a.md").get("hash") == child_hash
         assert not is_out_of_sync(get_state(live.baseline, root, "docs/a.md"))
@@ -700,12 +698,10 @@ def test_update_catch_up_holds_a_directory_item_once(tmp_path: Path) -> None:
     assert copies[0].reason == "delete-overwrite"
     assert copies[0].path == "docs"
     assert (copies[0].slot / "content" / "a.md").read_text() == "alpha-a"
-    assert "docs/a.md" in live.baseline[str(alpha)]
     for root in (hub, beta, alpha):
-        assert get_state(live.baseline, root, "docs").get("present") is False
-        assert get_state(live.baseline, root, "docs/a.md").get("present") is False
-        assert get_generation(live.baseline, root, "docs") == get_generation(live.baseline, hub, "docs")
-        assert get_generation(live.baseline, root, "docs/a.md") == get_generation(live.baseline, hub, "docs/a.md")
+        slot = live.baseline.get(str(root), {})
+        assert "docs" not in slot
+        assert "docs/a.md" not in slot
 
 
 def test_update_catch_up_skips_an_out_of_sync_target_on_hub_delete(tmp_path: Path) -> None:
@@ -894,5 +890,5 @@ def test_run_catch_up_holds_new_target_bytes_when_the_hub_file_is_gone(tmp_path:
 
     assert not (hub / "notes.md").exists()
     assert not (alpha / "notes.md").exists()
-    assert get_state(trees, alpha.resolve(), "notes.md").get("present") is False
+    assert "notes.md" not in trees.get(str(alpha.resolve()), {})
     assert list_held_copies(hub.resolve())[0].reason == "delete-overwrite"
