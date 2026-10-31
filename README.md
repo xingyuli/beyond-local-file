@@ -262,11 +262,14 @@ There is no `link sync`. The daemon is the runtime.
 
 ### Live updates, out-of-sync, and held copies
 
-The managed project is the hub. After a successful hub apply, the daemon fans the generation out to other in-sync replicas of that managed project except the source (the tree that already has the bytes).
+The managed project is the hub. After a successful hub apply, the daemon fans the change out to the other in-sync replicas of that managed project.
 
-If two target projects edit the same path, the first apply wins. The loser is **out-of-sync** for that path: later fan-out skips it, and further edits from it are discarded. The live path on the hub and on in-sync replicas keeps moving.
+When a change cannot be applied cleanly, the daemon does not lose data. It does one of two things, each with a stable reason:
 
-A delete past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (a **held copy**). `blf daemon status` lists out-of-sync paths and held copies. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path.
+- **Held copy**: the live path moves on and the replaced bytes are kept under `~/.blf/held/<sha256 of the managed project path>/`.
+- **Out-of-sync**: one replica is excluded from one path. Fan-out skips it and its further edits to that path are discarded. The hub and the other replicas keep moving.
+
+`blf daemon status` lists both. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path. The reasons and examples are in [Live sync edge cases](docs/live-sync-edge-cases.md).
 
 When an out-of-sync mark or held copy is first persisted, the daemon shows a desktop notice naming the kind, the managed project, and the path. It does not open the resolve UI. `BLF_NOTIFY=0` turns notices off. On macOS the notice is posted as Script Editor. Alert Style **Temporary** lets the banner leave after a few seconds; **Persistent** keeps it until you close it. The tool leaves that setting as you set it.
 
@@ -285,6 +288,7 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 - **[CLI Reference](docs/cli-reference.md)** - Complete command-line interface documentation
 - **[Shell Completion](docs/shell-completion.md)** - Tab completion setup for bash, zsh, and fish
 - **[Config Format Guide](docs/config-format-clarification.md)** - Understanding configuration
+- **[Live Sync Edge Cases](docs/live-sync-edge-cases.md)** - Every held-copy and out-of-sync reason, with examples
 - **[Architecture Design](docs/architecture-design.md)** - Internal architecture
 - **[Platform Support](docs/platform-support.md)** - Cross-platform compatibility
 - **[Windows Support](docs/windows-support.md)** - Windows-specific guide
