@@ -537,10 +537,10 @@ type ChangeKind = Literal["create", "update", "delete", "symlink"]
 
 @dataclass(frozen=True)
 class PathChange:
-    """One not-yet-applied path change from a single replica."""
+    """One not-yet-applied path change from a single source replica (hub or target)."""
 
     rel: str
-    replica: Path
+    source: Path
     hub: Path
     kind: ChangeKind
     base_present: bool
@@ -557,7 +557,7 @@ class _WatchRoot:
 
 
 class LiveSync:
-    """Observe item trees, coalesce per (path, replica), apply at the hub, fan out."""
+    """Observe item trees, coalesce per (path, source replica), apply at the hub, fan out."""
 
     def __init__(
         self,
@@ -684,7 +684,7 @@ class LiveSync:
                 old_present = is_present(old)
                 self._mailbox[(rel, str(watch.root))] = PathChange(
                     rel=rel,
-                    replica=watch.root,
+                    source=watch.root,
                     hub=owner,
                     kind=kind,
                     base_present=old_present,
@@ -925,7 +925,7 @@ class LiveSync:
             _remove_path(replica / rel)
             _remove_git_exclude(replica, rel)
         self._forget_item(replica, rel)
-        print(f"live: drop-replica {rel}", flush=True)
+        print(f"live: drop-target-replica {rel}", flush=True)
 
     def apply(self) -> tuple[str, ...]:
         """Apply pending mailbox entries one at a time, first-apply-wins per path.
@@ -977,9 +977,7 @@ class LiveSync:
                 if state_equal(hub_now, replica_state):
                     continue
                 hub_present = is_present(hub_now)
-                if self._is_oos(watch.root, rel) and (
-                    hub_present or (str(hub), rel) in self._deleted_rels
-                ):
+                if self._is_oos(watch.root, rel) and (hub_present or (str(hub), rel) in self._deleted_rels):
                     continue
                 if not state_equal(hub_now, get_state(self._baseline, hub, rel)):
                     continue
@@ -989,7 +987,7 @@ class LiveSync:
                     self._oos.discard((str(watch.root), rel))
                 self._mailbox[(rel, str(watch.root))] = PathChange(
                     rel=rel,
-                    replica=watch.root,
+                    source=watch.root,
                     hub=hub,
                     kind=_classify(hub_now, replica_state),
                     base_present=hub_present,
@@ -1095,10 +1093,10 @@ class LiveSync:
             return
         if self._join_same_symlink(change):
             return
-        if change.replica == change.hub:
+        if change.source == change.hub:
             self._commit_hub_source(change)
             return
-        if self._is_oos(change.replica, change.rel) and change.kind != "delete":
+        if self._is_oos(change.source, change.rel) and change.kind != "delete":
             return
         old_hub = scan_path_state(change.hub, change.rel)
         old_hub_gen = get_generation(self._baseline, change.hub, change.rel)
@@ -1112,12 +1110,12 @@ class LiveSync:
                 winner = self._winning_replica(change.hub, change.rel)
                 directory = _is_directory_state(old_hub)
                 self._mark_oos(
-                    change.replica,
+                    change.source,
                     change.rel,
                     reason=REASON_STALE_BASE,
                     clause=oos_reason_clause(
                         REASON_STALE_BASE,
-                        replica=change.replica.as_posix(),
+                        replica=change.source.as_posix(),
                         path=change.rel,
                         gen=None if directory else old_hub_gen,
                         winner=winner.as_posix(),
@@ -1126,7 +1124,7 @@ class LiveSync:
                 return
             if hold_key in self._kind_change_rels:
                 self._hold_kind_change(change.hub / change.rel, change)
-            source = change.replica / change.rel
+            source = change.source / change.rel
             if not source.exists() and not source.is_symlink():
                 return
             if _is_directory_node(source):
@@ -1136,15 +1134,19 @@ class LiveSync:
         new_gen = old_hub_gen + 1
         new_hub = scan_path_state(change.hub, change.rel)
         self._record(change.hub, change.rel, new_hub, new_gen)
-        self._record(change.replica, change.rel, scan_path_state(change.replica, change.rel), new_gen)
-        self._oos.discard((str(change.replica), change.rel))
-        self._last_source[(str(change.hub), change.rel)] = change.replica
-        print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
+        self._record(change.source, change.rel, scan_path_state(change.source, change.rel), new_gen)
+        self._oos.discard((str(change.source), change.rel))
+        self._last_source[(str(change.hub), change.rel)] = change.source
+        print(f"live: {change.kind} {change.rel} gen {new_gen} source={self._source_label(change)}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
         if change.kind == "symlink":
             self._drop_rows_under(change.hub, change.rel)
-            self._drop_rows_under(change.replica, change.rel)
+            self._drop_rows_under(change.source, change.rel)
         self._rejoin_equal_replicas(change.hub, change.rel, new_hub)
+
+    def _source_label(self, change: PathChange) -> str:
+        """Name the source replica for a log line: ``hub`` or the target path."""
+        return "hub" if change.source == change.hub else change.source.as_posix()
 
     def _commit_hub_source(self, change: PathChange) -> None:
         if _path_under_symlink(change.hub, change.rel):
@@ -1160,8 +1162,8 @@ class LiveSync:
         self._record(change.hub, change.rel, new_hub, new_gen)
         if not is_present(new_hub):
             self._deleted_rels.add((str(change.hub), change.rel))
-        self._last_source[(str(change.hub), change.rel)] = change.replica
-        print(f"live: {change.kind} {change.rel} gen {new_gen}", flush=True)
+        self._last_source[(str(change.hub), change.rel)] = change.source
+        print(f"live: {change.kind} {change.rel} gen {new_gen} source={self._source_label(change)}", flush=True)
         self._fan_out(change, old_hub, new_hub, new_gen)
         if change.kind == "symlink":
             self._drop_rows_under(change.hub, change.rel)
@@ -1174,41 +1176,41 @@ class LiveSync:
             change: Pending path change.
 
         Returns:
-            True when the path is not a node on the hub or the source replica.
+            True when the path is under a symlink on the hub or on the source replica.
         """
         covered = False
         if _path_under_symlink(change.hub, change.rel):
             self._drop_unsnapshotted(change.hub, change.rel)
             covered = True
-        if _path_under_symlink(change.replica, change.rel):
-            self._drop_unsnapshotted(change.replica, change.rel)
+        if _path_under_symlink(change.source, change.rel):
+            self._drop_unsnapshotted(change.source, change.rel)
             covered = True
         return covered
 
     def _join_same_symlink(self, change: PathChange) -> bool:
-        """Record *change* when hub and replica already show the same symlink.
+        """Record *change* when hub and source replica already show the same symlink.
 
-        A second replica that reached the same link text does not lose
+        A second target replica that reached the same link text does not lose
         compare-and-swap and is not marked out of sync.
 
         Args:
-            change: Symlink path change observed on a replica.
+            change: Symlink path change observed on a source replica.
 
         Returns:
             True when both sides are that symlink and the change was joined.
         """
-        if change.kind != "symlink" or change.replica == change.hub:
+        if change.kind != "symlink" or change.source == change.hub:
             return False
         current = scan_path_state(change.hub, change.rel)
-        source = scan_path_state(change.replica, change.rel)
+        source = scan_path_state(change.source, change.rel)
         if not _is_symlink_state(current) or not state_equal(current, source):
             return False
         gen = get_generation(self._baseline, change.hub, change.rel)
         self._record(change.hub, change.rel, current, gen)
-        self._record(change.replica, change.rel, source, gen)
-        self._oos.discard((str(change.replica), change.rel))
+        self._record(change.source, change.rel, source, gen)
+        self._oos.discard((str(change.source), change.rel))
         self._drop_rows_under(change.hub, change.rel)
-        self._drop_rows_under(change.replica, change.rel)
+        self._drop_rows_under(change.source, change.rel)
         return True
 
     def _fan_out(
@@ -1219,7 +1221,7 @@ class LiveSync:
         new_gen: int,
     ) -> None:
         for watch in self._watch_roots:
-            if watch.is_hub or watch.root == change.replica:
+            if watch.is_hub or watch.root == change.source:
                 continue
             if not rel_in_items(change.rel, watch.item_names):
                 continue
@@ -1244,6 +1246,7 @@ class LiveSync:
                 continue
             if not self._write_fan_out(change, old_hub, new_hub, new_gen, watch.root):
                 continue
+            print(f"live: fan-out {change.rel} gen {new_gen} -> {watch.root.as_posix()}", flush=True)
             self._record(watch.root, change.rel, scan_path_state(watch.root, change.rel), new_gen)
             if change.kind == "symlink":
                 self._drop_rows_under(watch.root, change.rel)
@@ -1323,12 +1326,12 @@ class LiveSync:
         """
         if not source.is_file() or source.is_symlink():
             return
-        clause = reason_clause(REASON_KIND_CHANGE, path=change.rel, replica=str(change.replica))
+        clause = reason_clause(REASON_KIND_CHANGE, path=change.rel, replica=str(change.source))
         slot = store_held_copy(
             change.hub,
             rel_path=Path(change.rel),
             source=source,
-            replica=change.replica,
+            replica=change.source,
             reason=REASON_KIND_CHANGE,
         )
         print(f"WARNING: {clause}", flush=True)
@@ -1609,12 +1612,12 @@ class LiveSync:
         hub_path = change.hub / change.rel
         if not hub_path.exists() and not hub_path.is_symlink():
             return
-        clause = reason_clause(REASON_DELETE_GAP, path=change.rel, replica=str(change.replica))
+        clause = reason_clause(REASON_DELETE_GAP, path=change.rel, replica=str(change.source))
         slot = store_held_copy(
             change.hub,
             rel_path=Path(change.rel),
             source=hub_path,
-            replica=change.replica,
+            replica=change.source,
             reason=REASON_DELETE_GAP,
         )
         print(f"WARNING: {clause}", flush=True)
@@ -1703,7 +1706,7 @@ def _apply_sort_key(change: PathChange) -> tuple[int, int, str, str]:
     depth = change.rel.count("/")
     kind_rank = 0 if change.kind == "delete" else 1
     depth_rank = -depth if change.kind == "delete" else depth
-    return (kind_rank, depth_rank, change.rel, str(change.replica))
+    return (kind_rank, depth_rank, change.rel, str(change.source))
 
 
 def _batch_kind_changes(
@@ -1725,12 +1728,10 @@ def _batch_kind_changes(
     unheld: set[tuple[str, str]] = set()
     changes = list(mailbox.values())
     for change in changes:
-        source = change.replica / change.rel
+        source = change.source / change.rel
         base_directory = change.base_present and change.base_hash is None
         base_file = (
-            change.base_present
-            and isinstance(change.base_hash, str)
-            and not change.base_hash.startswith("symlink:")
+            change.base_present and isinstance(change.base_hash, str) and not change.base_hash.startswith("symlink:")
         )
         prefix = f"{change.rel}/"
         if change.kind == "update" and base_directory and source.is_file() and not source.is_symlink():

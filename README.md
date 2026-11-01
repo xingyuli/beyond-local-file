@@ -267,9 +267,9 @@ The managed project is the hub. After a successful hub apply, the daemon fans th
 When a change cannot be applied cleanly, the daemon does not lose data. It does one of two things, each with a stable reason:
 
 - **Held copy**: the live path moves on and the replaced bytes are kept under `~/.blf/held/<sha256 of the managed project path>/`.
-- **Out-of-sync**: one replica is excluded from one path. Fan-out skips it and its further edits to that path are discarded. The hub and the other replicas keep moving.
+- **Out-of-sync**: one target replica is excluded from one path. Fan-out skips it and its further edits to that path are discarded. The hub and the other target replicas keep moving.
 
-`blf daemon status` lists both. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every replica of that path. The reasons and examples are in [Live sync edge cases](docs/live-sync-edge-cases.md).
+`blf daemon status` lists both. `reload` warns and asks you to continue. On a TTY, `o` on status opens the resolve UI; Submit writes the confirmed fact as a new hub generation onto every target replica of that path. The reasons and examples are in [Live sync edge cases](docs/live-sync-edge-cases.md).
 
 When an out-of-sync mark or held copy is first persisted, the daemon shows a desktop notice naming the kind, the managed project, and the path. It does not open the resolve UI. `BLF_NOTIFY=0` turns notices off. On macOS the notice is posted as Script Editor. Alert Style **Temporary** lets the banner leave after a few seconds; **Persistent** keeps it until you close it. The tool leaves that setting as you set it.
 

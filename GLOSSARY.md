@@ -12,6 +12,14 @@ _Avoid_: Source project, host project, origin
 A directory that receives projected items from a managed project. The user works inside target projects day-to-day. Its path is its identity. A renamed directory is a different target project.
 _Avoid_: Destination project, consumer project
 
+**Replica**:
+A place where an item's bytes live and are kept in agreement. There are two kinds: the **hub replica**, the managed project's tree (the hub is the managed project), and a **target replica**, a target project's tree. Used when talking about syncing; **Managed project** and **Target project** remain the names for the directories.
+_Avoid_: Copy, node, peer
+
+**Source replica**:
+The replica a path change was observed on: the hub replica or a target replica. Fan-out never writes back to it. The idle and request logs name it on every apply.
+_Avoid_: Origin, writer, contribution source, source project
+
 **Item**:
 A single file or directory inside a managed project that is projected into one or more target projects.
 _Avoid_: File, resource, artifact
@@ -97,7 +105,7 @@ The last recorded hashes and presence for each path on a managed project and its
 _Avoid_: Checkpoint, watermark, sync-state
 
 **Fresh catch-up**:
-Daemon start with no baseline in the set run directory: named install jobs make every projection match the managed project. A replica that already has different bytes is held, then overwritten. IPC is already up (phase ``catch-up``); live observation begins at phase ``ready``.
+Daemon start with no baseline in the set run directory: named install jobs make every projection match the managed project. A target replica that already has different bytes is held, then overwritten. IPC is already up (phase ``catch-up``); live observation begins at phase ``ready``.
 _Avoid_: Reset, initial sync, first sync
 
 **Update catch-up**:
@@ -113,11 +121,11 @@ A typed unit of work on a path under an item: create, update, delete, or symlink
 _Avoid_: Event, delta, mutation, symlinkify
 
 **Mailbox**:
-At most one not-yet-applied path change per (path, replica). A later event from the same replica replaces the pending change. Two replicas dirty on the same path are not merged.
+At most one not-yet-applied path change per (path, source replica). A later event from the same source replica replaces the pending change. Two source replicas dirty on the same path are not merged.
 _Avoid_: Debounce, batch, buffer, timeout
 
 **Fan-out**:
-After a successful hub apply, copy or delete that path onto every in-sync replica of the owning managed project except the source replica — the tree the change was observed on. The source already has the bytes. Replicas of other managed projects are not written, even when they use the same item name.
+After a successful hub apply, copy or delete that path onto every in-sync target replica of the owning managed project except the source replica. The source already has the bytes. Target replicas of other managed projects are not written, even when they use the same item name.
 _Avoid_: Broadcast, replicate, push, echo
 
 **Generation**:
@@ -129,15 +137,15 @@ Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
 
 **Hold reason**:
-A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a replica), `delete-gap` (a file or symlink delete won past the generation window), `delete-overwrite` (a new target had different bytes for an item the hub does not have; those bytes were held and the projection removed), `kind-change` (a file became a directory, or a directory became a file, and the previous file bytes were held).
+A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a target replica), `delete-gap` (a file or symlink delete won past the generation window), `delete-overwrite` (a new target had different bytes for an item the hub does not have; those bytes were held and the projection removed), `kind-change` (a file became a directory, or a directory became a file, and the previous file bytes were held).
 _Avoid_: Conflict type, error code, note
 
 **Out-of-sync**:
-A replica is excluded from a path when its update lost to a different writer — another replica, or a direct edit on the managed project — or when fan-out skipped it because its disk bytes were not the expected base. A file becoming a directory, or a directory becoming a file, holds the previous file bytes and does not exclude a replica. A file and a symlink, or a directory and a symlink, apply when the base matches and exclude the replica when it does not. An excluded file is the file that replica still has. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, when **resolve** overwrites that path, or when that target's baseline rows are dropped. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
+A target replica is excluded from a path when its update lost to a different writer — another target replica, or a direct edit on the hub — or when fan-out skipped it because its disk bytes were not the expected base. A file becoming a directory, or a directory becoming a file, holds the previous file bytes and does not exclude a replica. A file and a symlink, or a directory and a symlink, apply when the base matches and exclude the replica when it does not. An excluded file is the file that replica still has. The same replica's later bytes apply as ordinary updates while its base still matches the hub. Fan-out of that path skips an excluded replica. Further path changes from it are discarded. The live path on the hub and on in-sync replicas keeps moving. Cleared when that replica's bytes match the hub again, when **resolve** overwrites that path, or when that target's baseline rows are dropped. `status` lists these; `reload` warns. Each mark has an **out-of-sync reason**.
 _Avoid_: Freeze, conflict, diverge, partition
 
 **Out-of-sync reason**:
-A stable clause naming why a replica is out-of-sync for a path. Status, WARNINGs, and the resolve UI show it. Reasons: `stale-base` (target update lost compare-and-swap), `fan-out-mismatch` (fan-out skipped because disk was not the expected base). The clause names the replica and the path. For a file or a symlink it also names the hub generation, and the winning replica when the mark was a lost compare-and-swap.
+A stable clause naming why a target replica is out-of-sync for a path. Status, WARNINGs, and the resolve UI show it. Reasons: `stale-base` (target update lost compare-and-swap), `fan-out-mismatch` (fan-out skipped because disk was not the expected base). The clause names the replica and the path. For a file or a symlink it also names the hub generation, and the winning replica when the mark was a lost compare-and-swap.
 _Avoid_: Conflict type, error code, note, isolation reason
 
 **Confirmed fact**:
@@ -145,7 +153,7 @@ The bytes chosen for a path in the resolve UI. Resolve writes them as the next h
 _Avoid_: Merge result, winner, resolved content
 
 **Resolve**:
-A daemon write of the confirmed fact for one path: a new hub generation, every replica of that item overwritten (including out-of-sync replicas), and out-of-sync cleared for that path only. Discarded isolated bytes are not a held copy.
+A daemon write of the confirmed fact for one path: a new hub generation, every target replica of that item overwritten (including out-of-sync target replicas), and out-of-sync cleared for that path only. Discarded isolated bytes are not a held copy.
 _Avoid_: Force-overwrite, sync, pick winner, merge
 
 **Resolve UI**:
@@ -161,7 +169,7 @@ The command group for a probe. A probe exercises one mechanism and reports wheth
 _Avoid_: doctor, inspect, diagnostic, diag
 
 **Sequential replica merge**:
-Producing a confirmed fact by folding one differing replica at a time into the current left side, starting from hub-now. Replicas already matching hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**.
+Producing a confirmed fact by folding one differing target replica at a time into the current left side, starting from hub-now. Target replicas already matching the hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**.
 _Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict, replica switcher
 
 **Mapping change**:

@@ -7,11 +7,11 @@ An edge case ends in one of two ways, and each way has a fixed set of reasons:
 | Outcome | Meaning | Reasons |
 |---------|---------|---------|
 | **Held copy** | The live path moved on. The bytes it replaced are kept under `~/.blf/held/`. | `create-overwrite`, `delete-overwrite`, `delete-gap`, `kind-change` |
-| **Out-of-sync** | One replica is excluded from one path. The hub and the other replicas keep moving. | `stale-base`, `fan-out-mismatch` |
+| **Out-of-sync** | One target replica is excluded from one path. The hub and the other target replicas keep moving. | `stale-base`, `fan-out-mismatch` |
 
 `blf daemon status` lists both. `reload` warns about both.
 
-Examples use `lab-app` as the managed project (the hub), and `alpha` and `beta` as two replicas of it.
+Examples use `lab-app` as the managed project (the hub), and `alpha` and `beta` as two target replicas of it.
 
 ## Hold reasons
 

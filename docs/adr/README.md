@@ -39,3 +39,5 @@ One line per decision. Read the file when the title matches the work.
 - [0035](0035-forced-remove-clears-unmatched-copies.md) — Forced remove clears an unmatched declared item
 - [0036](0036-target-add-catch-up-follows-idle-tick.md) — Target-add catch-up follows the idle tick
 - [0037](0037-directory-node-has-no-generation.md) — A directory node has no generation
+
+Before this glossary defined **Replica**, "replica" in these ADRs means target replica, except "source replica", which may also be the hub replica.

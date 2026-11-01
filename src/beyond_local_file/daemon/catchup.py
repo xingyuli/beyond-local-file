@@ -87,7 +87,7 @@ def catch_up_live(
         )
         recorded = _recorded_fresh_items(live, fresh)
         for unit in fresh:
-            print(f"catch-up: fresh replica {unit.target_project_path}", flush=True)
+            print(f"catch-up: fresh target replica {unit.target_project_path}", flush=True)
         live.tick_except({str(unit.target_project_path) for unit in fresh}, reason="catch-up")
         _install_fresh(live, fresh, recorded)
         live.apply_frozen_mismatches()

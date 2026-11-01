@@ -13,7 +13,7 @@ accepted
 ## Decision
 
 - Three records live in the set run directory: `logs/idle.log`, `logs/requests.log`, and `logs/daemon.log`.
-- The idle log records idle ticks, and when a tick applies, the apply, held-copy, and persist lines that follow. A tick under 100ms that finds nothing is omitted. Every line names its worker unit.
+- The idle log records idle ticks, and when a tick applies, the apply, held-copy, and persist lines that follow. An apply line names its source replica (`source=hub` or the target project path), and each target replica fan-out writes gets a `live: fan-out` line, so the direction of a change can be read from the log. A tick under 100ms that finds nothing is omitted. Every line names its worker unit.
 - The request log records each shell request and every step of the work that request caused, including a reload's catch-up, however small the step. Every line names its worker unit. `request: start` and `request: done` carry `queue_ms`, `op_ms`, and `persist_ms` (`persist_ms` absent on a dry-run). A check or reload on several worker units lists each unit's duration. `done` is the wall.
 - The daemon log records process start, the catch-up that belongs to start, ready, stop, and a failure that is neither an idle tick nor a shell request.
 - The stamp stays 0015's write-time local offset, at millisecond resolution (`2026-09-21T18:55:09.184+08:00`).
