@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-03
+
+### Added
+
+- **`blf remove --force` clears a declared item that no longer matches** — Run from the target, `blf remove --force PATH` clears the managed copy, every projection, the git exclude entry on each projecting target, the subpath, and the item's baseline row, including its out-of-sync marks. A path that is already absent counts as cleared. A path that is still present is deleted even when its bytes do not match, including a symlink. A directory item is the whole tree. `--force --dry-run` prints that plan and writes nothing. Forced remove does not ask. The transcript reports a present path as deleted and an already-absent path as absent. Without `--force`, remove still stops when the managed copy is missing or a present copy does not match. Force still refuses a path that is not that declared item, an inaccessible target, a path reached through a directory symlink, and a git exclude file that cannot be read.
+- **Idle observe reuses the hash of an unchanged file** — An idle tick keeps the last SHA-256 when size, mtime, ctime, and inode match the previous scan and the mtime is at least 2 seconds older than that hash. Anything else is read and hashed as before. Sameness stays SHA-256. A scan that applies a change still hashes every file. The remembered hash lives in memory on that worker unit, so the first scan after a daemon start reads every file. An unchanged tick reports `hashed_bytes=0`. A tick that finds nothing and finishes in under 100 ms stays out of `idle.log`, so a quiet tree no longer fills that log.
+- **Live sync edge cases have one reference** — `docs/live-sync-edge-cases.md` lists every held-copy reason (`create-overwrite`, `delete-overwrite`, `delete-gap`, `kind-change`) and every out-of-sync reason (`stale-base`, `fan-out-mismatch`), with `lab-app`, `alpha`, and `beta` as the examples. The root README links it. The daemon is unchanged by the doc.
+
+### Changed
+
+- **A directory node has no generation** — A baseline row exists only while that path exists. A directory stores no generation, and a missing row means the path is absent. A file and a symlink still share one generation. When a file becomes a directory, or a directory becomes a file, the previous file bytes are held as `kind-change` and the new node is written. No replica is marked out of sync for that swap. A directory path still does not carry its children.
+- **`blf --help` groups commands by where they run** — The root list is `Run anywhere:` (`daemon`, `link`, `logs`, `debug`, `upgrade`) and then `Run inside a target project:` (`revlink`, `remove`). A command in neither group is listed under `Other commands:`. `remove` and `revlink` keep a short help line that fits, and each command's own `--help` ends with "Run inside a target project." Command names and paths are unchanged.
+- **Apply logs name the source replica and each fan-out destination** — An apply line is `live: <kind> <rel> gen N source=hub` or `source=<target path>`. Each fan-out write adds `live: fan-out <rel> gen N -> <target path>`.
+
+### Fixed
+
+- **Adding a target no longer rewrites the baseline from that target** — `daemon reload` and `daemon start` catch up a new target from the hub, the way an idle tick does. The new tree is not applied as creates, and it does not become the new baseline. Rows for a removed target are dropped before that catch-up. Bytes on the new target that differ from the hub are held with `create-overwrite`, or with `delete-overwrite` when the hub has no item, and then the hub's result is installed. The hub file stays the source.
+
+[0.9.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.9.0
+
 ## [0.8.0] - 2026-10-17
 
 ### Added
