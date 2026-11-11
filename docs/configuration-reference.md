@@ -495,7 +495,7 @@ If two target replicas edit the same path, the first apply wins. The loser is ou
 
 ### Held copies
 
-A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. That tree is not an item and is never projected. `status` lists held copies; there is no restore/discard command. A new held slot also shows a desktop notice (same `BLF_NOTIFY` opt-out).
+A delete that wins past generation gap 3 still removes the live path and keeps the previous hub bytes under `~/.blf/held/<sha256 of the managed project path>/` (`delete-gap`). `revlink create` fan-out uses `create-overwrite` when a replica had different bytes. That tree is not an item and is never projected. `status` lists held copies. There is no restore command and no discard command; Discard is on the resolve UI. A new held slot also shows a desktop notice (same `BLF_NOTIFY` opt-out).
 
 ---
 

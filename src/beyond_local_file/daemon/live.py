@@ -1021,7 +1021,7 @@ class LiveSync:
         new_hub = scan_path_state(hub, rel)
         self._record(hub, rel, new_hub, new_gen)
         self._last_source[(str(hub), rel)] = hub
-        print(f"live: resolve {rel} gen {new_gen}", flush=True)
+        print(f"live: resolve out-of-sync {rel} gen {new_gen}", flush=True)
         self._overwrite_replicas(hub, rel, new_gen)
         self._drop_mailbox(rel)
 

@@ -363,6 +363,53 @@ main {
   grid-column: 5;
 }
 
+.merge-labels.held-diff-labels {
+  grid-template-columns: 1fr 1fr;
+}
+
+.held-diff-labels span:nth-child(2) {
+  grid-column: 2;
+}
+
+.held-files {
+  list-style: none;
+  margin: 0.4rem 0 0.8rem;
+  padding: 0;
+}
+
+.held-file,
+.held-same {
+  font: inherit;
+}
+
+.held-file {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.held-size {
+  color: var(--muted);
+  margin-left: 0.6rem;
+}
+
+.held-diff {
+  margin-top: 0.8rem;
+}
+
+.held-diff-path {
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.held-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
 #merge-mount {
   position: relative;
   flex: 1;

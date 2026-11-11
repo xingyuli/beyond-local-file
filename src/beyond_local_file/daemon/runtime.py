@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import threading
 import time
@@ -14,6 +15,7 @@ from types import FrameType
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.contribution import echo_item_path_overlaps
 from beyond_local_file.discovery import item_names
+from beyond_local_file.held import list_held_copies
 from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.model.translator import translate_config_to_mapping_units
 from beyond_local_file.operations.link_check import check, check_concat
@@ -581,7 +583,11 @@ def _catch_up_worker(runtime: _LiveRuntime) -> None:
     for unit in runtime.units.values():
         unit.start()
     try:
-        runtime.resolve_http = start_resolve_ui(runtime.config_path, apply_resolve=_enqueue_resolve(runtime))
+        runtime.resolve_http = start_resolve_ui(
+            runtime.config_path,
+            apply_resolve=_enqueue_resolve(runtime),
+            apply_discard=_enqueue_discard(runtime),
+        )
     except OSError as error:
         print(f"resolve UI: failed to bind: {error}", flush=True)
     write_ready(runtime.config_path)
@@ -654,6 +660,46 @@ def _enqueue_resolve(runtime: _LiveRuntime) -> Callable[[str, str, bytes], dict]
 def _run_resolve(config_path: Path, unit: WorkerUnit, rel: str, content: bytes) -> None:
     unit.live.resolve(rel, content)
     save_baseline(config_path, unit.live.baseline, unit.live.projects, changed_rels=[rel])
+
+
+def _enqueue_discard(runtime: _LiveRuntime) -> Callable[[str, str, str], dict]:
+    """Return a callback that deletes one held copy on the owning worker unit."""
+
+    def apply_discard(project: str, rel: str, slot: str) -> dict:
+        unit = runtime.units.get(project)
+        if unit is None:
+            return {"ok": False, "error": "worker unit cannot take the op"}
+        try:
+            return unit.submit(lambda: _run_discard(unit, rel, slot))
+        except Exception as error:
+            return {"ok": False, "error": str(error)}
+
+    return apply_discard
+
+
+def _run_discard(unit: WorkerUnit, rel: str, slot_name: str) -> dict:
+    """Delete the named slot when it holds *rel*, and log the held-copy resolve."""
+    if slot_name != Path(slot_name).name or slot_name in {"", ".", ".."}:
+        return {"ok": False, "error": "unknown held copy"}
+    managed = _managed_path(unit)
+    if managed is None:
+        return {"ok": False, "error": "unknown held copy"}
+    match = next(
+        (copy for copy in list_held_copies(managed) if copy.slot.name == slot_name and copy.path == rel),
+        None,
+    )
+    if match is None:
+        return {"ok": True, "applied": True}
+    shutil.rmtree(match.slot)
+    print(f"live: resolve held-copy {rel} reason={match.reason} slot={match.slot.name}", flush=True)
+    return {"ok": True, "applied": True}
+
+
+def _managed_path(unit: WorkerUnit) -> Path | None:
+    for project in unit.live.projects.values():
+        if project.managed_project_name == unit.name:
+            return project.managed_project_path
+    return None
 
 
 def _await_test_hold() -> None:

@@ -25,7 +25,7 @@ from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.daemon.live import LiveSync
 from beyond_local_file.daemon.process import port_path
 from beyond_local_file.daemon.screen import _ShellScreen
-from beyond_local_file.held import REASON_DELETE_GAP, list_held_copies, store_held_copy
+from beyond_local_file.held import REASON_CREATE_OVERWRITE, REASON_DELETE_GAP, list_held_copies, store_held_copy
 from tests.daemon_support import invoke_cli, start_daemon, stop_daemon
 from tests.unit.test_out_of_sync_and_held import (
     _live_sync,
@@ -511,6 +511,261 @@ def test_reason_clause_is_carried_per_replica(
     assert _replica_by_path(state, target_b)["clause"] == clause_b
     assert _replica_by_path(state, target_c)["clause"] == clause_c
     assert _replica_by_path(state, target_a)["clause"] == ""
+
+
+def _held_state(body: str) -> dict:
+    match = re.search(r'<script type="application/json" id="held-state">(.*?)</script>', body, re.DOTALL)
+    assert match is not None, "missing held-state JSON"
+    return json.loads(match.group(1))
+
+
+def test_held_page_lists_a_differing_file_against_the_projection(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A held file that differs from the projection is listed with both texts, and the merge view is absent."""
+    config_path, _target_b = _prepare_held_only(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    assert 'id="resolve-app"' not in body
+    state = _held_state(body)
+    copy = state["copies"][0]
+    assert copy["empty"] is False
+    file = copy["files"][0]
+    assert file["path"] == "shared.txt"
+    assert file["size"] == len("kept-hub-bytes")
+    assert file["same"] is False
+    assert file["held"] == "kept-hub-bytes"
+    assert file["projection"] == "v0"
+    assert "shared.txt" in body
+    assert str(len("kept-hub-bytes")) in body
+    assert "empty directory" not in body
+
+
+def test_held_page_says_empty_directory_when_the_slot_has_no_files(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """An empty held directory is named, and Discard is still offered."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    empty = tmp_path / "empty-grok"
+    empty.mkdir()
+    store_held_copy(managed, rel_path=Path(".grok"), source=empty, replica=target_b, reason=REASON_CREATE_OVERWRITE)
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path=".grok"))
+    assert status == HTTPStatus.OK
+    state = _held_state(body)
+    assert state["copies"][0]["empty"] is True
+    assert state["copies"][0]["files"] == []
+    assert "empty directory" in body
+    assert 'data-discard="' in body
+
+
+def test_held_page_does_not_open_a_file_that_matches_the_projection(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A held file with the same bytes as the projection is listed and is not a diff button."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    sidecar = tmp_path / "same.txt"
+    sidecar.write_text("v0")
+    store_held_copy(managed, rel_path=Path("shared.txt"), source=sidecar, replica=target_b, reason=REASON_DELETE_GAP)
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    file = _held_state(body)["copies"][0]["files"][0]
+    assert file["path"] == "shared.txt"
+    assert file["size"] == len("v0")
+    assert file["same"] is True
+    assert "held" not in file
+    assert "projection" not in file
+    assert 'class="held-file"' not in body
+    assert 'class="held-same"' in body
+
+
+def test_held_directory_lists_only_its_own_files(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A directory hold lists its files. A live-only file is absent. Only a differing file carries both texts."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    held_root = tmp_path / "held-kiro"
+    (held_root / "steering").mkdir(parents=True)
+    (held_root / "steering" / "same.md").write_text("same-bytes")
+    (held_root / "steering" / "diff.md").write_text("held-bytes")
+    live_root = target_b / ".kiro" / "steering"
+    live_root.mkdir(parents=True)
+    (live_root / "same.md").write_text("same-bytes")
+    (live_root / "diff.md").write_text("live-bytes")
+    (live_root / "only-live.md").write_text("only-on-the-target")
+    slot = store_held_copy(
+        managed, rel_path=Path(".kiro"), source=held_root, replica=target_b, reason=REASON_CREATE_OVERWRITE
+    )
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path=".kiro"))
+    assert status == HTTPStatus.OK
+    files = {row["path"]: row for row in _held_state(body)["copies"][0]["files"]}
+    assert set(files) == {"steering/same.md", "steering/diff.md"}
+    assert files["steering/same.md"]["same"] is True
+    assert "held" not in files["steering/same.md"]
+    assert files["steering/diff.md"]["held"] == "held-bytes"
+    assert files["steering/diff.md"]["projection"] == "live-bytes"
+    assert "only-on-the-target" not in body
+    assert slot.name
+    script = (_REPO_ROOT / "src" / "beyond_local_file" / "daemon" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "target-now" in script
+    assert "held-copy" in script
+    assert "Discard this held copy?" in script
+    assert "revertButtons: false" in script
+
+
+def test_discard_deletes_one_held_slot_and_leaves_the_projection(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Discard removes that slot, writes a held-copy resolve line, and leaves the live file."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    sidecar = tmp_path / "hub-bytes.txt"
+    sidecar.write_text("kept-hub-bytes")
+    slot = store_held_copy(
+        managed, rel_path=Path("shared.txt"), source=sidecar, replica=target_b, reason=REASON_DELETE_GAP
+    )
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "discard", "slot": slot.name})
+        log_text = (ConfigurationSet(config_path).run_directory / "logs" / "requests.log").read_text(encoding="utf-8")
+    assert status == HTTPStatus.OK
+    data = json.loads(raw)
+    assert data["ok"] is True
+    assert data["applied"] is True
+    assert data["remain"] is False
+    assert list_held_copies(managed) == ()
+    assert (target_b / "shared.txt").read_text() == "v0"
+    needle = f"live: resolve held-copy shared.txt reason=delete-gap slot={slot.name} unit=proj"
+    assert needle in log_text
+    discard_at = log_text.index(needle)
+    assert "baseline: write" not in log_text[discard_at:]
+
+
+def test_discard_leaves_an_out_of_sync_mark(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Discard removes the held copy and leaves the merge view for that path."""
+    _live, config_path, managed, _target_a, target_b, slot = _prepare_isolation(tmp_path)
+    before = (target_b / "shared.txt").read_text()
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "discard", "slot": slot.name})
+        page_status, body = _get(url)
+    assert status == HTTPStatus.OK
+    data = json.loads(raw)
+    assert data["ok"] is True
+    assert data["remain"] is True
+    assert list_held_copies(managed) == ()
+    assert (target_b / "shared.txt").read_text() == before
+    assert page_status == HTTPStatus.OK
+    assert 'id="resolve-app"' in body
+    assert 'id="held-state"' not in body
+
+
+def test_missing_binary_projection_omits_the_target_hash(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A binary hold whose live path is gone has no projection hash for the target-now pane."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    sidecar = tmp_path / "bin.dat"
+    payload = b"a\x00b"
+    sidecar.write_bytes(payload)
+    store_held_copy(managed, rel_path=Path("notes.bin"), source=sidecar, replica=target_b, reason=REASON_DELETE_GAP)
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="notes.bin"))
+    assert status == HTTPStatus.OK
+    file = _held_state(body)["copies"][0]["files"][0]
+    assert file["binary"] is True
+    assert file["projection_present"] is False
+    assert "projection_hash" not in file
+    assert file["held_hash"] == hashlib.sha256(payload).hexdigest()
+    assert (managed / "shared.txt").read_text() == "v0"
+
+
+def test_held_symlink_shows_both_link_texts(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """A held symlink is compared by link text, not by the file it points at."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    link = tmp_path / "link"
+    link.symlink_to("held-target")
+    store_held_copy(managed, rel_path=Path("shared.txt"), source=link, replica=target_b, reason=REASON_DELETE_GAP)
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        status, body = _get(_resolve_url(config_path, project="proj", path="shared.txt"))
+    assert status == HTTPStatus.OK
+    file = _held_state(body)["copies"][0]["files"][0]
+    assert file["symlink"] is True
+    assert file["same"] is False
+    assert file["held_link"] == "held-target"
+    assert file["projection_link"] == ""
+
+
+def test_discard_one_of_two_slots_leaves_the_other(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Discard deletes only the slot named in the request."""
+    config_path, managed, _target_a, target_b = _write_two_target_workspace(tmp_path)
+    live = _live_sync(config_path)
+    first_src = tmp_path / "first.txt"
+    second_src = tmp_path / "second.txt"
+    first_src.write_text("first-held")
+    second_src.write_text("second-held")
+    first = store_held_copy(
+        managed, rel_path=Path("shared.txt"), source=first_src, replica=target_b, reason=REASON_DELETE_GAP
+    )
+    second = store_held_copy(
+        managed, rel_path=Path("shared.txt"), source=second_src, replica=target_b, reason=REASON_CREATE_OVERWRITE
+    )
+    _persist(config_path, live)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "discard", "slot": first.name})
+    assert status == HTTPStatus.OK
+    assert json.loads(raw)["remain"] is True
+    left = list_held_copies(managed)
+    assert [copy.slot.name for copy in left] == [second.name]
+    assert (target_b / "shared.txt").read_text() == "v0"
+
+
+def test_submit_logs_resolve_out_of_sync(
+    tmp_path: Path,
+    isolated_home: dict[str, str],
+) -> None:
+    """Submit writes live: resolve out-of-sync and then a baseline line."""
+    config_path, _managed, _target_a, _target_b = _prepare_oos_text(tmp_path)
+    with _ready_resolve_ui(config_path, isolated_home):
+        url = _resolve_url(config_path, project="proj", path="shared.txt")
+        status, raw = _post(url, {"action": "submit", "middle": "confirmed fact", "binary": False})
+        log_text = (ConfigurationSet(config_path).run_directory / "logs" / "requests.log").read_text(encoding="utf-8")
+    assert status == HTTPStatus.OK
+    assert json.loads(raw)["applied"] is True
+    marker = "live: resolve out-of-sync shared.txt gen "
+    assert marker in log_text
+    after = log_text[log_text.index(marker) :]
+    assert "baseline: write" in after.splitlines()[1]
 
 
 def test_held_only_path_shows_hold_reason_and_no_copy_view(

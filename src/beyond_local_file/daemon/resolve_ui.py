@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import html
 import json
+import os
 import secrets
 import threading
 from collections.abc import Callable
@@ -77,21 +78,28 @@ def resolve_ui_url(config_path: Path) -> str | None:
 
 
 type ResolveApply = Callable[[str, str, bytes], dict]
+type HeldDiscard = Callable[[str, str, str], dict]
 
 
-def start_resolve_ui(config_path: Path, apply_resolve: ResolveApply | None = None) -> ResolveHttp:
+def start_resolve_ui(
+    config_path: Path,
+    apply_resolve: ResolveApply | None = None,
+    apply_discard: HeldDiscard | None = None,
+) -> ResolveHttp:
     """Bind a localhost HTTP port, write port and token files, and serve.
 
     Args:
         config_path: Path to the loaded config file.
         apply_resolve: Callback that enqueues resolve on the worker unit for
             that managed project. The HTTP thread must not write the hub.
+        apply_discard: Callback that enqueues discard of one held copy on that
+            worker unit. The HTTP thread must not delete the slot.
 
     Returns:
         A handle that stops the server and unlinks the files.
     """
     token = secrets.token_urlsafe(_TOKEN_BYTES)
-    handler = _handler_for(config_path, token, apply_resolve)
+    handler = _handler_for(config_path, token, apply_resolve, apply_discard)
     server = HTTPServer((_HOST, 0), handler)
     port = int(server.server_address[1])
     token_file = resolve_token_path(config_path)
@@ -147,6 +155,7 @@ def _handler_for(
     config_path: Path,
     token: str,
     apply_resolve: ResolveApply | None = None,
+    apply_discard: HeldDiscard | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -182,6 +191,7 @@ def _handler_for(
                     config_path,
                     {**payload, "project": project, "path": rel, "action": action},
                     apply_resolve,
+                    apply_discard,
                 )
             ).encode("utf-8")
             _send(self, HTTPStatus.OK, body, "application/json; charset=utf-8")
@@ -404,6 +414,101 @@ def _project_section(name: str, items: list[str]) -> str:
     return f"<section><h2>{html.escape(name)}</h2><ul>{''.join(items)}</ul></section>"
 
 
+def _held_section(copies: list[HeldCopy]) -> str:
+    """Return the held detail: one block per slot, plus the diff payload."""
+    view = _held_view(copies)
+    articles = "".join(_held_article(copy) for copy in view["copies"])
+    return f'<section class="held">{articles}</section>{_json_script_id("held-state", view)}'
+
+
+def _held_view(copies: list[HeldCopy]) -> dict[str, list[dict[str, object]]]:
+    return {"copies": [_held_copy_view(copy) for copy in copies]}
+
+
+def _held_copy_view(copy: HeldCopy) -> dict[str, object]:
+    content = copy.slot / "content"
+    files = _held_files(content, Path(copy.replica) / copy.path, copy.path)
+    empty = content.is_dir() and not content.is_symlink() and not files
+    return {"slot": copy.slot.name, "clause": copy.clause, "reason": copy.reason, "empty": empty, "files": files}
+
+
+def _held_files(content: Path, live: Path, display: str) -> list[dict[str, object]]:
+    """Return one row per file or symlink inside the held payload."""
+    if content.is_symlink() or content.is_file():
+        return [_held_file_view(content, live, display)]
+    if not content.is_dir():
+        return []
+    rows: list[dict[str, object]] = []
+    for path in sorted(content.rglob("*")):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        rel = path.relative_to(content).as_posix()
+        rows.append(_held_file_view(path, live / rel, rel))
+    return rows
+
+
+def _held_file_view(held: Path, live: Path, display: str) -> dict[str, object]:
+    if held.is_symlink() or live.is_symlink():
+        held_link = os.readlink(held) if held.is_symlink() else ""
+        live_link = os.readlink(live) if live.is_symlink() else ""
+        return {
+            "path": display,
+            "size": len(held_link),
+            "same": bool(held_link) and held_link == live_link,
+            "symlink": True,
+            "held_link": held_link,
+            "projection_link": live_link,
+        }
+    held_bytes = held.read_bytes() if held.is_file() else b""
+    live_bytes = live.read_bytes() if live.is_file() and not live.is_symlink() else b""
+    live_present = live.is_file() and not live.is_symlink()
+    same = live_present and held_bytes == live_bytes
+    binary = is_binary(held_bytes) or (live_present and is_binary(live_bytes))
+    row: dict[str, object] = {"path": display, "size": len(held_bytes), "same": same, "binary": binary}
+    if same:
+        return row
+    row["projection_present"] = live_present
+    row["projection_size"] = len(live_bytes) if live_present else 0
+    if binary:
+        row["held_hash"] = hashlib.sha256(held_bytes).hexdigest()
+        if live_present:
+            row["projection_hash"] = hashlib.sha256(live_bytes).hexdigest()
+        return row
+    row["held"] = held_bytes.decode("utf-8")
+    row["projection"] = live_bytes.decode("utf-8") if live_present else ""
+    return row
+
+
+def _held_article(copy: dict[str, object]) -> str:
+    clause = f"<p>{html.escape(str(copy['clause']))}</p>"
+    files = copy["files"]
+    if copy["empty"] or not isinstance(files, list):
+        listing = '<p class="held-empty">empty directory</p>'
+    else:
+        listing = f'<ul class="held-files">{"".join(_held_file_html(str(copy["slot"]), file) for file in files)}</ul>'
+    slot = html.escape(str(copy["slot"]), quote=True)
+    button = f'<button type="button" class="btn" data-discard="{slot}">Discard</button>'
+    return f'<article class="held-copy">{clause}{listing}{button}<div class="held-diff" hidden></div></article>'
+
+
+def _held_file_html(slot: str, file: dict[str, object]) -> str:
+    path = html.escape(str(file["path"]))
+    size = html.escape(str(file["size"]))
+    if file.get("same"):
+        return f'<li class="held-same">{path} <span class="held-size">{size}</span></li>'
+    slot_attr = html.escape(slot, quote=True)
+    rel = html.escape(str(file["path"]), quote=True)
+    return (
+        f'<li><button type="button" class="held-file" data-slot="{slot_attr}" data-path="{rel}">'
+        f'{path} <span class="held-size">{size}</span></button></li>'
+    )
+
+
+def _json_script_id(element_id: str, state: dict) -> str:
+    dumped = json.dumps(state, separators=(",", ":")).replace("<", "\\u003c")
+    return f'<script type="application/json" id="{element_id}">{dumped}</script>'
+
+
 def _detail_html(
     projects: dict[str, ConfigProject],
     trees: BaselineTrees,
@@ -423,13 +528,12 @@ def _detail_html(
     if oos:
         parts.append(_copy_view_html(project, trees, rel))
     if held:
-        clauses = [
-            copy.clause
+        copies = [
+            copy
             for copy in listing.held
             if copy.path == rel and _held_project_name(projects, copy) == project.managed_project_name
         ]
-        held_rows = "".join(f"<p>{html.escape(clause)}</p>" for clause in clauses)
-        parts.append(f'<section class="held">{held_rows}</section>')
+        parts.append(_held_section(copies))
     return "".join(parts)
 
 
@@ -503,9 +607,15 @@ def _common_prefix(paths: list[Path]) -> str:
     return "/".join(common) + "/"
 
 
-def _resolve_post(config_path: Path, payload: dict, apply_resolve: ResolveApply | None) -> dict:
-    del config_path
+def _resolve_post(
+    config_path: Path,
+    payload: dict,
+    apply_resolve: ResolveApply | None,
+    apply_discard: HeldDiscard | None,
+) -> dict:
     action = str(payload.get("action") or "")
+    if action == "discard":
+        return _discard_post(config_path, payload, apply_discard)
     if action != "submit":
         return {"ok": False, "error": "unknown action"}
     project = str(payload.get("project") or "")
@@ -518,6 +628,31 @@ def _resolve_post(config_path: Path, payload: dict, apply_resolve: ResolveApply 
     if apply_resolve is None:
         return {"ok": False, "error": "worker unit cannot take the op"}
     return apply_resolve(project, rel, content)
+
+
+def _discard_post(config_path: Path, payload: dict, apply_discard: HeldDiscard | None) -> dict:
+    """Delete one held-copy slot on the worker unit and say whether the row remains."""
+    project = str(payload.get("project") or "")
+    rel = str(payload.get("path") or "")
+    slot = str(payload.get("slot") or "")
+    if not project or not rel or not slot:
+        return {"ok": False, "error": "missing project or path"}
+    if apply_discard is None:
+        return {"ok": False, "error": "worker unit cannot take the op"}
+    result = apply_discard(project, rel, slot)
+    if result.get("ok"):
+        result["remain"] = _path_remains(config_path, project, rel)
+    return result
+
+
+def _path_remains(config_path: Path, project_name: str, rel: str) -> bool:
+    projects = _projects(config_path)
+    project = _project_named(projects, project_name)
+    if project is None:
+        return False
+    listing = list_oos_and_held(load_baseline(config_path) or {}, projects)
+    out_of_sync, held = _row_flags(listing, projects, project, rel)
+    return out_of_sync or held
 
 
 def _confirmed_bytes(payload: dict) -> bytes | None:
@@ -543,8 +678,7 @@ def _bytes_as_text(data: bytes) -> str:
 
 
 def _json_script(state: dict) -> str:
-    dumped = json.dumps(state, separators=(",", ":")).replace("<", "\\u003c")
-    return f'<script type="application/json" id="resolve-state">{dumped}</script>'
+    return _json_script_id("resolve-state", state)
 
 
 def _replicas_for(project: ConfigProject, rel: str) -> list[Path]:

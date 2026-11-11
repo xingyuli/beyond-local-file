@@ -42,6 +42,185 @@
     return document.body.classList.contains("nav-collapsed");
   }
 
+  function wireHeld() {
+    var heldStateEl = document.getElementById("held-state");
+    if (!heldStateEl) {
+      return;
+    }
+    var heldState = JSON.parse(heldStateEl.textContent || "{}");
+    var fileButtons = document.querySelectorAll(".held-file");
+    for (var i = 0; i < fileButtons.length; i += 1) {
+      fileButtons[i].addEventListener("click", onHeldFile);
+    }
+    var discardButtons = document.querySelectorAll("[data-discard]");
+    for (var j = 0; j < discardButtons.length; j += 1) {
+      discardButtons[j].addEventListener("click", onDiscardClick);
+    }
+
+    function copyBySlot(slot) {
+      var copies = heldState.copies || [];
+      for (var index = 0; index < copies.length; index += 1) {
+        if (copies[index].slot === slot) {
+          return copies[index];
+        }
+      }
+      return null;
+    }
+
+    function fileIn(copy, path) {
+      var files = (copy && copy.files) || [];
+      for (var index = 0; index < files.length; index += 1) {
+        if (files[index].path === path) {
+          return files[index];
+        }
+      }
+      return null;
+    }
+
+    function onHeldFile(event) {
+      var button = event.currentTarget;
+      var copy = copyBySlot(button.getAttribute("data-slot"));
+      var file = fileIn(copy, button.getAttribute("data-path"));
+      if (!file || file.same) {
+        return;
+      }
+      var article = button.closest("article");
+      closeHeldDiffs();
+      if (!article) {
+        return;
+      }
+      var diff = article.querySelector(".held-diff");
+      if (!diff) {
+        return;
+      }
+      diff.hidden = false;
+      renderHeldDiff(diff, file);
+    }
+
+    function onDiscardClick(event) {
+      var button = event.currentTarget;
+      var slot = button.getAttribute("data-discard");
+      var copy = copyBySlot(slot);
+      askConfirm("Discard this held copy?", copy ? copy.clause : "", "Cancel", "Discard").then(function (ok) {
+        if (!ok) {
+          return;
+        }
+        var params = new URLSearchParams(window.location.search);
+        fetch(window.location.pathname + "?" + params.toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "discard",
+            project: params.get("project"),
+            path: params.get("path"),
+            slot: slot,
+          }),
+        })
+          .then(function (response) {
+            return response.json();
+          })
+          .then(function (data) {
+            if (!data || !data.ok) {
+              var article = button.closest("article");
+              if (article) {
+                article.appendChild(el("p", "submit-result", (data && data.error) || "Discard failed."));
+              }
+              return;
+            }
+            if (data.remain) {
+              window.location.reload();
+              return;
+            }
+            var next = new URLSearchParams();
+            next.set("token", params.get("token") || "");
+            window.location.href = window.location.pathname + "?" + next.toString();
+          });
+      });
+    }
+  }
+
+  function closeHeldDiffs() {
+    var nodes = document.querySelectorAll(".held-diff");
+    for (var i = 0; i < nodes.length; i += 1) {
+      nodes[i].hidden = true;
+      nodes[i].textContent = "";
+    }
+  }
+
+  function renderHeldDiff(diff, file) {
+    diff.appendChild(el("div", "held-diff-path", file.path));
+    var labels = el("div", "merge-labels held-diff-labels");
+    labels.appendChild(el("span", null, "target-now"));
+    labels.appendChild(el("span", null, "held-copy"));
+    diff.appendChild(labels);
+    if (file.symlink) {
+      var links = el("div", "held-links");
+      links.appendChild(el("p", null, file.projection_link || ""));
+      links.appendChild(el("p", null, file.held_link || ""));
+      diff.appendChild(links);
+      return;
+    }
+    if (file.binary) {
+      var cards = el("div", "binary-stage");
+      cards.appendChild(
+        file.projection_present
+          ? heldBinaryCard("target-now", file.projection_hash, file.projection_size)
+          : heldBinaryTitle("target-now")
+      );
+      cards.appendChild(heldBinaryCard("held-copy", file.held_hash, file.size));
+      diff.appendChild(cards);
+      return;
+    }
+    var mount = document.createElement("div");
+    mount.className = "held-merge";
+    diff.appendChild(mount);
+    if (!window.CodeMirror) {
+      return;
+    }
+    var view = window.CodeMirror.MergeView(mount, {
+      value: file.projection || "",
+      orig: file.held || "",
+      lineNumbers: true,
+      lineWrapping: true,
+      mode: "text/plain",
+      readOnly: true,
+      revertButtons: false,
+      highlightDifferences: true,
+      connect: "align",
+      collapseIdentical: true,
+      spellcheck: false,
+    });
+    refreshHeldMerge(view);
+    window.requestAnimationFrame(function () {
+      refreshHeldMerge(view);
+    });
+    disableSpellcheck(mount);
+  }
+
+  function refreshHeldMerge(view) {
+    if (!view) {
+      return;
+    }
+    if (view.editor()) {
+      view.editor().refresh();
+    }
+    if (view.right && view.right.orig) {
+      view.right.orig.refresh();
+    }
+  }
+
+  function heldBinaryTitle(title) {
+    var card = el("div", "binary-card");
+    card.appendChild(el("h3", null, title));
+    return card;
+  }
+
+  function heldBinaryCard(title, hash, size) {
+    var card = heldBinaryTitle(title);
+    card.appendChild(el("p", "binary-meta", "hash " + hash + " size " + size));
+    return card;
+  }
+
   function wireNavToggle() {
     var toggle = document.getElementById("nav-toggle");
     var keys = document.getElementById("nav-toggle-keys");
@@ -81,6 +260,7 @@
   }
 
   wireNavToggle();
+  wireHeld();
 
   var stateEl = document.getElementById("resolve-state");
   var mount = document.getElementById("resolve-app");
@@ -421,6 +601,15 @@
   }
 
   function askLeave() {
+    return askConfirm(
+      "Leave this merge?",
+      "Unsubmitted merge progress for this path will be discarded.",
+      "Stay",
+      "Leave"
+    );
+  }
+
+  function askConfirm(title, body, cancelLabel, confirmLabel) {
     return new Promise(function (resolve) {
       var existing = document.getElementById("leave-dialog");
       if (existing) {
@@ -433,21 +622,21 @@
       dialog.setAttribute("role", "alertdialog");
       dialog.setAttribute("aria-modal", "true");
       dialog.setAttribute("aria-labelledby", "leave-dialog-title");
-      dialog.appendChild(el("h3", null, "Leave this merge?"));
-      dialog.appendChild(
-        el("p", null, "Unsubmitted merge progress for this path will be discarded.")
-      );
+      var heading = el("h3", null, title);
+      heading.id = "leave-dialog-title";
+      dialog.appendChild(heading);
+      dialog.appendChild(el("p", null, body));
       var actions = el("div", "dialog-actions");
-      var stay = el("button", "btn", "Stay");
-      stay.type = "button";
-      var leave = el("button", "btn btn-primary", "Leave");
-      leave.type = "button";
-      actions.appendChild(stay);
-      actions.appendChild(leave);
+      var cancel = el("button", "btn", cancelLabel);
+      cancel.type = "button";
+      var confirm = el("button", "btn btn-primary", confirmLabel);
+      confirm.type = "button";
+      actions.appendChild(cancel);
+      actions.appendChild(confirm);
       dialog.appendChild(actions);
       backdrop.appendChild(dialog);
       document.body.appendChild(backdrop);
-      leave.focus();
+      confirm.focus();
 
       function finish(ok) {
         document.removeEventListener("keydown", onKey);
@@ -460,10 +649,10 @@
           finish(false);
         }
       }
-      stay.addEventListener("click", function () {
+      cancel.addEventListener("click", function () {
         finish(false);
       });
-      leave.addEventListener("click", function () {
+      confirm.addEventListener("click", function () {
         finish(true);
       });
       backdrop.addEventListener("click", function (event) {

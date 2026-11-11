@@ -85,7 +85,7 @@ The record of idle observe. A tick that finds a change or takes time to look is 
 _Avoid_: request log, daemon log, heartbeat
 
 **Request log**:
-The record of one shell request and every step of the work that request caused, including a reload's catch-up. Each entry names the worker unit. Queue wait, the operation, and persist are separate times.
+The record of one shell request and every step of the work that request caused, including a reload's catch-up. A resolve UI write is recorded here too, as ``live: resolve out-of-sync`` or ``live: resolve held-copy``. Each entry names the worker unit. Queue wait, the operation, and persist are separate times.
 _Avoid_: idle log, daemon log, access log
 
 **Daemon log**:
@@ -133,8 +133,12 @@ A counter on a file or a symlink. A directory node has no generation. Generation
 _Avoid_: Version, clock, timestamp
 
 **Held copy**:
-Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live path can change without losing the previous file. That tree is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `reload` warns. There is no restore/discard command. A leftover ``.blf-held/`` inside a managed project is still skipped by discovery; new holds are not written there.
+Bytes kept under ``~/.blf/held/<sha256 of the managed project path>/`` so a live path can change without losing the previous file. That tree is not an item and is never projected. Each held copy has a **hold reason**. `status` lists held copies; `reload` warns. **Discard** deletes that one held copy. There is no restore. A leftover ``.blf-held/`` inside a managed project is still skipped by discovery; new holds are not written there.
 _Avoid_: Quarantine, trash, stash, lost+found, stale removal, hub-local .blf-held
+
+**Discard**:
+Deletion of one held copy from the resolve UI, for any hold reason. The page asks before the deletion. The projection stays, and an out-of-sync mark on that path stays. There is no discard shell. The request log names it ``live: resolve held-copy``.
+_Avoid_: Restore, resolve, remove
 
 **Hold reason**:
 A stable clause naming why a held copy exists. WARNINGs and the resolve UI show it. Reasons: `create-overwrite` (installing an item replaced different bytes on a target replica), `delete-gap` (a file or symlink delete won past the generation window), `delete-overwrite` (a new target had different bytes for an item the hub does not have; those bytes were held and the projection removed), `kind-change` (a file became a directory, or a directory became a file, and the previous file bytes were held).
@@ -153,11 +157,11 @@ The bytes chosen for a path in the resolve UI. Resolve writes them as the next h
 _Avoid_: Merge result, winner, resolved content
 
 **Resolve**:
-A daemon write of the confirmed fact for one path: a new hub generation, every target replica of that item overwritten (including out-of-sync target replicas), and out-of-sync cleared for that path only. Discarded isolated bytes are not a held copy.
+A daemon write of the confirmed fact for one path: a new hub generation, every target replica of that item overwritten (including out-of-sync target replicas), and out-of-sync cleared for that path only. Discarded isolated bytes are not a held copy. The request log names it ``live: resolve out-of-sync``.
 _Avoid_: Force-overwrite, sync, pick winner, merge
 
 **Resolve UI**:
-The localhost page the daemon serves while ready, opened from ``daemon status`` on a TTY. A **desktop notice** does not open it. It lists out-of-sync and held paths by managed project; out-of-sync detail produces a confirmed fact (see Sequential replica merge) and Submit is **resolve**; held rows show the hold reason only.
+The localhost page the daemon serves while ready, opened from ``daemon status`` on a TTY. A **desktop notice** does not open it. It lists out-of-sync and held paths by managed project; out-of-sync detail produces a confirmed fact (see Sequential replica merge) and Submit is **resolve**. A held row lists each held copy's hold reason and that copy's files. One differing file opens at a time. The panes are titled ``target-now`` and ``held-copy``, with the relative path above them. A file that matches the projection does not open. That diff does not produce a confirmed fact. **Discard** asks, then deletes that copy. The request log names these writes ``live: resolve out-of-sync`` and ``live: resolve held-copy``. Discard does not clear an out-of-sync mark. When the row has nothing left, the page opens the next row, or shows none.
 _Avoid_: Desktop app, isolation page, status screen, shell screen, source badge, replica switcher, 3-way ancestor merge
 
 **Desktop notice**:
@@ -169,7 +173,7 @@ The command group for a probe. A probe exercises one mechanism and reports wheth
 _Avoid_: doctor, inspect, diagnostic, diag
 
 **Sequential replica merge**:
-Producing a confirmed fact by folding one differing target replica at a time into the current left side, starting from hub-now. Target replicas already matching the hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**.
+Producing a confirmed fact by folding one differing target replica at a time into the current left side, starting from hub-now. Target replicas already matching the hub are listed and skipped; a binary path picks a whole replica per round; Submit is **resolve**. A held copy's read-only diff is not this merge.
 _Avoid_: 3-way merge, ancestor-aware hunk, accept-ancestor, hunk conflict, replica switcher
 
 **Mapping change**:
