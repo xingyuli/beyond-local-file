@@ -247,6 +247,7 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 | `blf daemon reload` | Apply external mapping edits from the set's mapping files |
 | `blf link check [PROJECT]` | Check copy projections and Git excludes |
 | `blf logs` | Show recent request, daemon, and idle work, then follow (Ctrl-C stops following, not the daemon) |
+| `blf managed [PATH]` | Report as JSON what is projected into PATH (default: current directory). `--schema` prints the output's JSON Schema |
 | `blf debug notice` | Send one desktop notice so you can see whether this machine shows it |
 | `blf upgrade` | Upgrade to the latest version (auto-detects install method) |
 
@@ -259,6 +260,8 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 | `blf remove PATH` | Permanently remove a managed item and its projections. `--force` clears it when a copy is absent or does not match |
 
 There is no `link sync`. The daemon is the runtime.
+
+A caller that runs `blf` for you, such as an agent skill, can read the program name from `BLF_CMD` and fall back to `blf`. Set it on a machine that runs a development build under another name. blf itself never reads it.
 
 ### Live updates, out-of-sync, and held copies
 

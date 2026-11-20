@@ -8,6 +8,8 @@ from pathlib import Path
 
 from beyond_local_file.configuration_set import ConfigurationSet
 from beyond_local_file.git_manager import GitExcludeManager
+from beyond_local_file.managed import managed_answer
+from beyond_local_file.model.config import ConfigProject
 from beyond_local_file.operations.link_check import check
 from beyond_local_file.operations.remove import RemoveOperation
 from beyond_local_file.operations.result import (
@@ -78,6 +80,20 @@ def handle_request(
 
 def _handle_reload(config_path: Path, request: Request) -> Response:
     return to_ipc(commit_reload(config_path, confirmed=bool(request.get("confirmed"))))
+
+
+def handle_managed(projects: dict[str, ConfigProject], request: Request) -> Response:
+    """Answer a ``managed`` request from the daemon's in-memory mappings.
+
+    Args:
+        projects: Mappings the worker units hold right now.
+        request: Shell request carrying the normalized absolute ``path``.
+
+    Returns:
+        A ``managed`` envelope whose ``document`` is the JSON answer.
+    """
+    document = managed_answer(projects, Path(str(request.get("path") or "")))
+    return {"exit_code": 0, "kind": "managed", "document": document}
 
 
 def _handle_check(

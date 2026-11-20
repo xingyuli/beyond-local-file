@@ -23,7 +23,7 @@ from beyond_local_file.operations.result import CheckResult, FailedResult, to_ip
 from beyond_local_file.options import OutputFormat
 
 from .catchup import catch_up_live, run_catch_up
-from .handlers import handle_request
+from .handlers import handle_managed, handle_request
 from .ingest import prepare_reload
 from .ipc import (
     ProgressCallback,
@@ -134,6 +134,8 @@ def _handle_live_request(
         return _reload_changed_units(request_config, request, runtime, on_progress)
     if request.get("op") == "check" and runtime.units:
         return _fanout_check(request_config, request, on_progress, runtime)
+    if request.get("op") == "managed":
+        return _run_managed_request(request, runtime)
     unit = route_worker_unit(request, runtime.units, request_config)
     if unit is None:
         return _run_direct_request(request_config, request, on_progress)
@@ -405,6 +407,17 @@ def _check_item_progress(unit_name: str, fanout: _CheckFanout) -> Callable[[int,
             fanout.on_progress(f"Checking {item} · {unit_name}")
 
     return on_item
+
+
+def _run_managed_request(request: Request, runtime: _LiveRuntime) -> Response:
+    """Answer ``managed`` from the worker units' in-memory mappings, without a unit job.
+
+    It reads no mapping file and touches no disk tree, so the accept thread can answer it.
+    """
+    state = _claim_request_state()
+    projects = {key: project for unit in runtime.units.values() for key, project in unit.live.projects.items()}
+    with log_scope("requests"):
+        return _finish_request(request, state, units=[], body=lambda: handle_managed(projects, request))
 
 
 def _run_direct_request(

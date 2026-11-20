@@ -22,7 +22,7 @@ There is no `link sync`.
 
 | Group | Commands |
 |-------|----------|
-| **Run anywhere** | `daemon`, `link`, `logs`, `debug`, `upgrade` |
+| **Run anywhere** | `daemon`, `link`, `logs`, `managed`, `debug`, `upgrade` |
 | **Run inside a target project** | `revlink`, `remove` |
 
 A **target-project command** takes a `PATH` that must be inside the current directory, which it treats as the target project. Every other command can be run from any directory. When neither `-c` nor `~/.blf/config` exists, the config set falls back to `config.yml` in the current directory.
@@ -267,6 +267,59 @@ If the requested log is missing:
 ```
 Daemon log not found
 ```
+
+---
+
+## `blf managed` — What Is Projected Here
+
+Report, as JSON, what beyond-local-file projects into a directory: the target project that holds it, the managed projects that project into that target, and their items. It asks the running daemon, answers from the mappings it holds in memory (it never reads a mapping file), and opens no shell screen. A request sent while the daemon is in catch-up waits until it is ready, like the other shells.
+
+### Syntax
+
+```bash
+blf managed [PATH]
+blf managed --schema
+```
+
+`PATH` is an existing directory and defaults to the current directory. A relative `PATH` is joined to the current directory and normalized. Symlinks are not resolved. The target is the nearest ancestor-or-self of `PATH` that is a target project. A file or a missing path is a usage error.
+
+`--schema` prints the JSON Schema (draft 2020-12) of the output and exits. It needs no daemon, and combining it with `PATH` is a usage error. The schema states what the command is for and describes every field.
+
+### Output
+
+```json
+{
+  "schema_version": 1,
+  "path": "/Users/me/repo/src",
+  "target": "/Users/me/repo",
+  "is_target_root": false,
+  "managed": true,
+  "managed_projects": [
+    {
+      "name": "team-kit",
+      "path": "/Users/me/team-kit",
+      "git": {"is_repo": true, "root": "/Users/me/team-kit"},
+      "items": [
+        {"path": ".kiro/steering", "hub_path": "/Users/me/team-kit/.kiro/steering"}
+      ]
+    }
+  ]
+}
+```
+
+When no ancestor-or-self of `PATH` is a target project, `target` is `null`, `managed` is `false`, and `managed_projects` is empty. `managed` answers at the project level only. Whether one file is projected is answered by `items`. `git.root` is the nearest ancestor of the managed project that holds `.git`, and can be above the managed project directory.
+
+### Exit status
+
+| Code | Meaning |
+|------|---------|
+| 0 | The daemon answered, including `managed: false`. |
+| 1 | The command could not answer: daemon down, configuration set failed to load, or daemon error. Stdout is empty and the message goes to stderr. |
+| 2 | Usage error (a `PATH` that is not an existing directory, or `--schema` given with `PATH`). |
+
+### Program name
+
+`blf` may run under another name on a machine that uses a development build. A caller that needs to run it, such as an agent skill, can use `$BLF_CMD` when set and `blf` otherwise. blf itself never reads `BLF_CMD`.
 
 ---
 

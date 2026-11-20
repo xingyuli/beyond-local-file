@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from collections.abc import Callable
@@ -90,6 +91,38 @@ def call_daemon(
             trailer=trailer,
         )
     return _call_with_status_line(config_path, request)
+
+
+def call_managed(config_path: Path, path: Path) -> int:
+    """Ask the daemon what it projects into *path* and print the JSON answer.
+
+    Unlike the other shells this never opens a shell screen. Stdout carries only
+    the JSON document; every failure goes to stderr and leaves stdout empty.
+
+    Args:
+        config_path: Path to the loaded config file.
+        path: Normalized absolute directory to look at.
+
+    Returns:
+        0 when the daemon answered (including a directory that is not managed),
+        1 when it could not answer.
+    """
+    if not is_running(config_path):
+        click.echo(DAEMON_DOWN_HINT, err=True)
+        return 1
+    try:
+        response = send_when_up(config_path, {"op": "managed", "path": str(path)})
+    except OSError:
+        click.echo(DAEMON_DOWN_HINT, err=True)
+        return 1
+    document = response.get("document")
+    if response.get("kind") != "managed" or document is None:
+        from beyond_local_file.operations.result import payload_text  # noqa: PLC0415 -- avoids an import cycle
+
+        click.echo(payload_text(response) or "Error: the daemon could not answer.", err=True)
+        return 1
+    click.echo(json.dumps(document, indent=2))
+    return 0
 
 
 def _wants_shell_screen(request: dict[str, Any]) -> bool:

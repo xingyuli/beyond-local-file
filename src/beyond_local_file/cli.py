@@ -4,9 +4,10 @@ This tool provides commands to synchronize physical copies of managed items
 and check their status, with automatic Git exclude file management.
 """
 
+import json
 import os
 import sys
-from contextlib import suppress
+from contextlib import redirect_stdout, suppress
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,9 @@ from . import __version__
 from .completion import complete_project_names
 from .configuration_set import ConfigError, ConfigurationSet, configuration_set_for_shell
 from .contribution import contribution_owner, projects_targeting
-from .daemon.client import call_daemon, shell_wants_screen
+from .daemon.client import call_daemon, call_managed, shell_wants_screen
 from .daemon.screen import ScreenSkip, hub_choice_question
+from .managed import MANAGED_SCHEMA
 from .operations.daemon import (
     follow_blf_logs,
     follow_daemon_logs,
@@ -49,7 +51,7 @@ _RUN_IN_TARGET_PROJECT = "Run inside a target project"
 # Root ``--help`` sections, in display order. A command missing here still
 # appears, under a trailing "Other commands" section, so it is never hidden.
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (_RUN_ANYWHERE, ("daemon", "link", "logs", "debug", "upgrade")),
+    (_RUN_ANYWHERE, ("daemon", "link", "logs", "managed", "debug", "upgrade")),
     (_RUN_IN_TARGET_PROJECT, ("revlink", "remove")),
 )
 
@@ -203,6 +205,35 @@ def remove(ctx, path, dry_run, force):
             "force": force,
         },
     )
+
+
+@cli.command("managed", short_help="Report what beyond-local-file projects into a directory, as JSON.")
+@click.argument("path", required=False, type=click.Path(exists=True, file_okay=False))
+@click.option("--schema", "show_schema", is_flag=True, help="Print the JSON Schema of the output and exit.")
+@click.pass_context
+def managed(ctx, path, show_schema):
+    """Report what beyond-local-file projects into PATH, as JSON.
+
+    PATH is a directory and defaults to the current directory. The answer names
+    the target project that holds PATH, the managed projects that project into
+    it, and their items. Asks the running daemon, so the daemon must be running.
+    Exit 0 means the daemon answered, including a directory that is not
+    managed. Exit 1 means it could not answer. Use --schema to read the output
+    format.
+    """
+    if show_schema:
+        if path is not None:
+            raise click.UsageError("--schema describes the output format and cannot be used with PATH.")
+        click.echo(json.dumps(MANAGED_SCHEMA, indent=2))
+        ctx.exit(0)
+    cwd = Path.cwd()
+    directory = Path(os.path.normpath(cwd / path)) if path else cwd
+    with redirect_stdout(sys.stderr):  # resolution errors must not reach stdout, which is only the JSON answer
+        loaded = configuration_set_for_shell(ctx.obj["config"])
+    if loaded is None:
+        ctx.exit(1)
+        return
+    ctx.exit(call_managed(loaded.identity, directory))
 
 
 @cli.command("logs")

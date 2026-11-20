@@ -9,7 +9,7 @@ The directory that holds items projected into target projects. The tool may writ
 _Avoid_: Source project, host project, origin
 
 **Target project**:
-A directory that receives projected items from a managed project. The user works inside target projects day-to-day. Its path is its identity. A renamed directory is a different target project.
+A directory that receives projected items from a managed project. The user works inside target projects day-to-day. Its path is its identity. A renamed directory is a different target project. A subdirectory of a target project is not one; the nearest ancestor-or-self that is one answers for it.
 _Avoid_: Destination project, consumer project
 
 **Replica**:
@@ -93,7 +93,7 @@ The record of the daemon process lifecycle: coming up, the catch-up that belongs
 _Avoid_: combined log, the single worker log, idle log, request log
 
 **Shell screen**:
-The full-screen view a shell draws until the user closes it. A header names the command, one row per worker unit that request uses, and the plain result. The shell's questions are lines of that output. An input line appears only while a typed answer is required. A line at the very bottom lists the key combinations that apply right now. When a question decides whether a request is sent, the screen is already up. Closing it leaves the plain result in the terminal. A shell with no terminal has none. ``daemon stop``, ``upgrade``, and reading logs have none.
+The full-screen view a shell draws until the user closes it. A header names the command, one row per worker unit that request uses, and the plain result. The shell's questions are lines of that output. An input line appears only while a typed answer is required. A line at the very bottom lists the key combinations that apply right now. When a question decides whether a request is sent, the screen is already up. Closing it leaves the plain result in the terminal. A shell with no terminal has none. ``daemon stop``, ``upgrade``, ``managed``, and reading logs have none.
 _Avoid_: status line, dashboard, resident screen
 
 **Mapping snapshot**:

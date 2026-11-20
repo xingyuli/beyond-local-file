@@ -40,5 +40,6 @@ One line per decision. Read the file when the title matches the work.
 - [0036](0036-target-add-catch-up-follows-idle-tick.md) — Target-add catch-up follows the idle tick
 - [0037](0037-directory-node-has-no-generation.md) — A directory node has no generation
 - [0038](0038-resolve-ui-discards-a-held-copy.md) — Resolve UI discards a held copy and shows a read-only diff
+- [0039](0039-managed-reports-target-state-as-json.md) — Managed reports target state as JSON, not exit status
 
 Before this glossary defined **Replica**, "replica" in these ADRs means target replica, except "source replica", which may also be the hub replica.
