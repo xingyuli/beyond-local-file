@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-20
+
+### Added
+
+- **Discard a held copy from the resolve UI** — The held row lists that slot's files. A matching file does not open. One differing file opens a read-only diff titled `target-now` and `held-copy`. A missing projection leaves `target-now` empty. Files that exist only on the live tree are not listed. Discard asks first, then deletes that one slot and leaves the projection and any out-of-sync mark on the path. Every hold reason uses the same control, and an empty directory stays listed until it is discarded. There is no discard shell and no restore. The request log names Submit `live: resolve out-of-sync {path} gen {n}` and still writes `baseline: write` after it. Discard writes `live: resolve held-copy {path} reason={hold reason} slot={slot}` and no baseline line. Restart a running daemon before `daemon status` opens this UI. See ADR 0038.
+- **`blf managed` reports what is projected into a directory** — `blf managed [PATH]` is listed under "Run anywhere". It asks the running daemon and prints one JSON document: the nearest target project, `is_target_root`, the managed projects that contribute, their items (`path` relative to the target and an absolute `hub_path`), and each managed project's git state (`git.is_repo` and `git.root`). PATH defaults to the current directory and must be an existing directory. The daemon answers from the mappings it holds in memory and never reads a mapping file. The command never starts the daemon, opens no shell screen, and changes no mapping, copy, or git exclude. `managed` is false and `managed_projects` is empty when no ancestor-or-self of PATH is a target project. Exit 0 means the daemon answered, exit 1 means it could not (the message goes to stderr and stdout stays empty), and exit 2 is a usage error. `blf managed --schema` prints the JSON Schema of the output, needs no daemon, and cannot be combined with PATH. A caller such as an agent skill can read the program name from `BLF_CMD` and fall back to `blf`. blf itself never reads it. See ADR 0039.
+
+[0.10.0]: https://github.com/xingyuli/beyond-local-file/releases/tag/v0.10.0
+
 ## [0.9.0] - 2026-11-03
 
 ### Added
