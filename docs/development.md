@@ -32,22 +32,29 @@ cd /path/to/your/managed-projects
 uv run --no-cache --project /path/to/beyond-local-file beyond-local-file link check
 ```
 
-### Recommended: Create a Development Alias
+### Recommended: Create a Development Command
 
-For convenience, add this alias to your shell configuration (`~/.bashrc`, `~/.zshrc`, etc.):
-
-```bash
-alias blf_dev='uv run --no-cache --project /path/to/beyond-local-file beyond-local-file'
-```
-
-This mirrors the production alias pattern:
+Create a wrapper script on your `PATH`, not a shell alias. An alias exists only in interactive shells, so an agent skill or a script cannot run it.
 
 ```bash
-alias blf='beyond-local-file'      # production (installed via uv tool install)
-alias blf_dev='uv run --no-cache --project /path/to/beyond-local-file beyond-local-file'  # development
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/blf_dev <<'EOF'
+#!/bin/sh
+exec uv run --no-cache --project /path/to/beyond-local-file beyond-local-file "$@"
+EOF
+chmod +x ~/.local/bin/blf_dev
 ```
 
-With the alias configured, you can use `blf_dev` from any directory:
+This mirrors the production command from the README:
+
+```bash
+blf        # production (installed via uv tool install)
+blf_dev    # development (runs your working tree)
+```
+
+To let agent skills use the development build, set `export BLF_CMD=blf_dev` in `~/.zshenv`. See [Setting `BLF_CMD`](../README.md#setting-blf_cmd).
+
+With the script in place, you can use `blf_dev` from any directory:
 
 ```bash
 cd /path/to/your/managed-projects

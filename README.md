@@ -10,6 +10,7 @@ Project your local dev files across projects as physical copies — without comm
 - [Why not GNU Stow or chezmoi?](#why-not-gnu-stow-or-chezmoi)
 - [Architecture: Tool and Data Separation](#architecture-tool-and-data-separation)
 - [Installation](#installation)
+- [Use with Agent Skills](#use-with-agent-skills)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Available Commands](#available-commands)
@@ -123,16 +124,42 @@ pipx install git+https://github.com/xingyuli/beyond-local-file.git
 
 For development setup, see [docs/development.md](docs/development.md).
 
-## Recommended: Create an Alias
+## Recommended: Put `blf` on PATH
 
-The command name `beyond-local-file` is long. For convenience, create an alias:
+The command name `beyond-local-file` is long. Create a short `blf` command as a script on your `PATH`, not as a shell alias. An alias exists only in interactive shells, so an agent skill or a script cannot run it.
 
 ```bash
-# Add to your ~/.bashrc, ~/.zshrc, or equivalent
-alias blf='beyond-local-file'
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/blf <<'EOF'
+#!/bin/sh
+exec beyond-local-file "$@"
+EOF
+chmod +x ~/.local/bin/blf
 ```
 
-This documentation uses `blf` in all examples.
+Make sure `~/.local/bin` is on your `PATH`. This documentation uses `blf` in all examples.
+
+## Use with Agent Skills
+
+The `setup-matt-pocock-skills` skill in the [`xingyuli/skills`](https://github.com/xingyuli/skills) fork asks `blf managed` which files this tool projects into a repo, then records the answer in the repo's `docs/agents/blf.md`. Upstream `mattpocock/skills` does not have this step, so install the fork.
+
+1. Install beyond-local-file 0.10.0 or later. Earlier releases have no `blf managed`.
+2. Install the skills, and include `setup-matt-pocock-skills` when the installer asks which to take:
+
+   ```bash
+   npx skills@latest add xingyuli/skills -a <agent>   # omit -a to choose
+   ```
+
+3. Start the daemon with `blf daemon start`. `blf managed` asks the running daemon and never starts it.
+4. Run `/setup-matt-pocock-skills` from the target project root. When the skill asks which command runs beyond-local-file, answer with the name your agent can run: `blf`, or the value of `BLF_CMD`.
+
+### Setting `BLF_CMD`
+
+Set `BLF_CMD` when this machine runs a development build under another name, such as `blf_dev`. The skill reads it and falls back to `blf`. blf itself never reads it.
+
+- Set it in `~/.zshenv` (or your shell's equivalent), because zsh reads that file for every shell, including the non-interactive shell an agent uses. `~/.zshrc` is read only by interactive shells.
+- Make the value one executable name on `PATH`, such as `export BLF_CMD=blf_dev`. A value with arguments, or an alias, does not work, because zsh does not split an unquoted `$BLF_CMD` into words.
+- To run a working tree, create a wrapper script. See [docs/development.md](docs/development.md#recommended-create-a-development-command).
 
 ## Quick Start
 
@@ -261,7 +288,7 @@ See [Configuration set](docs/cli-reference.md#configuration-set) in the CLI refe
 
 There is no `link sync`. The daemon is the runtime.
 
-A caller that runs `blf` for you, such as an agent skill, can read the program name from `BLF_CMD` and fall back to `blf`. Set it on a machine that runs a development build under another name. blf itself never reads it.
+A caller that runs `blf` for you, such as an agent skill, can read the program name from `BLF_CMD` and fall back to `blf`. blf itself never reads it. See [Setting `BLF_CMD`](#setting-blf_cmd).
 
 ### Live updates, out-of-sync, and held copies
 

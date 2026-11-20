@@ -2,9 +2,9 @@
 
 `beyond-local-file` supports tab completion for `PROJECT_NAME` arguments in `link check`. Completions are read from the mapping files in the resolved configuration set (`--config`, else `~/.blf/config`, else CWD `config.yml`).
 
-## Before You Start: the `blf` Alias
+## Before You Start: the `blf` Command
 
-The README recommends creating a `blf` alias for the long command name. Shell completion is registered for `beyond-local-file` by default — it does **not** automatically apply to aliases.
+The README recommends a `blf` wrapper script for the long command name. Shell completion is registered for `beyond-local-file` by default — it does **not** automatically apply to `blf`.
 
 If you use `blf`, you need one extra step after the shell-specific setup below. The instructions for each shell include this step.
 
@@ -44,9 +44,10 @@ Add to `~/.config/fish/config.fish`:
 
 ```fish
 _BEYOND_LOCAL_FILE_COMPLETE=fish_source beyond-local-file | source
+complete -c blf -w beyond-local-file
 ```
 
-Fish resolves aliases transparently, so no extra step is needed.
+The second line makes `blf` reuse the completions of `beyond-local-file`.
 
 ## Usage
 

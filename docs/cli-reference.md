@@ -1,6 +1,6 @@
 # CLI Reference
 
-Complete command-line interface reference for `beyond-local-file` (aliased as `blf`).
+Complete command-line interface reference for `beyond-local-file` (shortened to `blf` by a wrapper script, see the [README](../README.md#recommended-put-blf-on-path)).
 
 ---
 
@@ -319,7 +319,7 @@ When no ancestor-or-self of `PATH` is a target project, `target` is `null`, `man
 
 ### Program name
 
-`blf` may run under another name on a machine that uses a development build. A caller that needs to run it, such as an agent skill, can use `$BLF_CMD` when set and `blf` otherwise. blf itself never reads `BLF_CMD`.
+`blf` may run under another name on a machine that uses a development build. A caller that needs to run it, such as an agent skill, can use `$BLF_CMD` when set and `blf` otherwise. blf itself never reads `BLF_CMD`. See [Setting `BLF_CMD`](../README.md#setting-blf_cmd).
 
 ---
 
